@@ -4,22 +4,6 @@ import type { RenderError, RenderSnapshot, RenderStatus, StreamingRenderer } fro
 
 const SECURITY_RULES: Array<{ pattern: RegExp; message: string }> = [
   {
-    pattern: /<script\b[^>]*\bsrc\s*=/i,
-    message: "External script tags are blocked in StreamUI artifacts."
-  },
-  {
-    pattern: /<link\b[^>]*\brel\s*=\s*["']?stylesheet/i,
-    message: "External stylesheets are blocked in StreamUI artifacts."
-  },
-  {
-    pattern: /\bfetch\s*\(/i,
-    message: "Network fetch calls are blocked by the iframe CSP."
-  },
-  {
-    pattern: /\bXMLHttpRequest\b/i,
-    message: "XMLHttpRequest is not allowed in StreamUI artifacts."
-  },
-  {
     pattern: /\b(localStorage|sessionStorage)\b/i,
     message: "Browser storage APIs are not allowed in StreamUI artifacts."
   },

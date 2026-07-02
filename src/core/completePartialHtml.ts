@@ -31,17 +31,13 @@ function removeBrokenTrailingTag(input: string): string {
 }
 
 function stripScriptBlocks(input: string, allowScripts: boolean): string {
-  const withoutExternalScripts = input.replace(
-    /<script\b(?=[^>]*\ssrc\s*=)[\s\S]*?<\/script\s*>/gi,
-    ""
-  );
-  const lower = withoutExternalScripts.toLowerCase();
+  const lower = input.toLowerCase();
   const lastOpen = lower.lastIndexOf("<script");
   const lastClose = lower.lastIndexOf("</script>");
   const stable =
     lastOpen > lastClose
-      ? withoutExternalScripts.slice(0, lastOpen)
-      : withoutExternalScripts;
+      ? input.slice(0, lastOpen)
+      : input;
 
   if (allowScripts) {
     return stable;
@@ -59,13 +55,6 @@ function stripUnsafeInlineAttributes(input: string): string {
       /\s+(href|src|xlink:href)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi,
       " $1=\"#\""
     );
-}
-
-function stripExternalStyles(input: string): string {
-  return input.replace(
-    /<link\b(?=[^>]*\brel\s*=\s*["']?stylesheet["']?)[^>]*>/gi,
-    ""
-  );
 }
 
 function closeIncompleteStyleBlock(input: string): string {
@@ -139,8 +128,7 @@ export function completePartialHtml(
   const withoutBrokenTail = removeBrokenTrailingTag(input);
   const withoutScripts = stripScriptBlocks(withoutBrokenTail, allowScripts);
   const withoutUnsafeAttributes = stripUnsafeInlineAttributes(withoutScripts);
-  const withoutExternalStyles = stripExternalStyles(withoutUnsafeAttributes);
-  const withClosedStyle = closeIncompleteStyleBlock(withoutExternalStyles);
+  const withClosedStyle = closeIncompleteStyleBlock(withoutUnsafeAttributes);
 
   return appendMissingClosers(withClosedStyle);
 }

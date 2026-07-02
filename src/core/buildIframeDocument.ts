@@ -1,12 +1,12 @@
 const CSP = [
   "default-src 'none'",
-  "img-src data: blob:",
-  "style-src 'unsafe-inline'",
-  "script-src 'unsafe-inline'",
-  "font-src data:",
-  "connect-src 'none'",
-  "media-src data: blob:",
-  "frame-src 'none'",
+  "img-src https: data: blob:",
+  "style-src 'unsafe-inline' https:",
+  "script-src 'unsafe-inline' https:",
+  "font-src https: data:",
+  "connect-src https:",
+  "media-src https: data: blob:",
+  "frame-src https:",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'"
@@ -18,6 +18,7 @@ export function buildIframeDocument(completedHtml: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="${CSP}">
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -63,6 +64,13 @@ export function buildIframeDocument(completedHtml: string): string {
     .streamui-chat li + li {
       margin-top: 4px;
     }
+    .streamui-chat a,
+    .streamui-link {
+      color: #1d4ed8;
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
     .streamui-muted {
       color: #667085;
     }
@@ -84,6 +92,24 @@ export function buildIframeDocument(completedHtml: string): string {
       border: 1px solid #cdd8e7;
       background: #f8fafc;
       color: #27415f;
+    }
+    .streamui-resource {
+      margin-top: 12px;
+    }
+    .streamui-resource img,
+    .streamui-resource video,
+    .streamui-resource iframe {
+      display: block;
+      max-width: 100%;
+      border: 0;
+      border-radius: 8px;
+    }
+    .streamui-resource figcaption,
+    .streamui-sources {
+      margin-top: 6px;
+      color: #667085;
+      font-size: 0.88rem;
+      line-height: 1.45;
     }
   </style>
   <script>
@@ -113,7 +139,19 @@ export function buildIframeDocument(completedHtml: string): string {
           post("resize", "resize", { height });
         }
       };
-      const scheduleMeasure = () => requestAnimationFrame(measure);
+      const normalizeExternalLinks = () => {
+        document.querySelectorAll("a[href]").forEach((anchor) => {
+          const href = anchor.getAttribute("href") || "";
+          if (/^https?:\\/\\//i.test(href)) {
+            anchor.setAttribute("target", "_blank");
+            anchor.setAttribute("rel", "noopener noreferrer");
+          }
+        });
+      };
+      const scheduleMeasure = () => requestAnimationFrame(() => {
+        normalizeExternalLinks();
+        measure();
+      });
       window.addEventListener("error", (event) => {
         post("runtime", event.message);
       });

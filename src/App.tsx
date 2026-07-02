@@ -250,8 +250,7 @@ export default function App() {
         updateAssistant(assistantId, {
           content:
             finalParts.chat ||
-            finalParts.fallbackText ||
-            "Done.",
+            finalParts.fallbackText,
           reasoning,
           rawStream: raw,
           hasStreamUi: finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,

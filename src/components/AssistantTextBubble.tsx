@@ -1,21 +1,19 @@
 type AssistantTextBubbleProps = {
   content: string;
   error?: string;
-  isStreaming?: boolean;
 };
 
 export function AssistantTextBubble({
   content,
-  error,
-  isStreaming
+  error
 }: AssistantTextBubbleProps) {
-  if (!content && !error && !isStreaming) {
+  if (!content && !error) {
     return null;
   }
 
   return (
     <div className="message-bubble assistant">
-      {content ? <p>{content}</p> : <p className="muted">Thinking...</p>}
+      {content ? <p>{content}</p> : null}
       {error ? <pre className="inline-error">{error}</pre> : null}
     </div>
   );

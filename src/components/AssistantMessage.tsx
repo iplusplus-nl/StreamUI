@@ -40,7 +40,6 @@ export function AssistantMessage({
         <AssistantTextBubble
           content={content}
           error={error}
-          isStreaming={status === "streaming" && !content}
         />
         {hasStreamUi && snapshot ? (
           <AssistantPreviewBubble

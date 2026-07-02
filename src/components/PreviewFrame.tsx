@@ -49,7 +49,7 @@ export function PreviewFrame({ snapshot, onRuntimeError }: PreviewFrameProps) {
       ref={frameRef}
       className="preview-frame"
       title="StreamUI artifact preview"
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
       srcDoc={snapshot.iframeDocument}
       style={{ height }}
     />
