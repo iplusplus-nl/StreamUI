@@ -1,3 +1,5 @@
+import type { PageThemeMode } from "./types";
+
 const CSP = [
   "default-src 'none'",
   "img-src https: data: blob:",
@@ -12,28 +14,87 @@ const CSP = [
   "form-action 'none'"
 ].join("; ");
 
-export function buildIframeDocument(completedHtml: string): string {
+type IframeThemeTokens = {
+  mode: PageThemeMode;
+  colorScheme: "light" | "dark";
+  pageBg: string;
+  text: string;
+  muted: string;
+  link: string;
+  buttonBg: string;
+  buttonText: string;
+  secondaryBorder: string;
+  secondaryText: string;
+};
+
+function getIframeThemeTokens(themeMode: PageThemeMode): IframeThemeTokens {
+  if (themeMode === "day") {
+    return {
+      mode: "day",
+      colorScheme: "light",
+      pageBg: "#ffffff",
+      text: "#18181b",
+      muted: "#71717a",
+      link: "#18181b",
+      buttonBg: "#18181b",
+      buttonText: "#ffffff",
+      secondaryBorder: "#d4d4d8",
+      secondaryText: "#3f3f46"
+    };
+  }
+
+  return {
+    mode: "night",
+    colorScheme: "dark",
+    pageBg: "#050505",
+    text: "#f4f4f5",
+    muted: "#a1a1aa",
+    link: "#ffffff",
+    buttonBg: "#f4f4f5",
+    buttonText: "#18181b",
+    secondaryBorder: "rgba(255, 255, 255, 0.18)",
+    secondaryText: "#e4e4e7"
+  };
+}
+
+export function buildIframeDocument(
+  completedHtml: string,
+  themeMode: PageThemeMode = "night"
+): string {
+  const theme = getIframeThemeTokens(themeMode);
+
   return `<!doctype html>
-<html lang="en">
+<html lang="en" data-page-theme="${theme.mode}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="${CSP}">
   <style>
+    :root {
+      color-scheme: ${theme.colorScheme};
+      --streamui-page-bg: ${theme.pageBg};
+      --streamui-text: ${theme.text};
+      --streamui-muted: ${theme.muted};
+      --streamui-link: ${theme.link};
+      --streamui-button-bg: ${theme.buttonBg};
+      --streamui-button-text: ${theme.buttonText};
+      --streamui-secondary-border: ${theme.secondaryBorder};
+      --streamui-secondary-text: ${theme.secondaryText};
+    }
     *, *::before, *::after { box-sizing: border-box; }
     html, body { margin: 0; min-height: 0; background: transparent; }
     body {
       width: 100%;
       overflow: hidden;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: #172033;
+      color: var(--streamui-text);
       background: transparent;
     }
     button, input, select, textarea { font: inherit; }
     .streamui-response {
       width: min(900px, 100%);
-      color: #18181b;
+      color: var(--streamui-text);
     }
     .streamui-chat {
       width: min(760px, 100%);
@@ -42,7 +103,7 @@ export function buildIframeDocument(completedHtml: string): string {
       border: 0;
       border-radius: 0;
       background: transparent;
-      color: #18181b;
+      color: var(--streamui-text);
       box-shadow: none;
       font-size: 15px;
       line-height: 1.65;
@@ -68,13 +129,13 @@ export function buildIframeDocument(completedHtml: string): string {
     }
     .streamui-chat a,
     .streamui-link {
-      color: #18181b;
+      color: var(--streamui-link);
       text-decoration: underline;
       text-decoration-thickness: 1px;
       text-underline-offset: 3px;
     }
     .streamui-muted {
-      color: #71717a;
+      color: var(--streamui-muted);
     }
     .streamui-actions {
       display: flex;
@@ -83,18 +144,18 @@ export function buildIframeDocument(completedHtml: string): string {
       margin-top: 14px;
     }
     .streamui-button {
-      border: 1px solid #18181b;
+      border: 1px solid var(--streamui-button-bg);
       border-radius: 999px;
       padding: 7px 12px;
-      background: #18181b;
-      color: #ffffff;
+      background: var(--streamui-button-bg);
+      color: var(--streamui-button-text);
       font-size: 13px;
       font-weight: 620;
     }
     .streamui-button.secondary {
-      border-color: #d4d4d8;
+      border-color: var(--streamui-secondary-border);
       background: transparent;
-      color: #3f3f46;
+      color: var(--streamui-secondary-text);
     }
     .streamui-resource {
       margin-top: 12px;
@@ -110,7 +171,7 @@ export function buildIframeDocument(completedHtml: string): string {
     .streamui-resource figcaption,
     .streamui-sources {
       margin-top: 6px;
-      color: #71717a;
+      color: var(--streamui-muted);
       font-size: 0.88rem;
       line-height: 1.45;
     }

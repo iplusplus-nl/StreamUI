@@ -1622,9 +1622,11 @@ async function verifyImageCandidates(
               ...candidate.image,
               url: result.url,
               sourceId: candidate.source.id,
-              sourceTitle: candidate.source.title,
+              ...(candidate.source.title
+                ? { sourceTitle: candidate.source.title }
+                : {}),
               sourceUrl: candidate.source.finalUrl || candidate.source.url,
-              contentType: result.contentType
+              ...(result.contentType ? { contentType: result.contentType } : {})
             };
           }
         } catch {

@@ -1,5 +1,7 @@
 export type RenderStatus = "idle" | "streaming" | "complete" | "error";
 
+export type PageThemeMode = "day" | "night";
+
 export type RenderErrorKind = "html" | "runtime" | "security" | "console";
 
 export type RenderError = {

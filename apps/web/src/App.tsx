@@ -540,7 +540,6 @@ function StreamThread({ messages, onRuntimeError }: StreamThreadProps) {
     >
       <ThreadPrimitive.Viewport
         className={`message-list ${isNewChat ? "is-new" : "has-messages"}`}
-        autoScroll
         scrollToBottomOnRunStart
         scrollToBottomOnInitialize
       >
@@ -894,7 +893,7 @@ export default function App() {
         rawStream: "",
         status: "streaming"
       };
-      const renderer = createStreamingRenderer();
+      const renderer = createStreamingRenderer(themeMode);
       renderersRef.current.set(assistantId, renderer);
 
       const unsubscribeSnapshot = renderer.onSnapshot((snapshot) => {
@@ -977,7 +976,8 @@ export default function App() {
           },
           body: JSON.stringify({
             messages: toApiMessages(requestHistory),
-            canvas: getCanvasContext()
+            canvas: getCanvasContext(),
+            themeMode
           })
         });
 
@@ -1043,7 +1043,7 @@ export default function App() {
         setIsSending(false);
       }
     },
-    [updateActiveSessionMessages, updateAssistant]
+    [themeMode, updateActiveSessionMessages, updateAssistant]
   );
 
   const handleNewMessage = useCallback(

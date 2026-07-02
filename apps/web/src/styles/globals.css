@@ -503,7 +503,7 @@ button {
   min-height: 0;
   padding: 0 24px;
   overflow-y: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 .message-list.is-new {
@@ -762,6 +762,10 @@ button {
   border-radius: 8px;
   background: transparent;
   transition: height 160ms ease;
+}
+
+.assistant-canvas.streaming .preview-frame {
+  transition: none;
 }
 
 .error-panel {

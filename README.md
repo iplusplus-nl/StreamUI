@@ -27,10 +27,11 @@ OPENROUTER_API_KEY=your_openrouter_key_here
 OPENROUTER_MODEL=google/gemini-3.1-pro-preview
 OPENROUTER_REASONING_EFFORT=low
 STREAMUI_RETRIEVAL=true
+STREAMUI_AGENT_LOOP=true
 STREAMUI_SEARCH_PROVIDER=auto
 ```
 
-The default model is `google/gemini-3.1-pro-preview` when `OPENROUTER_MODEL` is not set. Reasoning effort defaults to `low` to keep the reasoning disclosure responsive. StreamUI runs its own retrieval/browser pass before final generation when a request asks for URLs, online resources, or current information. The backend loads `.env` from the repo root and can also read an overriding `apps/web/.env`.
+The default model is `google/gemini-3.1-pro-preview` when `OPENROUTER_MODEL` is not set. Reasoning effort defaults to `low` to keep the reasoning disclosure responsive. StreamUI runs a private planning/tool-use agent loop before final generation; the loop can call the local retrieval/browser service for URLs, online resources, images, or current information. The backend loads `.env` from the repo root and can also read an overriding `apps/web/.env`.
 
 ## Run
 
@@ -51,14 +52,14 @@ npm --workspace @streamui/web run build
 
 ## Retrieval and External Resources
 
-StreamUI has an independent server-side retrieval service. It can:
+StreamUI has a private server-side agent loop backed by an independent retrieval service. The loop first asks the model to decide whether tools are needed, executes approved local tools, then starts one final streamed HTML generation. The retrieval tool can:
 
 - Search the web through Brave, Tavily, Serper, or a DuckDuckGo HTML fallback.
 - Fetch requested URLs with Node `fetch`, or optional Playwright when `STREAMUI_BROWSER_ENGINE=playwright` and Playwright is installed.
 - Parse HTML into structured page excerpts, links, source metadata, and image candidates.
 - Inject those sources into the final model generation while keeping the current streaming HTML protocol. The HTML artifact is still assistant content, not a tool result.
 
-The backend decides whether retrieval is needed with a conservative local planner. It looks for explicit URLs and search/current/resource cues, streams retrieval progress into the reasoning panel, and then starts the final OpenRouter stream with the collected context. You can also call `POST /api/retrieve` directly for debugging or future agent-loop work.
+The backend planner can request a `retrieve` tool call, run additional planning steps after observations, and fall back to the conservative local retrieval pass when planner output fails or obvious URL/current/resource cues need a safety pass. Tool progress streams into the reasoning panel, and only the final OpenRouter call streams user-facing HTML. You can also call `POST /api/retrieve` directly for debugging.
 
 The chat input also supports local image attachments. Images are converted to data URLs in the browser, lightly resized when needed, and sent to Vercel AI SDK as multimodal `image` message parts. Use a vision-capable model for image analysis, OCR, comparison, or image-informed visual responses.
 
@@ -66,6 +67,8 @@ Useful `.env` controls:
 
 ```bash
 STREAMUI_RETRIEVAL=true
+STREAMUI_AGENT_LOOP=true
+STREAMUI_AGENT_MAX_STEPS=2
 STREAMUI_SEARCH_PROVIDER=auto
 STREAMUI_SEARCH_MAX_RESULTS=5
 STREAMUI_SEARCH_ALLOW_DUCKDUCKGO=true
@@ -125,7 +128,8 @@ If no valid `<streamui>` block appears, the assistant response stays as a normal
 
 ## Important Files
 
-- `apps/web/server/openrouter.ts` runs retrieval before final generation, then uses Vercel AI SDK to stream OpenRouter responses back to the frontend as NDJSON `reasoning` and `content` chunks.
+- `apps/web/server/openrouter.ts` runs the private agent loop before final generation, then uses Vercel AI SDK to stream OpenRouter responses back to the frontend as NDJSON `reasoning` and `content` chunks.
+- `apps/web/server/agentLoop.ts` owns planning, controlled retrieval tool execution, context merging, and final-generation private guidance.
 - `apps/web/server/retrieval.ts` owns search providers, URL fetching, optional Playwright browsing, HTML parsing, image/link extraction, and structured retrieval context.
 - `apps/web/server/index.ts` runs the local Express proxy and loads repo-root `.env`.
 - `apps/web/src/server/systemPrompt.ts` defines the model behavior and output protocol.

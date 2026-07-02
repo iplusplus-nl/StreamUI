@@ -1,11 +1,8 @@
 import type { Request, Response } from "express";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { streamText, type ModelMessage, type TextStreamPart } from "ai";
+import { buildAgentLoopPrompt, runStreamUiAgentLoop } from "./agentLoop.js";
 import { SYSTEM_PROMPT } from "./systemPrompt.js";
-import {
-  buildRetrievalContextPrompt,
-  collectRetrievalContext
-} from "./retrieval.js";
 
 const DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const DEFAULT_REASONING_EFFORT: OpenRouterReasoningEffort = "low";
@@ -42,6 +39,8 @@ type CanvasContext = {
   initialCanvasHeight: number;
   devicePixelRatio: number;
 };
+
+type PageThemeMode = "day" | "night";
 
 type StreamEvent = {
   type: "content" | "reasoning";
@@ -121,6 +120,27 @@ function normalizeCanvasContext(input: unknown): CanvasContext {
     initialCanvasHeight,
     devicePixelRatio
   };
+}
+
+function normalizeThemeMode(input: unknown): PageThemeMode {
+  if (input === "day" || input === "light") {
+    return "day";
+  }
+
+  return "night";
+}
+
+function buildThemeContextPrompt(themeMode: PageThemeMode): string {
+  const isNight = themeMode === "night";
+  const label = isNight ? "dark" : "light";
+  const background = isNight ? "#050505" : "#ffffff";
+
+  return `Current page background preference:
+- The user is viewing StreamUI on a ${label} page background, approximately ${background}.
+- Unless the user explicitly asks for a specific background color/theme, or the task clearly benefits from a special backdrop, make the artifact suitable for this ${label} surrounding page.
+- For ordinary replies using streamui-response and streamui-chat, rely on the built-in transparent styles.
+- For custom visual artifacts, keep the root transparent when possible or use surfaces, text colors, borders, shadows, and media treatment that maintain comfortable contrast on the current ${label} page.
+- Do not assume the opposite page theme unless the user asks for it.`;
 }
 
 function buildCanvasContextPrompt(canvas: CanvasContext): string {
@@ -209,6 +229,21 @@ function toModelMessage(message: ClientChatMessage): ModelMessage {
         mediaType: image.mimeType
       }))
     ]
+  };
+}
+
+function toPlannerMessage(message: ClientChatMessage): ModelMessage {
+  const imageCount = message.images?.length ?? 0;
+  const imageNote = imageCount
+    ? `\n\n[${imageCount} uploaded image attachment(s) will be available to the final generator.]`
+    : "";
+  const content =
+    `${message.content}${imageNote}`.trim() ||
+    "The user sent an empty message.";
+
+  return {
+    role: message.role,
+    content
   };
 }
 
@@ -322,6 +357,7 @@ export async function handleOpenRouterChat(
     messages?: unknown;
     model?: unknown;
     canvas?: unknown;
+    themeMode?: unknown;
     reasoningEffort?: unknown;
   };
   const model =
@@ -330,6 +366,7 @@ export async function handleOpenRouterChat(
       : process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
   const messages = normalizeMessages(body.messages);
   const canvasContext = normalizeCanvasContext(body.canvas);
+  const themeMode = normalizeThemeMode(body.themeMode);
   const reasoningEffort = normalizeReasoningEffort(
     body.reasoningEffort ?? process.env.OPENROUTER_REASONING_EFFORT
   );
@@ -338,7 +375,7 @@ export async function handleOpenRouterChat(
 
   try {
     console.info(
-      `[chat:${requestId}] start model=${model} messages=${messages.length} reasoning=${reasoningEffort}`
+      `[chat:${requestId}] start model=${model} messages=${messages.length} theme=${themeMode} reasoning=${reasoningEffort}`
     );
 
     res.writeHead(200, {
@@ -355,23 +392,31 @@ export async function handleOpenRouterChat(
       reasoningEvents: 0
     };
 
-    const retrievalContext = await collectRetrievalContext(
-      messages.map((message) => ({
-        role: message.role,
-        content: message.content
-      })),
-      {
-        onStatus: (text) => {
-          writeStreamEvent(res, { type: "reasoning", text }, toolStreamState);
-        }
-      }
-    );
-
     const openrouter = createOpenRouter({
       apiKey,
       appName: "StreamUI Runtime Demo",
       appUrl: "http://localhost:5173",
       compatibility: "strict"
+    });
+
+    const agentLoop = await runStreamUiAgentLoop({
+      model: openrouter(model, {
+        extraBody: {
+          reasoning: {
+            effort: "minimal",
+            exclude: true,
+            enabled: true
+          }
+        }
+      }),
+      messages: messages.map(toPlannerMessage),
+      retrievalMessages: messages.map((message) => ({
+        role: message.role,
+        content: message.content
+      })),
+      onStatus: (text) => {
+        writeStreamEvent(res, { type: "reasoning", text }, toolStreamState);
+      }
     });
 
     const result = streamText({
@@ -387,8 +432,9 @@ export async function handleOpenRouterChat(
       }),
       system: [
         SYSTEM_PROMPT,
+        buildThemeContextPrompt(themeMode),
         buildCanvasContextPrompt(canvasContext),
-        buildRetrievalContextPrompt(retrievalContext)
+        buildAgentLoopPrompt(agentLoop)
       ].join("\n\n"),
       messages: messages.map(toModelMessage)
     });
@@ -399,7 +445,7 @@ export async function handleOpenRouterChat(
 
     res.end();
     console.info(
-      `[chat:${requestId}] complete duration_ms=${Date.now() - startedAt} retrieval_used=${retrievalContext.used} retrieval_sources=${retrievalContext.sources.length} content_chars=${toolStreamState.contentChars} content_events=${toolStreamState.contentEvents} reasoning_chars=${toolStreamState.reasoningChars} reasoning_events=${toolStreamState.reasoningEvents}`
+      `[chat:${requestId}] complete duration_ms=${Date.now() - startedAt} agent_steps=${agentLoop.steps.length} retrieval_used=${agentLoop.retrievalContext.used} retrieval_sources=${agentLoop.retrievalContext.sources.length} content_chars=${toolStreamState.contentChars} content_events=${toolStreamState.contentEvents} reasoning_chars=${toolStreamState.reasoningChars} reasoning_events=${toolStreamState.reasoningEvents}`
     );
   } catch (error) {
     const message =

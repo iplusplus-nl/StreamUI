@@ -17,6 +17,7 @@ const VOID_TAGS = new Set([
 
 type CompletionOptions = {
   allowScripts?: boolean;
+  allowPartialStyles?: boolean;
 };
 
 function removeBrokenTrailingTag(input: string): string {
@@ -72,7 +73,10 @@ function stabilizeViewportHeightUnits(input: string): string {
   );
 }
 
-function closeIncompleteStyleBlock(input: string): string {
+function closeIncompleteStyleBlock(
+  input: string,
+  allowPartialStyles: boolean
+): string {
   const lower = input.toLowerCase();
   const lastOpen = lower.lastIndexOf("<style");
   const lastClose = lower.lastIndexOf("</style>");
@@ -83,6 +87,10 @@ function closeIncompleteStyleBlock(input: string): string {
 
   const openEnd = input.indexOf(">", lastOpen);
   if (openEnd === -1) {
+    return input.slice(0, lastOpen);
+  }
+
+  if (!allowPartialStyles) {
     return input.slice(0, lastOpen);
   }
 
@@ -140,13 +148,17 @@ export function completePartialHtml(
   options: CompletionOptions = {}
 ): string {
   const allowScripts = options.allowScripts ?? false;
+  const allowPartialStyles = options.allowPartialStyles ?? false;
   const withoutBrokenTail = removeBrokenTrailingTag(input);
   const withoutScripts = stripScriptBlocks(withoutBrokenTail, allowScripts);
   const withoutUnsafeAttributes = stripUnsafeInlineAttributes(withoutScripts);
   const withStableViewportUnits = stabilizeViewportHeightUnits(
     withoutUnsafeAttributes
   );
-  const withClosedStyle = closeIncompleteStyleBlock(withStableViewportUnits);
+  const withClosedStyle = closeIncompleteStyleBlock(
+    withStableViewportUnits,
+    allowPartialStyles
+  );
 
   return appendMissingClosers(withClosedStyle);
 }

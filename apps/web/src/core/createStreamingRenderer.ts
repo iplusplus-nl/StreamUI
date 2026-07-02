@@ -1,6 +1,12 @@
 import { buildIframeDocument } from "./buildIframeDocument";
 import { completePartialHtml } from "./completePartialHtml";
-import type { RenderError, RenderSnapshot, RenderStatus, StreamingRenderer } from "./types";
+import type {
+  PageThemeMode,
+  RenderError,
+  RenderSnapshot,
+  RenderStatus,
+  StreamingRenderer
+} from "./types";
 
 const SECURITY_RULES: Array<{ pattern: RegExp; message: string }> = [
   {
@@ -28,26 +34,30 @@ const SECURITY_RULES: Array<{ pattern: RegExp; message: string }> = [
 function makeSnapshot(
   raw: string,
   errors: RenderError[],
-  status: RenderStatus
+  status: RenderStatus,
+  themeMode: PageThemeMode
 ): RenderSnapshot {
   const completedHtml = completePartialHtml(raw, {
-    allowScripts: status === "complete"
+    allowScripts: status === "complete",
+    allowPartialStyles: status === "complete"
   });
 
   return {
     raw,
     completedHtml,
-    iframeDocument: buildIframeDocument(completedHtml),
+    iframeDocument: buildIframeDocument(completedHtml, themeMode),
     errors: [...errors],
     status
   };
 }
 
-export function createStreamingRenderer(): StreamingRenderer {
+export function createStreamingRenderer(
+  themeMode: PageThemeMode = "night"
+): StreamingRenderer {
   let raw = "";
   let status: RenderStatus = "idle";
   let errors: RenderError[] = [];
-  let snapshot = makeSnapshot(raw, errors, status);
+  let snapshot = makeSnapshot(raw, errors, status, themeMode);
   const seenErrors = new Set<string>();
   const snapshotCallbacks = new Set<(snapshot: RenderSnapshot) => void>();
   const errorCallbacks = new Set<(error: RenderError) => void>();
@@ -79,7 +89,7 @@ export function createStreamingRenderer(): StreamingRenderer {
   const refresh = () => {
     try {
       inspectSecurity();
-      snapshot = makeSnapshot(raw, errors, status);
+      snapshot = makeSnapshot(raw, errors, status, themeMode);
     } catch (error) {
       status = "error";
       addError(
@@ -89,7 +99,7 @@ export function createStreamingRenderer(): StreamingRenderer {
       snapshot = {
         raw,
         completedHtml: "",
-        iframeDocument: buildIframeDocument(""),
+        iframeDocument: buildIframeDocument("", themeMode),
         errors: [...errors],
         status
       };
@@ -115,7 +125,7 @@ export function createStreamingRenderer(): StreamingRenderer {
       status = "idle";
       errors = [];
       seenErrors.clear();
-      snapshot = makeSnapshot(raw, errors, status);
+      snapshot = makeSnapshot(raw, errors, status, themeMode);
       emitSnapshot();
     },
     onSnapshot(callback) {
