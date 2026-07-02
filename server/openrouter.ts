@@ -3,7 +3,7 @@ import { SYSTEM_PROMPT } from "./systemPrompt.js";
 
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL = "z-ai/glm-5.2";
+const DEFAULT_MODEL = "google/gemini-3.5-flash";
 const DEFAULT_REASONING_EFFORT = "low";
 
 type ChatRole = "user" | "assistant" | "system";
@@ -55,16 +55,21 @@ function buildCanvasContextPrompt(canvas: CanvasContext): string {
   const ratio = (canvas.canvasWidth / canvas.initialCanvasHeight).toFixed(2);
 
   return `Current StreamUI canvas context:
-- The artifact is rendered as the assistant message itself, not as a framed preview card.
+- The artifact is rendered as the assistant message itself, not as a framed preview card or app panel.
 - Current canvas width is about ${canvas.canvasWidth}px inside a ${canvas.viewportWidth}px viewport.
 - The initial visible fold is about ${canvas.initialCanvasHeight}px tall, roughly ${ratio}:1 width-to-height.
 - The canvas auto-expands downward to fit your content. There is no fixed artifact height.
 - Design for a vertical conversation canvas: use width: 100%, responsive max-widths, and natural document flow.
 - Do not create internal scroll containers for the main artifact. Avoid fixed heights, 100vh layouts, and overflow: auto on the root.
-- Make progress visible while streaming by alternating small style islands and matching controls.
-- After <streamui>, emit one tiny <style> block for the first visible section, then immediately emit that section's HTML.
-- Keep each style island around 600 characters or less. If a section needs more styling, first render the minimal visible control, then add enhancement style islands later.
-- Repeat this pattern for each new section or control: short scoped <style>, then the matching HTML. Do not output one huge global CSS block before the UI.
+- For normal replies, use the built-in chat bubble classes: streamui-response and streamui-chat.
+- The default reply should usually be:
+  <section class="streamui-response"><div class="streamui-chat"><p>...</p></div></section>
+- Put all conversational language inside the HTML artifact. Keep <chat></chat> empty.
+- Be natural and direct. Do not adopt a special persona.
+- For custom visuals, make progress visible while streaming by alternating small style islands and matching visible HTML.
+- After <streamui>, emit visible HTML quickly. If custom CSS is needed, use one tiny <style> block, then immediately emit the matching HTML.
+- Keep each custom style island around 600 characters or less. Do not output one huge global CSS block before the visible canvas.
+- Unless the user asks for product UI, avoid software cards, dashboards, pricing panels, feature grids, and generic SaaS composition.
 - Keep <script> last. The script only runs after the stream is complete.`;
 }
 

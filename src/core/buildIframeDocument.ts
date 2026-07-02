@@ -30,6 +30,61 @@ export function buildIframeDocument(completedHtml: string): string {
       background: transparent;
     }
     button, input, select, textarea { font: inherit; }
+    .streamui-response {
+      width: min(760px, 100%);
+      color: #1f2937;
+    }
+    .streamui-chat {
+      width: fit-content;
+      max-width: 100%;
+      padding: 12px 14px;
+      border: 1px solid #e1e7ef;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #1f2937;
+      box-shadow: 0 8px 24px rgba(26, 37, 61, 0.07);
+    }
+    .streamui-chat p,
+    .streamui-chat ul,
+    .streamui-chat ol {
+      margin: 0;
+    }
+    .streamui-chat p + p,
+    .streamui-chat p + ul,
+    .streamui-chat p + ol,
+    .streamui-chat ul + p,
+    .streamui-chat ol + p {
+      margin-top: 8px;
+    }
+    .streamui-chat ul,
+    .streamui-chat ol {
+      padding-left: 20px;
+    }
+    .streamui-chat li + li {
+      margin-top: 4px;
+    }
+    .streamui-muted {
+      color: #667085;
+    }
+    .streamui-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .streamui-button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 12px;
+      background: #1d4ed8;
+      color: #ffffff;
+      font-weight: 650;
+    }
+    .streamui-button.secondary {
+      border: 1px solid #cdd8e7;
+      background: #f8fafc;
+      color: #27415f;
+    }
   </style>
   <script>
     (() => {
