@@ -532,8 +532,14 @@ const SESSION_OUTPUT_SCROLL_SETTLE_MS = 900;
 const SESSION_OUTPUT_SCROLL_RETRY_MS = [0, 80, 240, 520];
 
 function scrollToLastOutputStart(viewport: HTMLElement): boolean {
-  const outputs = viewport.querySelectorAll<HTMLElement>(".assistant-canvas");
-  const target = outputs.item(outputs.length - 1);
+  const outputs = Array.from(
+    viewport.querySelectorAll<HTMLElement>(".assistant-canvas")
+  );
+  const assistantRows = Array.from(
+    viewport.querySelectorAll<HTMLElement>(".chat-row.assistant")
+  );
+  const target =
+    outputs[outputs.length - 1] ?? assistantRows[assistantRows.length - 1];
 
   if (!target) {
     return false;
