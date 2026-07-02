@@ -14,12 +14,18 @@ const clientDist = path.join(projectRoot, "dist");
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 8787);
+const startedAt = new Date().toISOString();
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "24mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    uptimeSec: Math.round(process.uptime()),
+    startedAt,
+    node: process.version
+  });
 });
 
 app.post("/api/chat", handleOpenRouterChat);
