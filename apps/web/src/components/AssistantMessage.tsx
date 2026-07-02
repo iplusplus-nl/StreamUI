@@ -1,8 +1,9 @@
+import { MessagePrimitive } from "@assistant-ui/react";
 import type { RenderError, RenderSnapshot } from "../core/types";
 import { AssistantPreviewBubble } from "./AssistantPreviewBubble";
 import { AssistantTextBubble } from "./AssistantTextBubble";
 import { RawStreamPanel } from "./RawStreamPanel";
-import { ThinkingPanel } from "./ThinkingPanel";
+import { ReasoningPanel } from "./ReasoningPanel";
 
 type AssistantMessageProps = {
   id: string;
@@ -28,12 +29,12 @@ export function AssistantMessage({
   onRuntimeError
 }: AssistantMessageProps) {
   return (
-    <article className="chat-row assistant">
+    <MessagePrimitive.Root className="chat-row assistant">
       <div className="avatar" aria-hidden="true">
         S
       </div>
       <div className="assistant-stack">
-        <ThinkingPanel
+        <ReasoningPanel
           reasoning={reasoning}
           isStreaming={status === "streaming"}
         />
@@ -50,6 +51,6 @@ export function AssistantMessage({
         ) : null}
         <RawStreamPanel raw={rawStream} />
       </div>
-    </article>
+    </MessagePrimitive.Root>
   );
 }

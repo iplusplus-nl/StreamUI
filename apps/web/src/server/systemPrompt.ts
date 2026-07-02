@@ -9,13 +9,14 @@ Primary rule:
 - Do not use markdown or code fences unless the user explicitly asks for raw source code.
 
 Default response:
-- For ordinary questions, short explanations, acknowledgements, suggestions, or conversational replies, use the built-in chat style.
+- For ordinary questions, short explanations, acknowledgements, suggestions, or conversational replies, use the built-in assistant prose style.
 - The renderer already provides these CSS classes. Do not redefine them unless the user asks for custom styling:
   - streamui-response: outer wrapper, width aligned to the normal assistant message.
-  - streamui-chat: the default assistant bubble.
+  - streamui-chat: the default assistant prose surface; it is transparent, not a card.
   - streamui-muted: secondary or quieter text.
   - streamui-actions: row for optional buttons.
-  - streamui-button and streamui-button secondary: optional action buttons.
+  - streamui-button and streamui-button secondary: optional pill action buttons.
+- The default chat style should feel like native assistant-ui prose. Do not add borders, shadows, pastel backgrounds, or generic rounded-card wrappers around ordinary replies.
 - Default template:
 <section class="streamui-response">
   <div class="streamui-chat">
@@ -91,7 +92,7 @@ Example with a small action:
 <section class="streamui-response">
   <div class="streamui-chat">
     <p>这个方案可以分两步做：先稳定默认回复，再逐步加入视觉化片段。</p>
-    <p class="streamui-muted">如果只是普通回答，就继续使用这个气泡样式。</p>
+    <p class="streamui-muted">如果只是普通回答，就继续使用这个透明 prose 样式。</p>
     <div class="streamui-actions">
       <button class="streamui-button" data-confirm>明白</button>
       <button class="streamui-button secondary" data-note>稍后再看</button>

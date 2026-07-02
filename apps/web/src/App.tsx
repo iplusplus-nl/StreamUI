@@ -1,8 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AssistantRuntimeProvider,
+  AuiIf,
+  ThreadPrimitive,
+  useAuiState,
+  useExternalStoreRuntime,
+  type AppendMessage,
+  type ThreadMessageLike
+} from "@assistant-ui/react";
 import { AssistantMessage } from "./components/AssistantMessage";
 import { ChatInput } from "./components/ChatInput";
 import { ChatMessage } from "./components/ChatMessage";
 import { ChatShell } from "./components/ChatShell";
+import {
+  StreamImageAttachmentAdapter,
+  completeAttachmentToImage,
+  imageAttachmentToCompleteAttachment
+} from "./core/assistantAttachments";
 import { createStreamingRenderer } from "./core/createStreamingRenderer";
 import { extractStreamUiParts } from "./core/extractStreamUiParts";
 import type { ImageAttachment } from "./core/imageAttachments";
@@ -27,14 +41,7 @@ type ChatStreamEvent = {
   text?: string;
 };
 
-const initialMessages: ClientMessage[] = [
-  {
-    id: "welcome",
-    role: "assistant",
-    content: "What would you like to make visual or interactive today?",
-    status: "complete"
-  }
-];
+const initialMessages: ClientMessage[] = [];
 
 function createId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -67,8 +74,8 @@ function getCanvasContext() {
   const messageListWidth =
     document.querySelector<HTMLElement>(".message-list")?.clientWidth ??
     viewportWidth;
-  const avatarAndGap = viewportWidth <= 720 ? 42 : 46;
-  const canvasWidth = Math.min(900, Math.max(280, messageListWidth - avatarAndGap));
+  const horizontalInset = viewportWidth <= 720 ? 32 : 48;
+  const canvasWidth = Math.min(900, Math.max(280, messageListWidth - horizontalInset));
   const initialCanvasHeight = Math.round(
     Math.min(640, Math.max(260, canvasWidth * 0.62))
   );
@@ -82,17 +89,163 @@ function getCanvasContext() {
   };
 }
 
+function toAssistantStatus(message: ClientMessage): ThreadMessageLike["status"] {
+  if (message.role !== "assistant") {
+    return undefined;
+  }
+
+  if (message.status === "streaming") {
+    return { type: "running" };
+  }
+
+  if (message.status === "error") {
+    return {
+      type: "incomplete",
+      reason: "error",
+      error: message.error ?? "The chat request failed."
+    };
+  }
+
+  return { type: "complete", reason: "stop" };
+}
+
+function convertMessage(message: ClientMessage): ThreadMessageLike {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content
+      ? [{ type: "text", text: message.content }]
+      : [],
+    status: toAssistantStatus(message),
+    attachments:
+      message.role === "user"
+        ? message.attachments?.map(imageAttachmentToCompleteAttachment)
+        : undefined
+  };
+}
+
+function getAppendMessageText(message: AppendMessage): string {
+  return message.content
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("")
+    .trim();
+}
+
+function isImageAttachment(
+  attachment: ImageAttachment | null
+): attachment is ImageAttachment {
+  return attachment !== null;
+}
+
+function getAppendMessageImages(message: AppendMessage): ImageAttachment[] {
+  const fromAttachments =
+    message.attachments
+      ?.map(completeAttachmentToImage)
+      .filter(isImageAttachment) ?? [];
+  const fromInlineParts = message.content
+    .map((part): ImageAttachment | null => {
+      if (part.type !== "image") {
+        return null;
+      }
+      return {
+        id: createId("inline-image"),
+        name: part.filename ?? "image",
+        mimeType: "image/png",
+        size: Math.floor(((part.image.split(",")[1] ?? "").length * 3) / 4),
+        dataUrl: part.image
+      };
+    })
+    .filter(isImageAttachment);
+
+  return [...fromAttachments, ...fromInlineParts];
+}
+
+type StreamThreadProps = {
+  messages: ClientMessage[];
+  onRuntimeError(id: string, error: RenderError): void;
+};
+
+function StreamThread({ messages, onRuntimeError }: StreamThreadProps) {
+  const isNewChat = useAuiState((state) => state.thread.messages.length === 0);
+  const messageById = useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages]
+  );
+
+  return (
+    <ThreadPrimitive.Root
+      className={`thread-root ${isNewChat ? "is-new" : "has-messages"}`}
+    >
+      <ThreadPrimitive.Viewport
+        className={`message-list ${isNewChat ? "is-new" : "has-messages"}`}
+        autoScroll
+        scrollToBottomOnRunStart
+        scrollToBottomOnInitialize
+      >
+        <AuiIf condition={(state) => state.thread.messages.length === 0}>
+          <section className="thread-welcome">
+            <p>StreamUI Runtime</p>
+            <h2>How can I help you today?</h2>
+          </section>
+        </AuiIf>
+        <ThreadPrimitive.Messages>
+          {({ message }) => {
+            const clientMessage = messageById.get(message.id);
+            if (!clientMessage) {
+              return null;
+            }
+
+            if (clientMessage.role === "assistant") {
+              return (
+                <AssistantMessage
+                  id={clientMessage.id}
+                  content={clientMessage.content}
+                  reasoning={clientMessage.reasoning}
+                  rawStream={clientMessage.rawStream}
+                  hasStreamUi={clientMessage.hasStreamUi}
+                  snapshot={clientMessage.snapshot}
+                  status={clientMessage.status}
+                  error={clientMessage.error}
+                  onRuntimeError={onRuntimeError}
+                />
+              );
+            }
+
+            return (
+              <ChatMessage
+                role={clientMessage.role}
+                attachments={clientMessage.attachments}
+              >
+                {clientMessage.content}
+              </ChatMessage>
+            );
+          }}
+        </ThreadPrimitive.Messages>
+        <ThreadPrimitive.ViewportFooter
+          className={`composer-footer ${isNewChat ? "is-new" : "has-messages"}`}
+        >
+          <ChatInput />
+        </ThreadPrimitive.ViewportFooter>
+      </ThreadPrimitive.Viewport>
+    </ThreadPrimitive.Root>
+  );
+}
+
 export default function App() {
   const [messages, setMessages] = useState<ClientMessage[]>(initialMessages);
   const [isSending, setIsSending] = useState(false);
   const messagesRef = useRef(messages);
-  const listEndRef = useRef<HTMLDivElement | null>(null);
+  const isSendingRef = useRef(isSending);
   const renderersRef = useRef<Map<string, StreamingRenderer>>(new Map());
+  const attachmentAdapter = useMemo(() => new StreamImageAttachmentAdapter(), []);
 
   useEffect(() => {
     messagesRef.current = messages;
-    listEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages]);
+
+  useEffect(() => {
+    isSendingRef.current = isSending;
+  }, [isSending]);
 
   const updateAssistant = useCallback(
     (id: string, patch: Partial<ClientMessage>) => {
@@ -135,10 +288,10 @@ export default function App() {
     []
   );
 
-  const handleSend = useCallback(
+  const sendStreamUiRequest = useCallback(
     async (text: string, attachments: ImageAttachment[] = []) => {
       const trimmed = text.trim();
-      if ((!trimmed && attachments.length === 0) || isSending) {
+      if ((!trimmed && attachments.length === 0) || isSendingRef.current) {
         return;
       }
 
@@ -184,9 +337,7 @@ export default function App() {
         }
 
         updateAssistant(assistantId, {
-          content:
-            parts.chat ||
-            (!parts.hasStreamUi ? parts.fallbackText : ""),
+          content: parts.chat || (!parts.hasStreamUi ? parts.fallbackText : ""),
           rawStream: raw,
           hasStreamUi: parts.hasStreamUi,
           streamUiComplete: parts.streamUiComplete
@@ -262,9 +413,7 @@ export default function App() {
         }
 
         updateAssistant(assistantId, {
-          content:
-            finalParts.chat ||
-            finalParts.fallbackText,
+          content: finalParts.chat || finalParts.fallbackText,
           reasoning,
           rawStream: raw,
           hasStreamUi: finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,
@@ -283,42 +432,42 @@ export default function App() {
         });
       } finally {
         unsubscribeSnapshot();
+        renderersRef.current.delete(assistantId);
         setIsSending(false);
       }
     },
-    [isSending, updateAssistant]
+    [updateAssistant]
   );
 
+  const handleNewMessage = useCallback(
+    async (message: AppendMessage) => {
+      await sendStreamUiRequest(
+        getAppendMessageText(message),
+        getAppendMessageImages(message)
+      );
+    },
+    [sendStreamUiRequest]
+  );
+
+  const runtime = useExternalStoreRuntime({
+    messages,
+    isRunning: isSending,
+    isSendDisabled: isSending,
+    convertMessage,
+    onNew: handleNewMessage,
+    adapters: {
+      attachments: attachmentAdapter
+    }
+  });
+
   return (
-    <ChatShell>
-      <main className="message-list" aria-live="polite">
-        {messages.map((message) =>
-          message.role === "assistant" ? (
-            <AssistantMessage
-              key={message.id}
-              id={message.id}
-              content={message.content}
-              reasoning={message.reasoning}
-              rawStream={message.rawStream}
-              hasStreamUi={message.hasStreamUi}
-              snapshot={message.snapshot}
-              status={message.status}
-              error={message.error}
-              onRuntimeError={handleRuntimeError}
-            />
-          ) : (
-            <ChatMessage
-              key={message.id}
-              role={message.role}
-              attachments={message.attachments}
-            >
-              {message.content}
-            </ChatMessage>
-          )
-        )}
-        <div ref={listEndRef} />
-      </main>
-      <ChatInput isSending={isSending} onSend={handleSend} />
-    </ChatShell>
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ChatShell>
+        <StreamThread
+          messages={messages}
+          onRuntimeError={handleRuntimeError}
+        />
+      </ChatShell>
+    </AssistantRuntimeProvider>
   );
 }

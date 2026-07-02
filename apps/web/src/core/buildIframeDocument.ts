@@ -32,18 +32,20 @@ export function buildIframeDocument(completedHtml: string): string {
     }
     button, input, select, textarea { font: inherit; }
     .streamui-response {
-      width: min(760px, 100%);
-      color: #1f2937;
+      width: min(900px, 100%);
+      color: #18181b;
     }
     .streamui-chat {
-      width: fit-content;
+      width: min(760px, 100%);
       max-width: 100%;
-      padding: 12px 14px;
-      border: 1px solid #e1e7ef;
-      border-radius: 8px;
-      background: #ffffff;
-      color: #1f2937;
-      box-shadow: 0 8px 24px rgba(26, 37, 61, 0.07);
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #18181b;
+      box-shadow: none;
+      font-size: 15px;
+      line-height: 1.65;
     }
     .streamui-chat p,
     .streamui-chat ul,
@@ -55,43 +57,44 @@ export function buildIframeDocument(completedHtml: string): string {
     .streamui-chat p + ol,
     .streamui-chat ul + p,
     .streamui-chat ol + p {
-      margin-top: 8px;
+      margin-top: 10px;
     }
     .streamui-chat ul,
     .streamui-chat ol {
       padding-left: 20px;
     }
     .streamui-chat li + li {
-      margin-top: 4px;
+      margin-top: 5px;
     }
     .streamui-chat a,
     .streamui-link {
-      color: #1d4ed8;
+      color: #18181b;
       text-decoration: underline;
       text-decoration-thickness: 1px;
-      text-underline-offset: 2px;
+      text-underline-offset: 3px;
     }
     .streamui-muted {
-      color: #667085;
+      color: #71717a;
     }
     .streamui-actions {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 12px;
+      margin-top: 14px;
     }
     .streamui-button {
-      border: 0;
-      border-radius: 8px;
-      padding: 9px 12px;
-      background: #1d4ed8;
+      border: 1px solid #18181b;
+      border-radius: 999px;
+      padding: 7px 12px;
+      background: #18181b;
       color: #ffffff;
-      font-weight: 650;
+      font-size: 13px;
+      font-weight: 620;
     }
     .streamui-button.secondary {
-      border: 1px solid #cdd8e7;
-      background: #f8fafc;
-      color: #27415f;
+      border-color: #d4d4d8;
+      background: transparent;
+      color: #3f3f46;
     }
     .streamui-resource {
       margin-top: 12px;
@@ -102,12 +105,12 @@ export function buildIframeDocument(completedHtml: string): string {
       display: block;
       max-width: 100%;
       border: 0;
-      border-radius: 8px;
+      border-radius: 6px;
     }
     .streamui-resource figcaption,
     .streamui-sources {
       margin-top: 6px;
-      color: #667085;
+      color: #71717a;
       font-size: 0.88rem;
       line-height: 1.45;
     }

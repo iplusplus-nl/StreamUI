@@ -1,10 +1,10 @@
 import type { Request, Response } from "express";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { streamText, type ModelMessage, type TextStreamPart } from "ai";
 import { SYSTEM_PROMPT } from "./systemPrompt.js";
 
-const OPENROUTER_CHAT_COMPLETIONS_URL =
-  "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
-const DEFAULT_REASONING_EFFORT = "low";
+const DEFAULT_REASONING_EFFORT: OpenRouterReasoningEffort = "low";
 const DEFAULT_WEB_TOOLS_ENABLED = true;
 const DEFAULT_DATETIME_TOOL_ENABLED = true;
 const DEFAULT_WEB_SEARCH_ENGINE = "auto";
@@ -18,6 +18,14 @@ const MAX_IMAGES_PER_MESSAGE = 4;
 const MAX_IMAGE_DATA_URL_LENGTH = 3_000_000;
 
 type ChatRole = "user" | "assistant" | "system";
+type OpenRouterReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "none";
 
 type ClientImageAttachment = {
   name?: string;
@@ -30,23 +38,6 @@ type ClientChatMessage = {
   role: ChatRole;
   content: string;
   images?: ClientImageAttachment[];
-};
-
-type OpenRouterContentPart =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "image_url";
-      image_url: {
-        url: string;
-      };
-    };
-
-type OpenRouterChatMessage = {
-  role: ChatRole;
-  content: string | OpenRouterContentPart[];
 };
 
 type CanvasContext = {
@@ -183,9 +174,10 @@ function normalizeUploadedImages(input: unknown): ClientImageAttachment[] {
       name: typeof image.name === "string" ? image.name.slice(0, 160) : undefined,
       mimeType:
         typeof image.mimeType === "string" ? image.mimeType.slice(0, 80) : undefined,
-      size: typeof image.size === "number" && Number.isFinite(image.size)
-        ? image.size
-        : undefined,
+      size:
+        typeof image.size === "number" && Number.isFinite(image.size)
+          ? image.size
+          : undefined,
       dataUrl: typeof image.dataUrl === "string" ? image.dataUrl : ""
     }))
     .filter((image) => {
@@ -284,11 +276,24 @@ function buildOpenRouterTools(): OpenRouterServerTool[] | undefined {
 }
 
 function normalizeCanvasContext(input: unknown): CanvasContext {
-  const canvas = typeof input === "object" && input !== null ? input as Partial<CanvasContext> : {};
+  const canvas =
+    typeof input === "object" && input !== null
+      ? (input as Partial<CanvasContext>)
+      : {};
   const viewportWidth = clampNumber(canvas.viewportWidth, 1280, 320, 3840);
   const viewportHeight = clampNumber(canvas.viewportHeight, 720, 320, 2400);
-  const canvasWidth = clampNumber(canvas.canvasWidth, Math.min(900, viewportWidth - 96), 280, 1400);
-  const initialCanvasHeight = clampNumber(canvas.initialCanvasHeight, Math.round(canvasWidth * 0.62), 180, 1000);
+  const canvasWidth = clampNumber(
+    canvas.canvasWidth,
+    Math.min(900, viewportWidth - 96),
+    280,
+    1400
+  );
+  const initialCanvasHeight = clampNumber(
+    canvas.initialCanvasHeight,
+    Math.round(canvasWidth * 0.62),
+    180,
+    1000
+  );
   const devicePixelRatio = clampNumber(canvas.devicePixelRatio, 1, 1, 4);
 
   return {
@@ -361,7 +366,7 @@ function normalizeMessages(input: unknown): ClientChatMessage[] {
     }));
 }
 
-function toOpenRouterMessage(message: ClientChatMessage): OpenRouterChatMessage {
+function toModelMessage(message: ClientChatMessage): ModelMessage {
   const images = message.images ?? [];
   if (!images.length || message.role !== "user") {
     return {
@@ -371,17 +376,16 @@ function toOpenRouterMessage(message: ClientChatMessage): OpenRouterChatMessage 
   }
 
   return {
-    role: message.role,
+    role: "user",
     content: [
       {
         type: "text",
         text: message.content || "Please respond to the attached image."
       },
       ...images.map((image) => ({
-        type: "image_url" as const,
-        image_url: {
-          url: image.dataUrl
-        }
+        type: "image" as const,
+        image: image.dataUrl,
+        mediaType: image.mimeType
       }))
     ]
   };
@@ -417,6 +421,7 @@ function describeToolCall(value: unknown): string {
   const toolCall = value as {
     type?: unknown;
     name?: unknown;
+    toolName?: unknown;
     function?: {
       name?: unknown;
     };
@@ -424,11 +429,13 @@ function describeToolCall(value: unknown): string {
   const rawName =
     typeof toolCall.function?.name === "string"
       ? toolCall.function.name
-      : typeof toolCall.name === "string"
-        ? toolCall.name
-        : typeof toolCall.type === "string"
-          ? toolCall.type
-          : "";
+      : typeof toolCall.toolName === "string"
+        ? toolCall.toolName
+        : typeof toolCall.name === "string"
+          ? toolCall.name
+          : typeof toolCall.type === "string"
+            ? toolCall.type
+            : "";
   const name = rawName.toLowerCase();
 
   if (name.includes("web_search")) {
@@ -444,119 +451,86 @@ function describeToolCall(value: unknown): string {
   return rawName ? `Using ${rawName}...` : "";
 }
 
-function writeToolCallHints(
+function writeToolCallHint(
   value: unknown,
   state: ToolStreamState,
   res: Response
 ): void {
-  if (!Array.isArray(value)) {
+  const label = describeToolCall(value);
+  if (!label || state.seenToolLabels.has(label)) {
     return;
   }
 
-  for (const toolCall of value) {
-    const label = describeToolCall(toolCall);
-    if (!label || state.seenToolLabels.has(label)) {
-      continue;
-    }
-
-    state.seenToolLabels.add(label);
-    writeStreamEvent(res, { type: "reasoning", text: label }, state);
-  }
+  state.seenToolLabels.add(label);
+  writeStreamEvent(res, { type: "reasoning", text: label }, state);
 }
 
-function stringifyReasoning(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
+function normalizeReasoningEffort(value: unknown): OpenRouterReasoningEffort {
+  const allowed = new Set<OpenRouterReasoningEffort>([
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "none"
+  ]);
 
-  if (!value || typeof value !== "object") {
-    return "";
-  }
-
-  const maybeReasoning = value as {
-    text?: unknown;
-    content?: unknown;
-    summary?: unknown;
-    encrypted_content?: unknown;
-  };
-
-  if (typeof maybeReasoning.text === "string") {
-    return maybeReasoning.text;
-  }
-  if (typeof maybeReasoning.content === "string") {
-    return maybeReasoning.content;
-  }
-  if (typeof maybeReasoning.summary === "string") {
-    return maybeReasoning.summary;
-  }
-
-  return "";
-}
-
-function normalizeReasoningEffort(value: unknown): string {
-  const allowed = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
-
-  if (typeof value === "string" && allowed.has(value)) {
-    return value;
+  if (typeof value === "string" && allowed.has(value as OpenRouterReasoningEffort)) {
+    return value as OpenRouterReasoningEffort;
   }
 
   return DEFAULT_REASONING_EFFORT;
 }
 
-function writeOpenRouterEvent(
-  event: string,
+function readStreamText(part: TextStreamPart<any>): string {
+  if (part.type !== "text-delta" && part.type !== "reasoning-delta") {
+    return "";
+  }
+
+  const compatPart = part as { text?: unknown; delta?: unknown };
+  if (typeof compatPart.text === "string") {
+    return compatPart.text;
+  }
+  if (typeof compatPart.delta === "string") {
+    return compatPart.delta;
+  }
+
+  return "";
+}
+
+function writeAiSdkStreamPart(
+  part: TextStreamPart<any>,
   res: Response,
   state: ToolStreamState
 ): void {
-  const data = event
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart())
-    .join("\n");
-
-  if (!data || data === "[DONE]") {
+  if (part.type === "tool-input-start" || part.type === "tool-call") {
+    writeToolCallHint(part, state, res);
     return;
   }
 
-  try {
-    const parsed = JSON.parse(data) as {
-      choices?: Array<{
-        delta?: {
-          content?: string;
-          reasoning?: unknown;
-          reasoning_content?: string;
-          tool_calls?: unknown;
-        };
-        message?: {
-          content?: string;
-          reasoning?: unknown;
-          reasoning_content?: string;
-          tool_calls?: unknown;
-        };
-      }>;
-    };
-    const choice = parsed.choices?.[0];
-    writeToolCallHints(choice?.delta?.tool_calls, state, res);
-    writeToolCallHints(choice?.message?.tool_calls, state, res);
+  if (part.type === "reasoning-delta") {
+    writeStreamEvent(
+      res,
+      { type: "reasoning", text: readStreamText(part) },
+      state
+    );
+    return;
+  }
 
-    const reasoning =
-      choice?.delta?.reasoning_content ??
-      stringifyReasoning(choice?.delta?.reasoning) ??
-      choice?.message?.reasoning_content ??
-      stringifyReasoning(choice?.message?.reasoning);
-    const content =
-      choice?.delta?.content ??
-      choice?.message?.content ??
-      "";
+  if (part.type === "text-delta") {
+    writeStreamEvent(
+      res,
+      { type: "content", text: readStreamText(part) },
+      state
+    );
+    return;
+  }
 
-    if (reasoning) {
-      writeStreamEvent(res, { type: "reasoning", text: reasoning }, state);
-    }
-    if (content) {
-      writeStreamEvent(res, { type: "content", text: content }, state);
-    }
-  } catch {
-    writeStreamEvent(res, { type: "content", text: data }, state);
+  if (part.type === "error") {
+    throw part.error instanceof Error
+      ? part.error
+      : new Error("OpenRouter stream returned an error.");
   }
 }
 
@@ -599,49 +573,31 @@ export async function handleOpenRouterChat(
     console.info(
       `[chat:${requestId}] start model=${model} messages=${messages.length} reasoning=${reasoningEffort}`
     );
-    const openRouterResponse = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "StreamUI Runtime Demo"
-      },
-      body: JSON.stringify({
-        model,
-        stream: true,
-        include_reasoning: true,
-        reasoning: {
-          effort: reasoningEffort,
-          exclude: false,
-          enabled: true
-        },
-        ...(tools ? { tools } : {}),
-        messages: [
-          {
-            role: "system",
-            content: SYSTEM_PROMPT
-          },
-          {
-            role: "system",
-            content: buildCanvasContextPrompt(canvasContext)
-          },
-          ...messages.map(toOpenRouterMessage)
-        ]
-      })
+
+    const openrouter = createOpenRouter({
+      apiKey,
+      appName: "StreamUI Runtime Demo",
+      appUrl: "http://localhost:5173",
+      compatibility: "strict"
     });
 
-    if (!openRouterResponse.ok || !openRouterResponse.body) {
-      const errorText = await openRouterResponse.text();
-      res
-        .status(openRouterResponse.status)
-        .type("text/plain")
-        .send(
-          errorText ||
-            `OpenRouter returned HTTP ${openRouterResponse.status}.`
-        );
-      return;
-    }
+    const result = streamText({
+      model: openrouter(model, {
+        extraBody: {
+          include_reasoning: true,
+          reasoning: {
+            effort: reasoningEffort,
+            exclude: false,
+            enabled: true
+          },
+          ...(tools ? { tools } : {})
+        }
+      }),
+      system: [SYSTEM_PROMPT, buildCanvasContextPrompt(canvasContext)].join(
+        "\n\n"
+      ),
+      messages: messages.map(toModelMessage)
+    });
 
     res.writeHead(200, {
       "Content-Type": "application/x-ndjson; charset=utf-8",
@@ -650,8 +606,6 @@ export async function handleOpenRouterChat(
       "X-Accel-Buffering": "no"
     });
 
-    const reader = openRouterResponse.body.getReader();
-    const decoder = new TextDecoder();
     const toolStreamState: ToolStreamState = {
       seenToolLabels: new Set(),
       contentChars: 0,
@@ -659,29 +613,9 @@ export async function handleOpenRouterChat(
       reasoningChars: 0,
       reasoningEvents: 0
     };
-    let buffer = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split(/\n\n/);
-      buffer = events.pop() ?? "";
-
-      for (const event of events) {
-        writeOpenRouterEvent(event, res, toolStreamState);
-      }
-    }
-
-    const tail = decoder.decode();
-    if (tail) {
-      buffer += tail;
-    }
-    if (buffer.trim()) {
-      writeOpenRouterEvent(buffer, res, toolStreamState);
+    for await (const part of result.fullStream) {
+      writeAiSdkStreamPart(part, res, toolStreamState);
     }
 
     res.end();
@@ -698,7 +632,10 @@ export async function handleOpenRouterChat(
       return;
     }
 
-    res.write(`\n[proxy error] ${message}`);
+    writeStreamEvent(res, {
+      type: "content",
+      text: `\n\n[proxy error] ${message}`
+    });
     res.end();
   }
 }

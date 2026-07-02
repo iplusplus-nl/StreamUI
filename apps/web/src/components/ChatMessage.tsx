@@ -1,3 +1,4 @@
+import { MessagePrimitive } from "@assistant-ui/react";
 import type { ReactNode } from "react";
 import type { ImageAttachment } from "../core/imageAttachments";
 
@@ -13,7 +14,7 @@ export function ChatMessage({
   children
 }: ChatMessageProps) {
   return (
-    <article className={`chat-row ${role}`}>
+    <MessagePrimitive.Root className={`chat-row ${role}`}>
       <div className="avatar" aria-hidden="true">
         {role === "user" ? "U" : "S"}
       </div>
@@ -32,6 +33,6 @@ export function ChatMessage({
           </div>
         ) : null}
       </div>
-    </article>
+    </MessagePrimitive.Root>
   );
 }
