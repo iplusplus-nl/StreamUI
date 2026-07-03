@@ -1,5 +1,5 @@
 import { MessagePrimitive } from "@assistant-ui/react";
-import type { RenderError, RenderSnapshot } from "../core/types";
+import type { PageThemeMode, RenderError, RenderSnapshot } from "../core/types";
 import { AssistantPreviewBubble } from "./AssistantPreviewBubble";
 import { AssistantTextBubble } from "./AssistantTextBubble";
 import { RawStreamPanel } from "./RawStreamPanel";
@@ -12,6 +12,7 @@ type AssistantMessageProps = {
   rawStream?: string;
   hasStreamUi?: boolean;
   snapshot?: RenderSnapshot;
+  themeMode: PageThemeMode;
   status?: "streaming" | "complete" | "error";
   error?: string;
   onRuntimeError(id: string, error: RenderError): void;
@@ -24,6 +25,7 @@ export function AssistantMessage({
   rawStream,
   hasStreamUi,
   snapshot,
+  themeMode,
   status,
   error,
   onRuntimeError
@@ -46,6 +48,7 @@ export function AssistantMessage({
           <AssistantPreviewBubble
             id={id}
             snapshot={snapshot}
+            themeMode={themeMode}
             onRuntimeError={onRuntimeError}
           />
         ) : null}

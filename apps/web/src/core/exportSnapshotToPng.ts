@@ -1,5 +1,6 @@
 import { toBlob } from "html-to-image";
-import type { RenderSnapshot } from "./types";
+import { buildIframeDocument } from "./buildIframeDocument";
+import type { PageThemeMode, RenderSnapshot } from "./types";
 
 const MAX_CANVAS_DIMENSION = 16_384;
 const MAX_CANVAS_PIXELS = 32_000_000;
@@ -115,6 +116,7 @@ export async function downloadSnapshotAsPng(
   snapshot: RenderSnapshot,
   options: {
     filename: string;
+    themeMode?: PageThemeMode;
     width: number;
   }
 ): Promise<void> {
@@ -131,7 +133,9 @@ export async function downloadSnapshotAsPng(
   frame.style.pointerEvents = "none";
 
   const loadPromise = waitForFrameLoad(frame);
-  frame.srcdoc = snapshot.iframeDocument;
+  frame.srcdoc = options.themeMode
+    ? buildIframeDocument(snapshot.completedHtml, options.themeMode)
+    : snapshot.iframeDocument;
   document.body.appendChild(frame);
 
   try {

@@ -525,6 +525,7 @@ function getAppendMessageImages(message: AppendMessage): ImageAttachment[] {
 type StreamThreadProps = {
   activeSessionId: string;
   messages: ClientMessage[];
+  themeMode: ThemeMode;
   onRuntimeError(id: string, error: RenderError): void;
 };
 
@@ -558,6 +559,7 @@ function scrollToLastOutputStart(viewport: HTMLElement): boolean {
 function StreamThread({
   activeSessionId,
   messages,
+  themeMode,
   onRuntimeError
 }: StreamThreadProps) {
   const isNewChat = useAuiState((state) => state.thread.messages.length === 0);
@@ -642,6 +644,7 @@ function StreamThread({
                   rawStream={clientMessage.rawStream}
                   hasStreamUi={clientMessage.hasStreamUi}
                   snapshot={clientMessage.snapshot}
+                  themeMode={themeMode}
                   status={clientMessage.status}
                   error={clientMessage.error}
                   onRuntimeError={onRuntimeError}
@@ -1174,6 +1177,7 @@ export default function App() {
         <StreamThread
           activeSessionId={sessionState.activeSessionId}
           messages={messages}
+          themeMode={themeMode}
           onRuntimeError={handleRuntimeError}
         />
       </ChatShell>

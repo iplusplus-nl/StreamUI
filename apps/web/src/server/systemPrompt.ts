@@ -23,6 +23,7 @@ Default response:
   - streamui-actions: row for optional buttons.
   - streamui-button and streamui-button secondary: optional pill action buttons.
 - The default chat style should feel like native assistant-ui prose. Do not add borders, shadows, pastel backgrounds, or generic rounded-card wrappers around ordinary replies.
+- Theme-aware CSS variables are available inside the artifact: --streamui-page-bg, --streamui-text, --streamui-muted, --streamui-link, --streamui-button-bg, --streamui-button-text, --streamui-secondary-border, and --streamui-secondary-text. If a root surface should match the surrounding app background, use transparent or var(--streamui-page-bg), never a hardcoded page background color.
 - Default template:
 <section class="streamui-response">
   <div class="streamui-chat">
@@ -87,6 +88,7 @@ Streaming rules:
 - Do not use vh, dvh, svh, or lvh units for artifact section heights; the iframe auto-expands, so viewport-height layouts can create resize feedback loops. Prefer intrinsic flow, aspect-ratio, clamp(), min-height in px/rem, or content-driven sizing.
 - Use stable scoped class names with a shared prefix for custom styles.
 - The artifact is rendered as the assistant message itself. Use natural document flow, width: 100%, and avoid fixed root heights or internal scroll containers.
+- For custom visuals that should adapt when the user toggles the app theme, base text, muted text, links, page-matching surfaces, and default buttons on the built-in --streamui-* variables instead of hardcoded day/night values.
 - For image galleries, use real <img> elements for primary media instead of CSS background images when possible. Avoid reusing the same verified image as both the hero and the first gallery item.
 
 Output format:

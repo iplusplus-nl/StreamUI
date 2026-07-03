@@ -27,7 +27,7 @@ type IframeThemeTokens = {
   secondaryText: string;
 };
 
-function getIframeThemeTokens(themeMode: PageThemeMode): IframeThemeTokens {
+export function getIframeThemeTokens(themeMode: PageThemeMode): IframeThemeTokens {
   if (themeMode === "day") {
     return {
       mode: "day",
@@ -55,6 +55,22 @@ function getIframeThemeTokens(themeMode: PageThemeMode): IframeThemeTokens {
     secondaryBorder: "rgba(255, 255, 255, 0.18)",
     secondaryText: "#e4e4e7"
   };
+}
+
+export function applyIframeTheme(document: Document, themeMode: PageThemeMode): void {
+  const theme = getIframeThemeTokens(themeMode);
+  const root = document.documentElement;
+
+  root.dataset.pageTheme = theme.mode;
+  root.style.setProperty("color-scheme", theme.colorScheme);
+  root.style.setProperty("--streamui-page-bg", theme.pageBg);
+  root.style.setProperty("--streamui-text", theme.text);
+  root.style.setProperty("--streamui-muted", theme.muted);
+  root.style.setProperty("--streamui-link", theme.link);
+  root.style.setProperty("--streamui-button-bg", theme.buttonBg);
+  root.style.setProperty("--streamui-button-text", theme.buttonText);
+  root.style.setProperty("--streamui-secondary-border", theme.secondaryBorder);
+  root.style.setProperty("--streamui-secondary-text", theme.secondaryText);
 }
 
 export function buildIframeDocument(

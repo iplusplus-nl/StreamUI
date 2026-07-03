@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { applyIframeTheme } from "../core/buildIframeDocument";
 import { isIgnoredRuntimeError } from "../core/ignoredRuntimeErrors";
-import type { RenderError, RenderSnapshot } from "../core/types";
+import type { PageThemeMode, RenderError, RenderSnapshot } from "../core/types";
 
 type PreviewFrameProps = {
   snapshot: RenderSnapshot;
+  themeMode: PageThemeMode;
   onRuntimeError(error: RenderError): void;
 };
 
@@ -146,7 +148,11 @@ function runBodyScripts(document: Document) {
   });
 }
 
-export function PreviewFrame({ snapshot, onRuntimeError }: PreviewFrameProps) {
+export function PreviewFrame({
+  snapshot,
+  themeMode,
+  onRuntimeError
+}: PreviewFrameProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const initialDocumentRef = useRef(snapshot.iframeDocument);
   const latestSnapshotRef = useRef(snapshot);
@@ -166,6 +172,8 @@ export function PreviewFrame({ snapshot, onRuntimeError }: PreviewFrameProps) {
     if (!document?.body) {
       return;
     }
+
+    applyIframeTheme(document, themeMode);
 
     if (renderedHtmlRef.current === nextSnapshot.completedHtml) {
       applyPerformanceGuard(document);
@@ -191,7 +199,7 @@ export function PreviewFrame({ snapshot, onRuntimeError }: PreviewFrameProps) {
     applyPerformanceGuard(document);
     renderedHtmlRef.current = nextSnapshot.completedHtml;
     lastCommitTimeRef.current = performance.now();
-  }, []);
+  }, [themeMode]);
 
   const scheduleCommit = useCallback(() => {
     if (
@@ -286,6 +294,16 @@ export function PreviewFrame({ snapshot, onRuntimeError }: PreviewFrameProps) {
   }, [scheduleCommit, snapshot]);
 
   useEffect(() => {
+    const document = frameRef.current?.contentDocument;
+    if (!document?.body) {
+      return;
+    }
+
+    applyIframeTheme(document, themeMode);
+    scheduleCommit();
+  }, [scheduleCommit, themeMode]);
+
+  useEffect(() => {
     const scrollContainer = frameRef.current?.closest(".message-list");
 
     const handleScroll = () => {
@@ -325,7 +343,13 @@ export function PreviewFrame({ snapshot, onRuntimeError }: PreviewFrameProps) {
       title="StreamUI artifact preview"
       sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
       srcDoc={initialDocumentRef.current}
-      onLoad={() => commitSnapshot(latestSnapshotRef.current)}
+      onLoad={() => {
+        const document = frameRef.current?.contentDocument;
+        if (document?.body) {
+          applyIframeTheme(document, themeMode);
+        }
+        commitSnapshot(latestSnapshotRef.current);
+      }}
       style={{ height }}
     />
   );

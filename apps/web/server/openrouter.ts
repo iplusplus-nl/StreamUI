@@ -139,7 +139,8 @@ function buildThemeContextPrompt(themeMode: PageThemeMode): string {
 - The user is viewing StreamUI on a ${label} page background, approximately ${background}.
 - Unless the user explicitly asks for a specific background color/theme, or the task clearly benefits from a special backdrop, make the artifact suitable for this ${label} surrounding page.
 - For ordinary replies using streamui-response and streamui-chat, rely on the built-in transparent styles.
-- For custom visual artifacts, keep the root transparent when possible or use surfaces, text colors, borders, shadows, and media treatment that maintain comfortable contrast on the current ${label} page.
+- For custom visual artifacts, keep the root transparent when possible. If a root surface should match the surrounding app background, use var(--streamui-page-bg) instead of hardcoding ${background}; StreamUI updates that variable when the user toggles the page theme.
+- Use the built-in theme variables for adaptive basics: --streamui-page-bg, --streamui-text, --streamui-muted, --streamui-link, --streamui-button-bg, --streamui-button-text, --streamui-secondary-border, and --streamui-secondary-text.
 - Do not assume the opposite page theme unless the user asks for it.`;
 }
 
@@ -153,9 +154,10 @@ function buildCanvasContextPrompt(canvas: CanvasContext): string {
 - The canvas auto-expands downward to fit your content. There is no fixed artifact height.
 - Design for a vertical conversation canvas: use width: 100%, responsive max-widths, and natural document flow.
 - Do not create internal scroll containers for the main artifact. Avoid fixed heights, 100vh layouts, and overflow: auto on the root.
-- For normal replies, use the built-in chat bubble classes: streamui-response and streamui-chat.
+- For normal replies, use the built-in transparent assistant prose classes: streamui-response and streamui-chat.
 - The default reply should usually be:
   <section class="streamui-response"><div class="streamui-chat"><p>...</p></div></section>
+- For theme-aware custom styling, use the built-in --streamui-* variables. Do not hardcode the page background color when you intend to blend into the surrounding app.
 - Put all conversational language inside the HTML artifact. Keep <chat></chat> empty.
 - Be natural and direct. Do not adopt a special persona.
 - For visual, interactive, educational, spatial, or exploratory requests, make a distinctive crafted artifact rather than a conventional rounded-card layout.
