@@ -37,7 +37,6 @@ import {
   type SearchSettings
 } from "./core/searchSettings";
 import {
-  countUserPrompts,
   createEmptySession,
   createId,
   createInitialSessionState,
@@ -862,8 +861,7 @@ export default function App() {
     () =>
       sessionState.sessions.map((session) => ({
         id: session.id,
-        title: session.title || summarizeSession(session.messages),
-        promptCount: countUserPrompts(session.messages)
+        title: session.title || summarizeSession(session.messages)
       })),
     [sessionState.sessions]
   );

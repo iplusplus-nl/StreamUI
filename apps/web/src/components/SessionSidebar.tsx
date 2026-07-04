@@ -40,7 +40,6 @@ export type ThemeMode = "day" | "night";
 export type SessionListItem = {
   id: string;
   title: string;
-  promptCount: number;
 };
 
 type SessionSidebarProps = {
@@ -57,14 +56,6 @@ type SessionSidebarProps = {
   onApiSettingsChange(settings: ApiSettings): void;
   onSearchSettingsChange(settings: SearchSettings): void;
 };
-
-function formatSessionMeta(session: SessionListItem): string {
-  if (session.promptCount === 0) {
-    return "Empty";
-  }
-
-  return `${session.promptCount} prompt${session.promptCount === 1 ? "" : "s"}`;
-}
 
 export function SessionSidebar({
   sessions,
@@ -172,7 +163,6 @@ export function SessionSidebar({
               }}
             >
               <span className="session-title">{session.title}</span>
-              <span className="session-meta">{formatSessionMeta(session)}</span>
             </button>
             <button
               className="session-actions-button"
