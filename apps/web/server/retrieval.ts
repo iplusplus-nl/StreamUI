@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { load } from "cheerio";
 import { lookup } from "node:dns/promises";
+import { createRequire } from "node:module";
 import { isIP } from "node:net";
 
 const DEFAULT_RETRIEVAL_ENABLED = true;
@@ -19,6 +20,7 @@ const USER_AGENT =
   "StreamUI-Retrieval/0.1 (+https://localhost; local development retrieval service)";
 const IMAGE_USER_AGENT =
   "Mozilla/5.0 (compatible; StreamUI-Retrieval/0.1; +https://stream.aiz.ink)";
+const require = createRequire(import.meta.url);
 
 type SearchProvider = "auto" | "brave" | "tavily" | "serper" | "duckduckgo" | "none";
 type BrowserEngine = "fetch" | "playwright";
@@ -135,6 +137,22 @@ type PageFetchResult = {
   html?: string;
   fetchedAt: string;
 };
+
+let playwrightAvailableCache: boolean | undefined;
+
+function isPackageAvailable(name: string): boolean {
+  try {
+    require.resolve(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isPlaywrightAvailable(): boolean {
+  playwrightAvailableCache ??= isPackageAvailable("playwright");
+  return playwrightAvailableCache;
+}
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   if (typeof value === "boolean") {
@@ -737,7 +755,9 @@ async function fetchPage(
   config: RetrievalConfig
 ): Promise<PageFetchResult> {
   if (config.browserEngine === "playwright") {
-    return fetchWithPlaywright(url, config);
+    return isPlaywrightAvailable()
+      ? fetchWithPlaywright(url, config)
+      : fetchWithNodeFetch(url, config);
   }
 
   return fetchWithNodeFetch(url, config);
@@ -1776,6 +1796,13 @@ async function searchWeb(
         ].filter((provider): provider is SearchProvider => Boolean(provider))
       : [config.searchProvider];
 
+  if (!providers.length) {
+    notes.push(
+      "No search provider is currently available: no Brave, Tavily, or Serper environment key is configured and DuckDuckGo fallback is disabled."
+    );
+    return [];
+  }
+
   for (const provider of providers) {
     try {
       const results =
@@ -1969,6 +1996,16 @@ export async function collectRetrievalContext(
   const fetchNeeded = options.forceFetch || directUrls.length > 0;
   const visualSearchNeeded = searchNeeded && asksForVisualResources(text);
   const notes: string[] = [];
+
+  if (
+    fetchNeeded &&
+    config.browserEngine === "playwright" &&
+    !isPlaywrightAvailable()
+  ) {
+    notes.push(
+      "Playwright was selected for page fetching but is not installed; retrieval fell back to Node fetch."
+    );
+  }
 
   const base: RetrievalContext = {
     enabled: config.enabled,

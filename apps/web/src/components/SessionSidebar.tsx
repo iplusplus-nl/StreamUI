@@ -50,6 +50,8 @@ import {
 import {
   getEnvironmentKeyStatus,
   type EnvironmentKeyStatus,
+  type RuntimeSearchBrowserStatus,
+  type RuntimeSearchProviderStatus,
   type RuntimeSettingsSummary
 } from "../core/runtimeSettings";
 import { fetchModelCatalog } from "../features/settings/modelCatalog";
@@ -158,6 +160,47 @@ function getEnvironmentStatusClass(status: EnvironmentKeyStatus | null): string 
   return status.configured ? "is-configured" : "is-missing";
 }
 
+function getSearchProviderCapability(
+  runtimeSettings: RuntimeSettingsSummary | null,
+  provider: SearchProvider
+): RuntimeSearchProviderStatus | null {
+  if (provider === "auto" || provider === "none") {
+    return null;
+  }
+
+  return (
+    runtimeSettings?.search.providers.find((status) => status.provider === provider) ??
+    null
+  );
+}
+
+function getSearchBrowserCapability(
+  runtimeSettings: RuntimeSettingsSummary | null,
+  engine: SearchBrowserEngine
+): RuntimeSearchBrowserStatus | null {
+  return (
+    runtimeSettings?.search.browserEngines.find(
+      (status) => status.engine === engine
+    ) ?? null
+  );
+}
+
+function formatSearchProviderCapability(
+  provider: RuntimeSearchProviderStatus
+): string {
+  if (!provider.requiresApiKey) {
+    return `${provider.label}: no key required`;
+  }
+
+  return `${provider.label}: ${
+    provider.configured ? "env key set" : "env key missing"
+  }`;
+}
+
+function getSearchCapabilityClass(configured: boolean): string {
+  return configured ? "is-configured" : "is-missing";
+}
+
 export function SessionSidebar({
   sessions,
   activeSessionId,
@@ -218,6 +261,14 @@ export function SessionSidebar({
     name,
     status: getEnvironmentKeyStatus(runtimeSettings?.search.environmentKeys, name)
   }));
+  const selectedSearchProviderCapability = getSearchProviderCapability(
+    runtimeSettings,
+    draftSearchSettings.provider
+  );
+  const selectedBrowserCapability = getSearchBrowserCapability(
+    runtimeSettings,
+    draftSearchSettings.browserEngine
+  );
   const draftSelectableModels = getSelectableModelOptions(draftApiSettings);
 
   useEffect(() => {
@@ -974,26 +1025,79 @@ export function SessionSidebar({
                       />
                     </label>
 
+                    <div className="settings-row settings-row-textarea">
+                      <span>Capability Status</span>
+                      <div className="settings-capability-list">
+                        {runtimeSettings ? (
+                          <>
+                            <span className="settings-capability-chip is-neutral">
+                              Provider default: {runtimeSettings.search.defaultProvider}
+                            </span>
+                            {runtimeSettings.search.providers.map((provider) => (
+                              <span
+                                className={`settings-capability-chip ${getSearchCapabilityClass(
+                                  provider.configured
+                                )}`}
+                                key={provider.provider}
+                              >
+                                {formatSearchProviderCapability(provider)}
+                              </span>
+                            ))}
+                            {runtimeSettings.search.browserEngines.map((engine) => (
+                              <span
+                                className={`settings-capability-chip ${
+                                  engine.available ? "is-configured" : "is-missing"
+                                }`}
+                                key={engine.engine}
+                              >
+                                {engine.label}:{" "}
+                                {engine.available ? "available" : "not installed"}
+                                {engine.activeByDefault ? " default" : ""}
+                              </span>
+                            ))}
+                          </>
+                        ) : (
+                          <span className="settings-empty-state">
+                            Checking runtime
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
                     <label className="settings-row">
                       <span>Provider</span>
-                      <select
-                        value={draftSearchSettings.provider}
-                        onChange={(event) => {
-                          const provider = event.target.value as SearchProvider;
-                          updateSearchDraft({
-                            provider,
-                            apiKeySource: searchProviderNeedsApiKey(provider)
-                              ? draftSearchSettings.apiKeySource
-                              : "environment"
-                          });
-                        }}
-                      >
-                        {SEARCH_PROVIDER_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="settings-control-stack">
+                        <select
+                          value={draftSearchSettings.provider}
+                          onChange={(event) => {
+                            const provider = event.target.value as SearchProvider;
+                            updateSearchDraft({
+                              provider,
+                              apiKeySource: searchProviderNeedsApiKey(provider)
+                                ? draftSearchSettings.apiKeySource
+                                : "environment"
+                            });
+                          }}
+                        >
+                          {SEARCH_PROVIDER_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedSearchProviderCapability &&
+                        draftSearchSettings.apiKeySource === "environment" ? (
+                          <span
+                            className={`settings-hint settings-env-status ${getSearchCapabilityClass(
+                              selectedSearchProviderCapability.configured
+                            )}`}
+                          >
+                            {formatSearchProviderCapability(
+                              selectedSearchProviderCapability
+                            )}
+                          </span>
+                        ) : null}
+                      </div>
                     </label>
 
                     <label className="settings-row">
@@ -1050,7 +1154,21 @@ export function SessionSidebar({
                               .map(({ name, status }) =>
                                 formatEnvironmentStatus(name, status)
                               )
-                              .join(" · ")}
+                              .join(" | ")}
+                          </span>
+                        ) : null}
+                        {searchAllowsManualKey &&
+                        draftSearchSettings.apiKeySource === "manual" ? (
+                          <span
+                            className={`settings-hint settings-env-status ${
+                              draftSearchSettings.apiKey.trim()
+                                ? "is-configured"
+                                : "is-missing"
+                            }`}
+                          >
+                            {draftSearchSettings.apiKey.trim()
+                              ? "Manual search key entered"
+                              : "Manual search key missing"}
                           </span>
                         ) : null}
                       </div>
@@ -1073,20 +1191,33 @@ export function SessionSidebar({
 
                     <label className="settings-row">
                       <span>Fetch Engine</span>
-                      <select
-                        value={draftSearchSettings.browserEngine}
-                        onChange={(event) =>
-                          updateSearchDraft({
-                            browserEngine: event.target.value as SearchBrowserEngine
-                          })
-                        }
-                      >
-                        {SEARCH_BROWSER_ENGINE_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="settings-control-stack">
+                        <select
+                          value={draftSearchSettings.browserEngine}
+                          onChange={(event) =>
+                            updateSearchDraft({
+                              browserEngine: event.target.value as SearchBrowserEngine
+                            })
+                          }
+                        >
+                          {SEARCH_BROWSER_ENGINE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedBrowserCapability ? (
+                          <span
+                            className={`settings-hint settings-env-status ${
+                              selectedBrowserCapability.available
+                                ? "is-configured"
+                                : "is-missing"
+                            }`}
+                          >
+                            {selectedBrowserCapability.detail}
+                          </span>
+                        ) : null}
+                      </div>
                     </label>
 
                     <label className="settings-row">

@@ -676,6 +676,44 @@ button {
   gap: 8px;
 }
 
+.settings-capability-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.settings-capability-chip {
+  display: inline-flex;
+  min-height: 24px;
+  max-width: 100%;
+  align-items: center;
+  overflow-wrap: anywhere;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #52525b;
+  background: #f4f4f4;
+  font-size: 11.5px;
+  font-weight: 560;
+  line-height: 1.25;
+}
+
+.settings-capability-chip.is-configured {
+  color: #16773a;
+  background: #e6f4ea;
+}
+
+.settings-capability-chip.is-missing {
+  color: #a33a28;
+  background: #fbe9e4;
+}
+
+.settings-capability-chip.is-neutral {
+  color: #52525b;
+  background: #e9e9e9;
+}
+
 .settings-model-list {
   display: flex;
   flex-wrap: wrap;
@@ -1198,6 +1236,30 @@ button {
   .settings-row
   .settings-env-status.is-missing {
   color: #e38673;
+}
+
+.app-shell[data-theme="night"] .settings-capability-chip,
+.settings-overlay[data-theme="night"] .settings-capability-chip {
+  color: #d4d4d8;
+  background: #3a3a3a;
+}
+
+.app-shell[data-theme="night"] .settings-capability-chip.is-configured,
+.settings-overlay[data-theme="night"] .settings-capability-chip.is-configured {
+  color: #9ae6b4;
+  background: rgba(35, 92, 54, 0.48);
+}
+
+.app-shell[data-theme="night"] .settings-capability-chip.is-missing,
+.settings-overlay[data-theme="night"] .settings-capability-chip.is-missing {
+  color: #f0a594;
+  background: rgba(117, 50, 36, 0.48);
+}
+
+.app-shell[data-theme="night"] .settings-capability-chip.is-neutral,
+.settings-overlay[data-theme="night"] .settings-capability-chip.is-neutral {
+  color: #d4d4d8;
+  background: #444444;
 }
 
 .app-shell[data-theme="night"] .settings-small-button:hover:not(:disabled),

@@ -5,6 +5,23 @@ export type EnvironmentKeyStatus = {
   configured: boolean;
 };
 
+export type RuntimeSearchProviderStatus = {
+  provider: "brave" | "tavily" | "serper" | "duckduckgo";
+  label: string;
+  requiresApiKey: boolean;
+  environmentKeyName?: string;
+  configured: boolean;
+  fallback: boolean;
+};
+
+export type RuntimeSearchBrowserStatus = {
+  engine: "fetch" | "playwright";
+  label: string;
+  available: boolean;
+  activeByDefault: boolean;
+  detail: string;
+};
+
 export type RuntimeSettingsSummary = {
   api: {
     defaults: ApiSettings;
@@ -12,6 +29,10 @@ export type RuntimeSettingsSummary = {
   };
   search: {
     environmentKeys: EnvironmentKeyStatus[];
+    defaultProvider: "auto" | "brave" | "tavily" | "serper" | "duckduckgo" | "none";
+    defaultBrowserEngine: "fetch" | "playwright";
+    providers: RuntimeSearchProviderStatus[];
+    browserEngines: RuntimeSearchBrowserStatus[];
   };
 };
 
