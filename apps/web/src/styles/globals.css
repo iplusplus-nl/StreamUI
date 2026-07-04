@@ -1076,44 +1076,54 @@ button {
   color: #171717;
 }
 
-.app-shell[data-theme="night"] .settings-overlay {
+.app-shell[data-theme="night"] .settings-overlay,
+.settings-overlay[data-theme="night"] {
   background: rgba(0, 0, 0, 0.22);
 }
 
-.app-shell[data-theme="night"] .settings-panel {
+.app-shell[data-theme="night"] .settings-panel,
+.settings-overlay[data-theme="night"] .settings-panel {
   color: #f4f4f5;
   background: #2f2f2f;
   box-shadow: 0 18px 54px rgba(0, 0, 0, 0.4);
 }
 
-.app-shell[data-theme="night"] .settings-nav {
+.app-shell[data-theme="night"] .settings-nav,
+.settings-overlay[data-theme="night"] .settings-nav {
   background: #2f2f2f;
   box-shadow: inset -1px 0 0 #3d3d3d;
 }
 
-.app-shell[data-theme="night"] .settings-nav-item {
+.app-shell[data-theme="night"] .settings-nav-item,
+.settings-overlay[data-theme="night"] .settings-nav-item {
   color: #f4f4f5;
 }
 
-.app-shell[data-theme="night"] .settings-nav-item.is-active {
+.app-shell[data-theme="night"] .settings-nav-item.is-active,
+.settings-overlay[data-theme="night"] .settings-nav-item.is-active {
   background: #3a3a3a;
 }
 
-.app-shell[data-theme="night"] .settings-content-header {
+.app-shell[data-theme="night"] .settings-content-header,
+.settings-overlay[data-theme="night"] .settings-content-header {
   background: #2f2f2f;
   box-shadow: inset 0 -1px 0 #3d3d3d;
 }
 
-.app-shell[data-theme="night"] .settings-row {
+.app-shell[data-theme="night"] .settings-row,
+.settings-overlay[data-theme="night"] .settings-row {
   box-shadow: inset 0 -1px 0 #3a3a3a;
 }
 
 .app-shell[data-theme="night"] .settings-close-button,
-.app-shell[data-theme="night"] .settings-row span {
+.app-shell[data-theme="night"] .settings-row span,
+.settings-overlay[data-theme="night"] .settings-close-button,
+.settings-overlay[data-theme="night"] .settings-row span {
   color: #f4f4f5;
 }
 
-.app-shell[data-theme="night"] .settings-close-button:hover {
+.app-shell[data-theme="night"] .settings-close-button:hover,
+.settings-overlay[data-theme="night"] .settings-close-button:hover {
   color: #ffffff;
   background: #3a3a3a;
 }
@@ -1122,7 +1132,12 @@ button {
 .app-shell[data-theme="night"] .settings-row select,
 .app-shell[data-theme="night"] .settings-row textarea,
 .app-shell[data-theme="night"] .settings-small-button,
-.app-shell[data-theme="night"] .settings-secondary-button {
+.app-shell[data-theme="night"] .settings-secondary-button,
+.settings-overlay[data-theme="night"] .settings-row input,
+.settings-overlay[data-theme="night"] .settings-row select,
+.settings-overlay[data-theme="night"] .settings-row textarea,
+.settings-overlay[data-theme="night"] .settings-small-button,
+.settings-overlay[data-theme="night"] .settings-secondary-button {
   color: #f4f4f5;
   background: #3a3a3a;
   box-shadow: none;
@@ -1130,55 +1145,70 @@ button {
 
 .app-shell[data-theme="night"] .settings-row input:focus,
 .app-shell[data-theme="night"] .settings-row select:focus,
-.app-shell[data-theme="night"] .settings-row textarea:focus {
+.app-shell[data-theme="night"] .settings-row textarea:focus,
+.settings-overlay[data-theme="night"] .settings-row input:focus,
+.settings-overlay[data-theme="night"] .settings-row select:focus,
+.settings-overlay[data-theme="night"] .settings-row textarea:focus {
   background: #444444;
 }
 
-.app-shell[data-theme="night"] .settings-row input:disabled {
+.app-shell[data-theme="night"] .settings-row input:disabled,
+.settings-overlay[data-theme="night"] .settings-row input:disabled {
   color: #8e8e8e;
   background: #3a3a3a;
 }
 
-.app-shell[data-theme="night"] .settings-row .settings-hint {
+.app-shell[data-theme="night"] .settings-row .settings-hint,
+.settings-overlay[data-theme="night"] .settings-row .settings-hint {
   color: #a1a1aa;
 }
 
-.app-shell[data-theme="night"] .settings-small-button:hover:not(:disabled) {
+.app-shell[data-theme="night"] .settings-small-button:hover:not(:disabled),
+.settings-overlay[data-theme="night"] .settings-small-button:hover:not(:disabled) {
   background: #444444;
 }
 
-.app-shell[data-theme="night"] .settings-model-chip {
+.app-shell[data-theme="night"] .settings-model-chip,
+.settings-overlay[data-theme="night"] .settings-model-chip {
   background: #3a3a3a;
 }
 
-.app-shell[data-theme="night"] .settings-model-chip.is-active {
+.app-shell[data-theme="night"] .settings-model-chip.is-active,
+.settings-overlay[data-theme="night"] .settings-model-chip.is-active {
   background: #444444;
 }
 
-.app-shell[data-theme="night"] .settings-model-chip button {
+.app-shell[data-theme="night"] .settings-model-chip button,
+.settings-overlay[data-theme="night"] .settings-model-chip button {
   color: #f4f4f5;
 }
 
 .app-shell[data-theme="night"] .settings-model-chip button:last-child,
-.app-shell[data-theme="night"] .settings-empty-state {
+.app-shell[data-theme="night"] .settings-empty-state,
+.settings-overlay[data-theme="night"] .settings-model-chip button:last-child,
+.settings-overlay[data-theme="night"] .settings-empty-state {
   color: #a1a1aa;
 }
 
-.app-shell[data-theme="night"] .settings-model-chip button:hover {
+.app-shell[data-theme="night"] .settings-model-chip button:hover,
+.settings-overlay[data-theme="night"] .settings-model-chip button:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.app-shell[data-theme="night"] .settings-primary-button {
+.app-shell[data-theme="night"] .settings-primary-button,
+.settings-overlay[data-theme="night"] .settings-primary-button {
   border: 0;
   color: #18181b;
   background: #f4f4f5;
 }
 
-.app-shell[data-theme="night"] .model-import-overlay {
+.app-shell[data-theme="night"] .model-import-overlay,
+.settings-overlay[data-theme="night"] .model-import-overlay {
   background: rgba(23, 23, 23, 0.62);
 }
 
-.app-shell[data-theme="night"] .model-import-dialog {
+.app-shell[data-theme="night"] .model-import-dialog,
+.settings-overlay[data-theme="night"] .model-import-dialog {
   background: #2f2f2f;
   box-shadow:
     0 22px 70px rgba(0, 0, 0, 0.42),
@@ -1188,24 +1218,36 @@ button {
 .app-shell[data-theme="night"] .model-import-header h3,
 .app-shell[data-theme="night"] .model-import-icon-button,
 .app-shell[data-theme="night"] .model-import-row,
-.app-shell[data-theme="night"] .model-import-search input {
+.app-shell[data-theme="night"] .model-import-search input,
+.settings-overlay[data-theme="night"] .model-import-header h3,
+.settings-overlay[data-theme="night"] .model-import-icon-button,
+.settings-overlay[data-theme="night"] .model-import-row,
+.settings-overlay[data-theme="night"] .model-import-search input {
   color: #f4f4f5;
 }
 
 .app-shell[data-theme="night"] .model-import-header p,
 .app-shell[data-theme="night"] .model-import-search,
-.app-shell[data-theme="night"] .model-import-empty {
+.app-shell[data-theme="night"] .model-import-empty,
+.settings-overlay[data-theme="night"] .model-import-header p,
+.settings-overlay[data-theme="night"] .model-import-search,
+.settings-overlay[data-theme="night"] .model-import-empty {
   color: #a1a1aa;
 }
 
 .app-shell[data-theme="night"] .model-import-icon-button:hover,
 .app-shell[data-theme="night"] .model-import-search,
 .app-shell[data-theme="night"] .model-import-row:hover,
-.app-shell[data-theme="night"] .model-import-row.is-selected {
+.app-shell[data-theme="night"] .model-import-row.is-selected,
+.settings-overlay[data-theme="night"] .model-import-icon-button:hover,
+.settings-overlay[data-theme="night"] .model-import-search,
+.settings-overlay[data-theme="night"] .model-import-row:hover,
+.settings-overlay[data-theme="night"] .model-import-row.is-selected {
   background: #3a3a3a;
 }
 
-.app-shell[data-theme="night"] .model-import-footer {
+.app-shell[data-theme="night"] .model-import-footer,
+.settings-overlay[data-theme="night"] .model-import-footer {
   box-shadow: inset 0 1px 0 #3d3d3d;
 }
 
@@ -2177,43 +2219,48 @@ button {
   }
 
   .history-sidebar.is-collapsed {
-    position: relative;
-    inset: auto;
-    z-index: 1;
-    width: 48px;
+    position: fixed;
+    top: 22px;
+    left: 22px;
+    z-index: 45;
+    width: 44px;
     min-width: 0;
-    height: auto;
+    height: 44px;
     max-height: none;
-    flex: 0 0 48px;
+    flex: 0 0 0;
     flex-direction: column;
     justify-content: flex-start;
-    padding: 10px 6px;
-    overflow: hidden;
-    background: #f9f9f9;
-    box-shadow: inset -1px 0 0 #ececec;
-    backdrop-filter: none;
-  }
-
-  .history-sidebar.is-collapsed.is-settings-open {
-    z-index: 80;
+    padding: 0;
     overflow: visible;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    pointer-events: none;
   }
 
-  .history-sidebar.is-collapsed .collapsed-sidebar-top,
-  .history-sidebar.is-collapsed .collapsed-sidebar-bottom {
-    width: 100%;
-    flex-direction: column;
-    gap: 8px;
+  .history-sidebar.is-collapsed .collapsed-sidebar-top {
+    width: auto;
+    pointer-events: auto;
   }
 
   .history-sidebar.is-collapsed .collapsed-sidebar-button {
-    width: 36px;
-    height: 36px;
-    flex-basis: 36px;
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+    border-radius: 999px;
+    color: #52525b;
+    background: transparent;
   }
 
-  .history-sidebar.is-collapsed .collapsed-sidebar-spacer {
-    display: block;
+  .history-sidebar.is-collapsed .collapsed-sidebar-button:hover:not(:disabled) {
+    color: #18181b;
+    background: #f4f4f4;
+  }
+
+  .history-sidebar.is-collapsed .collapsed-sidebar-top .collapsed-sidebar-button:not(:first-child),
+  .history-sidebar.is-collapsed .collapsed-sidebar-spacer,
+  .history-sidebar.is-collapsed .collapsed-sidebar-bottom {
+    display: none;
   }
 
   .history-sidebar:not(.is-collapsed)::after {
@@ -2291,14 +2338,16 @@ button {
   }
 
   .settings-overlay {
-    padding: 12px;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
   }
 
   .settings-panel {
-    width: 100%;
-    height: min(680px, calc(100vh - 24px));
+    width: min(760px, calc(100vw - 48px));
+    height: min(720px, calc(100dvh - 96px));
     grid-template-columns: 1fr;
-    border-radius: 14px;
+    border-radius: 22px;
   }
 
   .settings-nav {

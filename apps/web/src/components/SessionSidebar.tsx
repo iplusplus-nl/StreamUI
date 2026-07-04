@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   KeyRound,
+  Menu,
   MoreHorizontal,
   Moon,
   PanelLeftOpen,
@@ -263,9 +265,7 @@ export function SessionSidebar({
 
   return (
     <aside
-      className={`history-sidebar ${isCollapsed ? "is-collapsed" : ""} ${
-        isSettingsOpen ? "is-settings-open" : ""
-      }`}
+      className={`history-sidebar ${isCollapsed ? "is-collapsed" : ""}`}
       aria-label="Session history"
     >
       {isCollapsed ? (
@@ -277,7 +277,11 @@ export function SessionSidebar({
               aria-label="Expand sidebar"
               onClick={() => setIsCollapsed(false)}
             >
-              <PanelLeftOpen size={21} strokeWidth={2} aria-hidden="true" />
+              {isCompactSidebar ? (
+                <Menu size={24} strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <PanelLeftOpen size={21} strokeWidth={2} aria-hidden="true" />
+              )}
             </button>
             <button
               className="collapsed-sidebar-button"
@@ -444,9 +448,12 @@ export function SessionSidebar({
         </>
       )}
 
-      {isSettingsOpen ? (
+      {isSettingsOpen && typeof document !== "undefined"
+        ? createPortal(
+            (
         <div
           className="settings-overlay"
+          data-theme={themeMode}
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
@@ -897,7 +904,10 @@ export function SessionSidebar({
             />
           ) : null}
         </div>
-      ) : null}
+            ),
+            document.body
+          )
+        : null}
     </aside>
   );
 }
