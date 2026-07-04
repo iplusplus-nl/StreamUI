@@ -17,6 +17,8 @@ export type ApiSettings = {
   apiKeySource: ApiKeySource;
   apiKey: string;
   model: string;
+  modelOptions: string[];
+  modelsEndpoint: string;
   reasoningEffort: ReasoningEffort;
   userPreference: string;
 };
@@ -30,6 +32,8 @@ export type ApiProviderPreset = {
 };
 
 export const API_SETTINGS_STORAGE_KEY = "streamui.apiSettings.v1";
+export const MAX_MODEL_OPTIONS = 120;
+export const MAX_MODEL_ID_LENGTH = 180;
 export const MAX_USER_PREFERENCE_LENGTH = 4_000;
 
 export const API_PROVIDER_PRESETS: ApiProviderPreset[] = [
@@ -92,6 +96,8 @@ export const DEFAULT_API_SETTINGS: ApiSettings = {
   apiKeySource: "environment",
   apiKey: "",
   model: DEFAULT_PRESET.model,
+  modelOptions: [DEFAULT_PRESET.model],
+  modelsEndpoint: getDefaultModelsEndpoint(DEFAULT_PRESET.baseUrl),
   reasoningEffort: DEFAULT_PRESET.reasoningEffort,
   userPreference: ""
 };
@@ -106,6 +112,55 @@ function isReasoningEffort(value: unknown): value is ReasoningEffort {
 
 function isApiKeySource(value: unknown): value is ApiKeySource {
   return API_KEY_SOURCE_OPTIONS.some((option) => option.value === value);
+}
+
+export function getDefaultModelsEndpoint(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  return normalized ? `${normalized}/models` : "";
+}
+
+function normalizeModelId(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().slice(0, MAX_MODEL_ID_LENGTH);
+  if (!normalized || /[\r\n]/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+export function normalizeModelOptions(input: unknown): string[] {
+  const seen = new Set<string>();
+  const options: string[] = [];
+  const candidates = Array.isArray(input) ? input : [];
+
+  for (const candidate of candidates) {
+    const modelId = normalizeModelId(candidate);
+    if (!modelId) {
+      continue;
+    }
+
+    const key = modelId.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    options.push(modelId);
+
+    if (options.length >= MAX_MODEL_OPTIONS) {
+      break;
+    }
+  }
+
+  return options;
+}
+
+export function getSelectableModelOptions(settings: ApiSettings): string[] {
+  return normalizeModelOptions([settings.model, ...settings.modelOptions]);
 }
 
 export function getProviderPreset(id: ApiProviderId): ApiProviderPreset {
@@ -127,17 +182,27 @@ export function normalizeApiSettings(input: unknown): ApiSettings {
     typeof object.providerName === "string" && object.providerName.trim()
       ? object.providerName.trim()
       : preset.label;
+  const model =
+    typeof object.model === "string"
+      ? (normalizeModelId(object.model) ?? "")
+      : preset.model;
+  const baseUrl =
+    typeof object.baseUrl === "string" ? object.baseUrl.trim() : preset.baseUrl;
 
   return {
     providerId,
     providerName,
-    baseUrl:
-      typeof object.baseUrl === "string" ? object.baseUrl.trim() : preset.baseUrl,
+    baseUrl,
     apiKeySource: isApiKeySource(object.apiKeySource)
       ? object.apiKeySource
       : DEFAULT_API_SETTINGS.apiKeySource,
     apiKey: typeof object.apiKey === "string" ? object.apiKey.trim() : "",
-    model: typeof object.model === "string" ? object.model.trim() : preset.model,
+    model,
+    modelOptions: normalizeModelOptions(object.modelOptions),
+    modelsEndpoint:
+      typeof object.modelsEndpoint === "string"
+        ? object.modelsEndpoint.trim()
+        : getDefaultModelsEndpoint(baseUrl),
     reasoningEffort: isReasoningEffort(object.reasoningEffort)
       ? object.reasoningEffort
       : preset.reasoningEffort,

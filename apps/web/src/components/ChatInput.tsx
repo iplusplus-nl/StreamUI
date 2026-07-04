@@ -7,6 +7,8 @@ import {
   type Attachment
 } from "@assistant-ui/react";
 import { MAX_IMAGE_ATTACHMENTS } from "../core/assistantAttachments";
+import type { ReasoningEffort } from "../core/apiSettings";
+import { ChatModelSelector } from "./ChatModelSelector";
 
 function useAttachmentPreviewUrl(attachment: Attachment): string | undefined {
   return useMemo(() => {
@@ -51,8 +53,23 @@ function ComposerAttachmentPreview({ attachment }: { attachment: Attachment }) {
   );
 }
 
-export function ChatInput() {
+type ChatInputProps = {
+  model: string;
+  modelOptions: string[];
+  reasoningEffort: ReasoningEffort;
+  onModelChange(model: string): void;
+  onReasoningEffortChange(reasoningEffort: ReasoningEffort): void;
+};
+
+export function ChatInput({
+  model,
+  modelOptions,
+  reasoningEffort,
+  onModelChange,
+  onReasoningEffortChange
+}: ChatInputProps) {
   const attachmentCount = useAuiState((state) => state.composer.attachments.length);
+  const isRunning = useAuiState((state) => state.thread.isRunning);
   const reachedAttachmentLimit = attachmentCount >= MAX_IMAGE_ATTACHMENTS;
 
   return (
@@ -78,21 +95,31 @@ export function ChatInput() {
           submitMode="enter"
         />
         <div className="chat-input-actions">
-          <ComposerPrimitive.AddAttachment
-            className="attach-button"
-            type="button"
-            multiple={false}
-            disabled={reachedAttachmentLimit}
-            aria-label="Attach image"
-            title={
-              reachedAttachmentLimit
-                ? `Up to ${MAX_IMAGE_ATTACHMENTS} images`
-                : "Attach image"
-            }
-          >
-            <span className="plus-icon" aria-hidden="true" />
-          </ComposerPrimitive.AddAttachment>
           <div className="chat-input-action-group">
+            <ComposerPrimitive.AddAttachment
+              className="attach-button"
+              type="button"
+              multiple={false}
+              disabled={reachedAttachmentLimit}
+              aria-label="Attach image"
+              title={
+                reachedAttachmentLimit
+                  ? `Up to ${MAX_IMAGE_ATTACHMENTS} images`
+                  : "Attach image"
+              }
+            >
+              <span className="plus-icon" aria-hidden="true" />
+            </ComposerPrimitive.AddAttachment>
+          </div>
+          <div className="chat-input-action-group">
+            <ChatModelSelector
+              model={model}
+              modelOptions={modelOptions}
+              reasoningEffort={reasoningEffort}
+              disabled={isRunning}
+              onModelChange={onModelChange}
+              onReasoningEffortChange={onReasoningEffortChange}
+            />
             <AuiIf condition={(state) => !state.thread.isRunning}>
               <ComposerPrimitive.Send
                 className="send-button"

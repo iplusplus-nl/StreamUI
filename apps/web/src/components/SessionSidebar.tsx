@@ -4,6 +4,7 @@ import {
   KeyRound,
   MoreHorizontal,
   Moon,
+  PanelLeftOpen,
   Search,
   Settings2,
   SquarePen,
@@ -17,8 +18,10 @@ import {
   API_PROVIDER_PRESETS,
   MAX_USER_PREFERENCE_LENGTH,
   REASONING_EFFORT_OPTIONS,
+  getDefaultModelsEndpoint,
   getProviderPreset,
   getApiKeyEnvironmentName,
+  getSelectableModelOptions,
   hasCompleteApiSettings,
   normalizeApiSettings,
   type ApiKeySource,
@@ -36,6 +39,8 @@ import {
   type SearchProvider,
   type SearchSettings
 } from "../core/searchSettings";
+import { fetchModelCatalog } from "../features/settings/modelCatalog";
+import { ModelImportDialog } from "./ModelImportDialog";
 
 export type ThemeMode = "day" | "night";
 
@@ -45,6 +50,16 @@ export type SessionListItem = {
 };
 
 type SettingsSection = "api" | "preferences" | "search";
+
+const COMPACT_SIDEBAR_QUERY = "(max-width: 720px), (orientation: portrait)";
+
+function getInitialSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return window.matchMedia(COMPACT_SIDEBAR_QUERY).matches;
+}
 
 type SessionSidebarProps = {
   sessions: SessionListItem[];
@@ -75,6 +90,10 @@ export function SessionSidebar({
   onApiSettingsChange,
   onSearchSettingsChange
 }: SessionSidebarProps) {
+  const [isCompactSidebar, setIsCompactSidebar] = useState(
+    getInitialSidebarCollapsed
+  );
+  const [isCollapsed, setIsCollapsed] = useState(getInitialSidebarCollapsed);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("api");
@@ -82,6 +101,12 @@ export function SessionSidebar({
     useState<ApiSettings>(apiSettings);
   const [draftSearchSettings, setDraftSearchSettings] =
     useState<SearchSettings>(searchSettings);
+  const [isModelImportOpen, setIsModelImportOpen] = useState(false);
+  const [isModelImportLoading, setIsModelImportLoading] = useState(false);
+  const [modelImportError, setModelImportError] = useState<string | null>(null);
+  const [modelImportQuery, setModelImportQuery] = useState("");
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [selectedFetchedModels, setSelectedFetchedModels] = useState<string[]>([]);
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
   const apiSettingsComplete = hasCompleteApiSettings(apiSettings);
   const searchAllowsManualKey = searchProviderNeedsApiKey(
@@ -89,6 +114,24 @@ export function SessionSidebar({
   );
   const searchUsesEnvironmentKeys =
     draftSearchSettings.provider === "auto" || searchAllowsManualKey;
+  const draftSelectableModels = getSelectableModelOptions(draftApiSettings);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(COMPACT_SIDEBAR_QUERY);
+    const updateCompactSidebarState = () => {
+      setIsCompactSidebar(mediaQuery.matches);
+      if (mediaQuery.matches) {
+        setIsCollapsed(true);
+      }
+    };
+
+    updateCompactSidebarState();
+    mediaQuery.addEventListener("change", updateCompactSidebarState);
+
+    return () => {
+      mediaQuery.removeEventListener("change", updateCompactSidebarState);
+    };
+  }, []);
 
   useEffect(() => {
     if (isSettingsOpen) {
@@ -115,6 +158,23 @@ export function SessionSidebar({
     );
   };
 
+  const updateApiBaseUrl = (baseUrl: string) => {
+    setDraftApiSettings((current) => {
+      const currentDefaultEndpoint = getDefaultModelsEndpoint(current.baseUrl);
+      const shouldFollowBaseUrl =
+        !current.modelsEndpoint ||
+        current.modelsEndpoint === currentDefaultEndpoint;
+
+      return normalizeApiSettings({
+        ...current,
+        baseUrl,
+        modelsEndpoint: shouldFollowBaseUrl
+          ? getDefaultModelsEndpoint(baseUrl)
+          : current.modelsEndpoint
+      });
+    });
+  };
+
   const handleProviderChange = (providerId: ApiProviderId) => {
     const preset = getProviderPreset(providerId);
     setDraftApiSettings((current) =>
@@ -124,9 +184,75 @@ export function SessionSidebar({
         providerName: preset.label,
         baseUrl: preset.baseUrl,
         model: preset.model,
+        modelOptions: [preset.model],
+        modelsEndpoint: getDefaultModelsEndpoint(preset.baseUrl),
         reasoningEffort: preset.reasoningEffort
       })
     );
+  };
+
+  const handleFetchModels = async () => {
+    setIsModelImportOpen(true);
+    setIsModelImportLoading(true);
+    setModelImportError(null);
+    setModelImportQuery("");
+    setSelectedFetchedModels([]);
+
+    try {
+      setFetchedModels(await fetchModelCatalog(draftApiSettings));
+    } catch (error) {
+      setFetchedModels([]);
+      setModelImportError(
+        error instanceof Error ? error.message : "Unable to fetch model list."
+      );
+    } finally {
+      setIsModelImportLoading(false);
+    }
+  };
+
+  const toggleFetchedModel = (modelId: string) => {
+    setSelectedFetchedModels((current) => {
+      const normalizedModelId = modelId.toLowerCase();
+      const exists = current.some(
+        (selectedModel) => selectedModel.toLowerCase() === normalizedModelId
+      );
+
+      return exists
+        ? current.filter(
+            (selectedModel) => selectedModel.toLowerCase() !== normalizedModelId
+          )
+        : [...current, modelId];
+    });
+  };
+
+  const handleAddFetchedModels = () => {
+    if (!selectedFetchedModels.length) {
+      return;
+    }
+
+    setDraftApiSettings((current) =>
+      normalizeApiSettings({
+        ...current,
+        model: current.model || selectedFetchedModels[0],
+        modelOptions: [...current.modelOptions, ...selectedFetchedModels]
+      })
+    );
+    setIsModelImportOpen(false);
+  };
+
+  const handleRemoveModelOption = (modelId: string) => {
+    setDraftApiSettings((current) => {
+      const modelOptions = current.modelOptions.filter(
+        (modelOption) => modelOption !== modelId
+      );
+      const model = current.model === modelId ? (modelOptions[0] ?? "") : current.model;
+
+      return normalizeApiSettings({
+        ...current,
+        model,
+        modelOptions
+      });
+    });
   };
 
   const handleSaveSettings = () => {
@@ -136,113 +262,187 @@ export function SessionSidebar({
   };
 
   return (
-    <aside className="history-sidebar" aria-label="Session history">
-      <div className="sidebar-header">
-        <button
-          className="new-session-button"
-          type="button"
-          disabled={isSending}
-          onClick={onNewSession}
-        >
-          <SquarePen size={17} strokeWidth={2.1} aria-hidden="true" />
-          <span>New Session</span>
-        </button>
-      </div>
-
-      <nav className="session-list" aria-label="Saved sessions">
-        {sessions.map((session) => (
-          <div
-            key={session.id}
-            className={`session-list-item ${
-              session.id === activeSessionId ? "is-active" : ""
-            } ${openSessionMenuId === session.id ? "is-menu-open" : ""}`}
-          >
+    <aside
+      className={`history-sidebar ${isCollapsed ? "is-collapsed" : ""} ${
+        isSettingsOpen ? "is-settings-open" : ""
+      }`}
+      aria-label="Session history"
+    >
+      {isCollapsed ? (
+        <>
+          <div className="collapsed-sidebar-top">
             <button
-              className="session-select-button"
+              className="collapsed-sidebar-button"
               type="button"
-              disabled={isSending && session.id !== activeSessionId}
-              aria-current={session.id === activeSessionId ? "page" : undefined}
-              onClick={() => {
-                setOpenSessionMenuId(null);
-                onSelectSession(session.id);
-              }}
+              aria-label="Expand sidebar"
+              onClick={() => setIsCollapsed(false)}
             >
-              <span className="session-title">{session.title}</span>
+              <PanelLeftOpen size={21} strokeWidth={2} aria-hidden="true" />
             </button>
             <button
-              className="session-actions-button"
+              className="collapsed-sidebar-button"
               type="button"
               disabled={isSending}
-              aria-label={`Session actions: ${session.title}`}
-              aria-expanded={openSessionMenuId === session.id}
-              onClick={() =>
-                setOpenSessionMenuId((current) =>
-                  current === session.id ? null : session.id
-                )
-              }
+              aria-label="New session"
+              onClick={() => {
+                if (isCompactSidebar) {
+                  setIsCollapsed(true);
+                }
+                onNewSession();
+              }}
             >
-              <MoreHorizontal size={17} strokeWidth={2.1} aria-hidden="true" />
+              <SquarePen size={21} strokeWidth={2} aria-hidden="true" />
             </button>
-            {openSessionMenuId === session.id ? (
-              <div className="session-menu-popover" role="menu">
+          </div>
+          <div className="collapsed-sidebar-spacer" />
+          <div className="collapsed-sidebar-bottom">
+            <button
+              className={`collapsed-sidebar-button api-settings-button ${
+                apiSettingsComplete ? "is-configured" : "needs-setup"
+              }`}
+              type="button"
+              aria-label="API settings"
+              aria-pressed={isSettingsOpen}
+              onClick={() => setIsSettingsOpen(true)}
+            >
+              <Settings2 size={21} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="sidebar-header">
+            <div className="sidebar-brand-row">
+              <span className="sidebar-brand">StreamUI</span>
+              <button
+                className="sidebar-collapse-button"
+                type="button"
+                aria-label="Collapse sidebar"
+              onClick={() => {
+                setOpenSessionMenuId(null);
+                setIsCollapsed(true);
+              }}
+            >
+                <X size={20} strokeWidth={2} aria-hidden="true" />
+              </button>
+            </div>
+            <button
+              className="new-session-button"
+              type="button"
+              disabled={isSending}
+              onClick={() => {
+                if (isCompactSidebar) {
+                  setIsCollapsed(true);
+                }
+                onNewSession();
+              }}
+            >
+              <SquarePen size={17} strokeWidth={2.1} aria-hidden="true" />
+              <span>New Session</span>
+            </button>
+          </div>
+
+          <nav className="session-list" aria-label="Saved sessions">
+            {sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`session-list-item ${
+                  session.id === activeSessionId ? "is-active" : ""
+                } ${openSessionMenuId === session.id ? "is-menu-open" : ""}`}
+              >
                 <button
-                  className="session-menu-item is-danger"
+                  className="session-select-button"
                   type="button"
-                  role="menuitem"
-                  disabled={isSending}
+                  disabled={isSending && session.id !== activeSessionId}
+                  aria-current={
+                    session.id === activeSessionId ? "page" : undefined
+                  }
                   onClick={() => {
                     setOpenSessionMenuId(null);
-                    onDeleteSession(session.id);
+                    if (isCompactSidebar) {
+                      setIsCollapsed(true);
+                    }
+                    onSelectSession(session.id);
                   }}
                 >
-                  <Trash2 size={16} strokeWidth={2.1} aria-hidden="true" />
-                  <span>Delete</span>
+                  <span className="session-title">{session.title}</span>
                 </button>
+                <button
+                  className="session-actions-button"
+                  type="button"
+                  disabled={isSending}
+                  aria-label={`Session actions: ${session.title}`}
+                  aria-expanded={openSessionMenuId === session.id}
+                  onClick={() =>
+                    setOpenSessionMenuId((current) =>
+                      current === session.id ? null : session.id
+                    )
+                  }
+                >
+                  <MoreHorizontal size={17} strokeWidth={2.1} aria-hidden="true" />
+                </button>
+                {openSessionMenuId === session.id ? (
+                  <div className="session-menu-popover" role="menu">
+                    <button
+                      className="session-menu-item is-danger"
+                      type="button"
+                      role="menuitem"
+                      disabled={isSending}
+                      onClick={() => {
+                        setOpenSessionMenuId(null);
+                        onDeleteSession(session.id);
+                      }}
+                    >
+                      <Trash2 size={16} strokeWidth={2.1} aria-hidden="true" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-        ))}
-      </nav>
+            ))}
+          </nav>
 
-      <div className="sidebar-footer">
-        <div
-          className="theme-toggle"
-          data-mode={themeMode}
-          role="group"
-          aria-label="Theme"
-        >
-          <span className="theme-toggle-indicator" aria-hidden="true" />
-          <button
-            className="theme-toggle-button"
-            type="button"
-            aria-label="Use day theme"
-            aria-pressed={themeMode === "day"}
-            onClick={() => onThemeModeChange("day")}
-          >
-            <Sun size={15} strokeWidth={2.1} aria-hidden="true" />
-          </button>
-          <button
-            className="theme-toggle-button"
-            type="button"
-            aria-label="Use night theme"
-            aria-pressed={themeMode === "night"}
-            onClick={() => onThemeModeChange("night")}
-          >
-            <Moon size={15} strokeWidth={2.1} aria-hidden="true" />
-          </button>
-        </div>
-        <button
-          className={`sidebar-icon-button api-settings-button ${
-            apiSettingsComplete ? "is-configured" : "needs-setup"
-          }`}
-          type="button"
-          aria-label="API settings"
-          aria-pressed={isSettingsOpen}
-          onClick={() => setIsSettingsOpen(true)}
-        >
-          <Settings2 size={17} strokeWidth={2.1} aria-hidden="true" />
-        </button>
-      </div>
+          <div className="sidebar-footer">
+            <div
+              className="theme-toggle"
+              data-mode={themeMode}
+              role="group"
+              aria-label="Theme"
+            >
+              <span className="theme-toggle-indicator" aria-hidden="true" />
+              <button
+                className="theme-toggle-button"
+                type="button"
+                aria-label="Use day theme"
+                aria-pressed={themeMode === "day"}
+                onClick={() => onThemeModeChange("day")}
+              >
+                <Sun size={15} strokeWidth={2.1} aria-hidden="true" />
+              </button>
+              <button
+                className="theme-toggle-button"
+                type="button"
+                aria-label="Use night theme"
+                aria-pressed={themeMode === "night"}
+                onClick={() => onThemeModeChange("night")}
+              >
+                <Moon size={15} strokeWidth={2.1} aria-hidden="true" />
+              </button>
+            </div>
+            <button
+              className={`sidebar-icon-button api-settings-button ${
+                apiSettingsComplete ? "is-configured" : "needs-setup"
+              }`}
+              type="button"
+              aria-label="API settings"
+              aria-pressed={isSettingsOpen}
+              onClick={() => setIsSettingsOpen(true)}
+            >
+              <Settings2 size={17} strokeWidth={2.1} aria-hidden="true" />
+            </button>
+          </div>
+        </>
+      )}
 
       {isSettingsOpen ? (
         <div
@@ -287,7 +487,7 @@ export function SessionSidebar({
                 onClick={() => setSettingsSection("preferences")}
               >
                 <UserRound size={18} strokeWidth={2.1} aria-hidden="true" />
-                <span>用户偏好</span>
+                <span>User Preferences</span>
               </button>
               <button
                 className={`settings-nav-item ${
@@ -307,7 +507,7 @@ export function SessionSidebar({
                   {settingsSection === "api"
                     ? "API"
                     : settingsSection === "preferences"
-                      ? "用户偏好"
+                      ? "User Preferences"
                       : "Web Search"}
                 </h2>
               </header>
@@ -344,9 +544,7 @@ export function SessionSidebar({
                         autoComplete="off"
                         spellCheck={false}
                         placeholder="https://api.example.com/v1"
-                        onChange={(event) =>
-                          updateApiDraft({ baseUrl: event.target.value })
-                        }
+                        onChange={(event) => updateApiBaseUrl(event.target.value)}
                       />
                     </label>
 
@@ -395,17 +593,88 @@ export function SessionSidebar({
                     </label>
 
                     <label className="settings-row">
-                      <span>Model</span>
-                      <input
-                        value={draftApiSettings.model}
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="model-id"
-                        onChange={(event) =>
-                          updateApiDraft({ model: event.target.value })
-                        }
-                      />
+                      <span>Default Model</span>
+                      <div className="settings-control-stack">
+                        <select
+                          value={draftApiSettings.model}
+                          onChange={(event) =>
+                            updateApiDraft({ model: event.target.value })
+                          }
+                        >
+                          {draftSelectableModels.length ? (
+                            draftSelectableModels.map((model) => (
+                              <option key={model} value={model}>
+                                {model}
+                              </option>
+                            ))
+                          ) : (
+                            <option value="">No saved models</option>
+                          )}
+                        </select>
+                      </div>
                     </label>
+
+                    <label className="settings-row">
+                      <span>Models Endpoint</span>
+                      <div className="settings-inline-control">
+                        <input
+                          value={draftApiSettings.modelsEndpoint}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder={
+                            getDefaultModelsEndpoint(draftApiSettings.baseUrl) ||
+                            "https://api.example.com/v1/models"
+                          }
+                          onChange={(event) =>
+                            updateApiDraft({
+                              modelsEndpoint: event.target.value
+                            })
+                          }
+                        />
+                        <button
+                          className="settings-small-button"
+                          type="button"
+                          disabled={isModelImportLoading}
+                          onClick={handleFetchModels}
+                        >
+                          Fetch
+                        </button>
+                      </div>
+                    </label>
+
+                    <div className="settings-row settings-row-textarea">
+                      <span>Model List</span>
+                      <div className="settings-model-list">
+                        {draftApiSettings.modelOptions.length ? (
+                          draftApiSettings.modelOptions.map((model) => (
+                            <span
+                              key={model}
+                              className={`settings-model-chip ${
+                                model === draftApiSettings.model ? "is-active" : ""
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => updateApiDraft({ model })}
+                              >
+                                {model}
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`Remove ${model}`}
+                                onClick={() => handleRemoveModelOption(model)}
+                              >
+                                <X size={13} strokeWidth={2.1} aria-hidden="true" />
+                              </button>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="settings-empty-state">
+                            No saved models
+                          </span>
+                        )}
+                      </div>
+                    </div>
 
                     <label className="settings-row">
                       <span>Reasoning</span>
@@ -424,16 +693,15 @@ export function SessionSidebar({
                         ))}
                       </select>
                     </label>
-
                   </>
                 ) : settingsSection === "preferences" ? (
                   <label className="settings-row settings-row-textarea">
-                    <span>用户偏好</span>
+                    <span>User Preferences</span>
                     <textarea
                       value={draftApiSettings.userPreference}
                       maxLength={MAX_USER_PREFERENCE_LENGTH}
                       rows={4}
-                      placeholder="希望模型用什么语气或风格回复"
+                      placeholder="Preferred tone or response style"
                       spellCheck={false}
                       onChange={(event) =>
                         updateApiDraft({ userPreference: event.target.value })
@@ -615,6 +883,19 @@ export function SessionSidebar({
               </form>
             </div>
           </section>
+          {isModelImportOpen ? (
+            <ModelImportDialog
+              models={fetchedModels}
+              selectedModels={selectedFetchedModels}
+              query={modelImportQuery}
+              isLoading={isModelImportLoading}
+              error={modelImportError}
+              onQueryChange={setModelImportQuery}
+              onToggleModel={toggleFetchedModel}
+              onClose={() => setIsModelImportOpen(false)}
+              onAddSelected={handleAddFetchedModels}
+            />
+          ) : null}
         </div>
       ) : null}
     </aside>

@@ -2,6 +2,10 @@ import type { Request, Response } from "express";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { streamText, type ModelMessage, type TextStreamPart } from "ai";
 import { buildAgentLoopPrompt, runStreamUiAgentLoop } from "./agentLoop.js";
+import {
+  readRuntimeApiCredentials,
+  type ApiKeySource
+} from "./runtimeApiSettings.js";
 import { SYSTEM_PROMPT } from "./systemPrompt.js";
 
 const MAX_IMAGES_PER_MESSAGE = 4;
@@ -16,7 +20,6 @@ type OpenRouterReasoningEffort =
   | "high"
   | "xhigh"
   | "none";
-type ApiKeySource = "environment" | "manual";
 
 type RuntimeApiSettings = {
   providerName: string;
@@ -327,94 +330,23 @@ function normalizeReasoningEffort(value: unknown): OpenRouterReasoningEffort {
   );
 }
 
-function normalizeBaseUrl(value: unknown): string {
-  const input = typeof value === "string" ? value.trim() : "";
-
-  if (!input) {
-    return "";
-  }
-
-  let url: URL;
-  try {
-    url = new URL(input);
-  } catch {
-    throw new Error("API settings invalid: Base URL must be a valid URL.");
-  }
-
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("API settings invalid: Base URL must use http or https.");
-  }
-
-  return input.replace(/\/+$/, "");
-}
-
-function normalizeApiKeySource(value: unknown): ApiKeySource {
-  if (value === "environment" || value === "manual") {
-    return value;
-  }
-
-  return "environment";
-}
-
-function getApiKeyEnvironmentName(
-  providerName: string,
-  baseUrl: string,
-  providerId: unknown
-): string {
-  const normalizedProviderId =
-    typeof providerId === "string" ? providerId.toLowerCase() : "";
-  const normalizedProviderName = providerName.toLowerCase();
-  const normalizedBaseUrl = baseUrl.toLowerCase();
-
-  if (
-    normalizedProviderId === "openrouter" ||
-    normalizedProviderName.includes("openrouter") ||
-    normalizedBaseUrl.includes("openrouter.ai")
-  ) {
-    return "OPENROUTER_API_KEY";
-  }
-  if (
-    normalizedProviderId === "openai" ||
-    normalizedProviderName.includes("openai") ||
-    normalizedBaseUrl.includes("api.openai.com")
-  ) {
-    return "OPENAI_API_KEY";
-  }
-
-  return "STREAMUI_API_KEY";
-}
-
 function readRuntimeApiSettings(input: unknown): RuntimeApiSettings {
   const object =
     typeof input === "object" && input !== null
       ? (input as Record<string, unknown>)
       : {};
-  const providerName =
-    typeof object.providerName === "string" && object.providerName.trim()
-      ? object.providerName.trim().slice(0, 80)
-      : "custom";
-  const baseUrl = normalizeBaseUrl(object.baseUrl);
-  const apiKeySource = normalizeApiKeySource(object.apiKeySource);
-  const apiKeyEnvironmentName = getApiKeyEnvironmentName(
-    providerName,
-    baseUrl,
-    object.providerId
-  );
-  const apiKey =
-    apiKeySource === "environment"
-      ? process.env[apiKeyEnvironmentName]?.trim() ?? ""
-      : typeof object.apiKey === "string"
-        ? object.apiKey.trim()
-        : "";
+  const credentials = readRuntimeApiCredentials(input);
   const model = typeof object.model === "string" ? object.model.trim() : "";
   const missing: string[] = [];
 
-  if (!baseUrl) {
+  if (!credentials.baseUrl) {
     missing.push("Base URL");
   }
-  if (!apiKey) {
+  if (!credentials.apiKey) {
     missing.push(
-      apiKeySource === "environment" ? apiKeyEnvironmentName : "API key"
+      credentials.apiKeySource === "environment"
+        ? credentials.apiKeyEnvironmentName
+        : "API key"
     );
   }
   if (!model) {
@@ -426,11 +358,7 @@ function readRuntimeApiSettings(input: unknown): RuntimeApiSettings {
   }
 
   return {
-    providerName,
-    baseUrl,
-    apiKeySource,
-    apiKeyEnvironmentName,
-    apiKey,
+    ...credentials,
     model,
     reasoningEffort: normalizeReasoningEffort(object.reasoningEffort),
     userPreference: normalizeUserPreference(object.userPreference)

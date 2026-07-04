@@ -3,6 +3,7 @@ import express from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { handleModelsRequest } from "./models.js";
 import { handleOpenRouterChat } from "./openrouter.js";
 import { handleRetrievalRequest } from "./retrieval.js";
 import { handleGetSessions, handleSaveSessions } from "./sessions.js";
@@ -29,6 +30,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.post("/api/chat", handleOpenRouterChat);
+app.post("/api/models", handleModelsRequest);
 app.post("/api/retrieve", handleRetrievalRequest);
 app.get("/api/sessions", handleGetSessions);
 app.put("/api/sessions", handleSaveSessions);

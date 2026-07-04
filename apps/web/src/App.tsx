@@ -24,10 +24,12 @@ import {
 } from "./core/assistantAttachments";
 import {
   loadApiSettings,
+  getSelectableModelOptions,
   normalizeApiSettings,
   saveApiSettings,
   serializeApiSettings,
-  type ApiSettings
+  type ApiSettings,
+  type ReasoningEffort
 } from "./core/apiSettings";
 import {
   loadSearchSettings,
@@ -218,7 +220,12 @@ type StreamThreadProps = {
   activeSessionId: string;
   messages: ClientMessage[];
   themeMode: ThemeMode;
+  model: string;
+  modelOptions: string[];
+  reasoningEffort: ReasoningEffort;
   onRuntimeError(id: string, error: RenderError): void;
+  onModelChange(model: string): void;
+  onReasoningEffortChange(reasoningEffort: ReasoningEffort): void;
 };
 
 const SESSION_OUTPUT_SCROLL_SETTLE_MS = 900;
@@ -252,7 +259,12 @@ function StreamThread({
   activeSessionId,
   messages,
   themeMode,
-  onRuntimeError
+  model,
+  modelOptions,
+  reasoningEffort,
+  onRuntimeError,
+  onModelChange,
+  onReasoningEffortChange
 }: StreamThreadProps) {
   const isNewChat = useAuiState((state) => state.thread.messages.length === 0);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -357,7 +369,13 @@ function StreamThread({
         <ThreadPrimitive.ViewportFooter
           className={`composer-footer ${isNewChat ? "is-new" : "has-messages"}`}
         >
-          <ChatInput />
+          <ChatInput
+            model={model}
+            modelOptions={modelOptions}
+            reasoningEffort={reasoningEffort}
+            onModelChange={onModelChange}
+            onReasoningEffortChange={onReasoningEffortChange}
+          />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -378,6 +396,10 @@ export default function App() {
       (session) => session.id === sessionState.activeSessionId
     ) ?? sessionState.sessions[0];
   const messages = activeSession?.messages ?? initialMessages;
+  const selectableModels = useMemo(
+    () => getSelectableModelOptions(apiSettings),
+    [apiSettings]
+  );
   const messagesRef = useRef(messages);
   const activeSessionIdRef = useRef(sessionState.activeSessionId);
   const isSendingRef = useRef(isSending);
@@ -662,6 +684,27 @@ export default function App() {
     setSearchSettings(normalizeSearchSettings(next));
   }, []);
 
+  const handleModelChange = useCallback((model: string) => {
+    setApiSettings((current) =>
+      normalizeApiSettings({
+        ...current,
+        model
+      })
+    );
+  }, []);
+
+  const handleReasoningEffortChange = useCallback(
+    (reasoningEffort: ReasoningEffort) => {
+      setApiSettings((current) =>
+        normalizeApiSettings({
+          ...current,
+          reasoningEffort
+        })
+      );
+    },
+    []
+  );
+
   const sendStreamUiRequest = useCallback(
     async (text: string, attachments: ImageAttachment[] = []) => {
       const trimmed = text.trim();
@@ -891,7 +934,12 @@ export default function App() {
           activeSessionId={sessionState.activeSessionId}
           messages={messages}
           themeMode={themeMode}
+          model={apiSettings.model}
+          modelOptions={selectableModels}
+          reasoningEffort={apiSettings.reasoningEffort}
           onRuntimeError={handleRuntimeError}
+          onModelChange={handleModelChange}
+          onReasoningEffortChange={handleReasoningEffortChange}
         />
       </ChatShell>
     </AssistantRuntimeProvider>
