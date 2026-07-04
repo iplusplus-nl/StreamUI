@@ -65,6 +65,8 @@ describe("sessionModel", () => {
     assert.equal(message?.status, "complete");
     assert.equal(message?.hasStreamUi, true);
     assert.match(message?.snapshot?.iframeDocument ?? "", /<p>Saved<\/p>/);
+    assert.equal(message?.artifactContext?.textSummary, "Saved");
+    assert.match(message?.artifactContext?.id ?? "", /^artifact-[a-z0-9]+$/);
   });
 
   it("preserves persisted runtime errors while rebuilding snapshots", () => {
@@ -163,6 +165,45 @@ describe("sessionModel", () => {
     const serialized = serializeSessions(sessions);
 
     assert.equal(serialized[0].messages[0].status, "complete");
+    assert.equal("snapshot" in serialized[0].messages[0], false);
+  });
+
+  it("preserves persisted artifact context while serializing sessions", () => {
+    const sessions: ChatSession[] = [
+      {
+        id: "s1",
+        title: "Session",
+        createdAt: 1,
+        updatedAt: 2,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            artifactContext: {
+              id: "artifact-fixed",
+              sourceHash: "fixed",
+              sourceChars: 12,
+              textSummary: "Text",
+              styleSummary: "Style",
+              structureSummary: "Structure",
+              editableSummary: "Editable"
+            },
+            snapshot: {
+              raw: "",
+              completedHtml: "",
+              iframeDocument: "",
+              errors: [],
+              status: "complete"
+            }
+          }
+        ]
+      }
+    ];
+
+    const serialized = serializeSessions(sessions);
+
+    assert.equal(serialized[0].messages[0].artifactContext?.id, "artifact-fixed");
     assert.equal("snapshot" in serialized[0].messages[0], false);
   });
 });

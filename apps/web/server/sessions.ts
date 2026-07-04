@@ -16,6 +16,7 @@ type StoredMessage = {
   rawStream?: string;
   hasStreamUi?: boolean;
   streamUiComplete?: boolean;
+  artifactContext?: unknown;
   runtimeErrors?: unknown[];
   repairOfMessageId?: string;
   repairAttempt?: number;
@@ -110,6 +111,10 @@ function normalizeMessage(input: unknown): StoredMessage | null {
     rawStream: stringValue(message.rawStream) || undefined,
     hasStreamUi: Boolean(message.hasStreamUi),
     streamUiComplete: Boolean(message.streamUiComplete),
+    artifactContext:
+      message.artifactContext && typeof message.artifactContext === "object"
+        ? message.artifactContext
+        : undefined,
     runtimeErrors: Array.isArray(message.runtimeErrors)
       ? message.runtimeErrors
       : undefined,

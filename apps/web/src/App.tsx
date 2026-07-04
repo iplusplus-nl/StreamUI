@@ -43,6 +43,7 @@ import {
   loadRuntimeSettings,
   type RuntimeSettingsSummary
 } from "./core/runtimeSettings";
+import { buildArtifactContext } from "./core/artifactContext";
 import {
   createEmptySession,
   createId,
@@ -916,6 +917,10 @@ export default function App() {
         }
 
         const snapshot = parts.hasStreamUi ? renderer.getSnapshot() : undefined;
+        const artifactContext =
+          parts.hasStreamUi && parts.streamUiComplete && parts.streamui.trim()
+            ? buildArtifactContext(raw)
+            : undefined;
         const sessionTitle =
           parts.sessionTitleComplete && parts.sessionTitle.trim()
             ? parts.sessionTitle
@@ -925,6 +930,7 @@ export default function App() {
           content: parts.chat || (!parts.hasStreamUi ? parts.fallbackText : ""),
           rawStream: raw,
           ...(snapshot ? { snapshot } : {}),
+          ...(artifactContext ? { artifactContext } : {}),
           ...(sessionTitle ? { sessionTitle } : {}),
           hasStreamUi: parts.hasStreamUi,
           streamUiComplete: parts.streamUiComplete
@@ -998,6 +1004,10 @@ export default function App() {
 
         const finalParts = extractStreamUiParts(raw);
         let finalSnapshot: RenderSnapshot | undefined;
+        const artifactContext =
+          finalParts.hasStreamUi && finalParts.streamui.trim()
+            ? buildArtifactContext(raw)
+            : undefined;
 
         if (finalParts.hasStreamUi && finalParts.streamui.trim()) {
           renderer.replace(finalParts.streamui);
@@ -1013,6 +1023,7 @@ export default function App() {
             : {}),
           rawStream: raw,
           ...(finalSnapshot ? { snapshot: finalSnapshot } : {}),
+          ...(artifactContext ? { artifactContext } : {}),
           hasStreamUi: finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,
           streamUiComplete: finalParts.streamUiComplete,
           status: "complete"

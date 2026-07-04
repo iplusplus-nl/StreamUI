@@ -1,4 +1,8 @@
 import type { ImageAttachment } from "../../core/imageAttachments";
+import {
+  buildArtifactContext,
+  type ArtifactContext
+} from "../../core/artifactContext";
 import { extractStreamUiParts } from "../../runtime/streamui/protocol";
 import { createStreamingRenderer } from "../../runtime/streamui/streamingRenderer";
 import type { RenderError, RenderSnapshot } from "../../runtime/streamui/types";
@@ -13,6 +17,7 @@ export type ClientMessage = {
   rawStream?: string;
   hasStreamUi?: boolean;
   streamUiComplete?: boolean;
+  artifactContext?: ArtifactContext;
   snapshot?: RenderSnapshot;
   runtimeErrors?: RenderError[];
   repairOfMessageId?: string;
@@ -193,6 +198,43 @@ function normalizeRenderErrors(input: unknown): RenderError[] | undefined {
   return errors.length ? errors : undefined;
 }
 
+function normalizeArtifactContext(input: unknown): ArtifactContext | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+
+  const context = input as Partial<ArtifactContext>;
+  if (
+    typeof context.id !== "string" ||
+    !context.id.trim() ||
+    typeof context.sourceHash !== "string" ||
+    !context.sourceHash.trim()
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: context.id,
+    sourceHash: context.sourceHash,
+    sourceChars:
+      typeof context.sourceChars === "number" && Number.isFinite(context.sourceChars)
+        ? Math.max(0, Math.round(context.sourceChars))
+        : 0,
+    textSummary:
+      typeof context.textSummary === "string" ? context.textSummary : "",
+    styleSummary:
+      typeof context.styleSummary === "string" ? context.styleSummary : "",
+    structureSummary:
+      typeof context.structureSummary === "string"
+        ? context.structureSummary
+        : "",
+    editableSummary:
+      typeof context.editableSummary === "string"
+        ? context.editableSummary
+        : ""
+  };
+}
+
 function mergeSnapshotRuntimeErrors(
   snapshot: RenderSnapshot,
   runtimeErrors: RenderError[] | undefined
@@ -245,6 +287,7 @@ export function rebuildAssistantSnapshot(message: ClientMessage): ClientMessage 
     snapshot,
     hasStreamUi: true,
     streamUiComplete: parts.streamUiComplete,
+    artifactContext: message.artifactContext ?? buildArtifactContext(message.rawStream),
     status: message.status === "streaming" ? "complete" : message.status
   };
 }
@@ -273,6 +316,7 @@ export function normalizeStoredMessage(message: unknown): ClientMessage | null {
     rawStream: typeof input.rawStream === "string" ? input.rawStream : undefined,
     hasStreamUi: Boolean(input.hasStreamUi),
     streamUiComplete: Boolean(input.streamUiComplete),
+    artifactContext: normalizeArtifactContext(input.artifactContext),
     runtimeErrors: normalizeRenderErrors(input.runtimeErrors),
     repairOfMessageId:
       typeof input.repairOfMessageId === "string"
