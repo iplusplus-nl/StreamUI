@@ -1824,7 +1824,7 @@ button {
   right: 0;
   top: calc(100% + 6px);
   display: grid;
-  width: 132px;
+  width: 184px;
   gap: 2px;
   padding: 5px;
   border: 1px solid #e4e4e7;
@@ -2714,6 +2714,6 @@ button {
   }
 
   .artifact-export-popover {
-    width: min(132px, calc(100vw - 48px));
+    width: min(184px, calc(100vw - 48px));
   }
 }

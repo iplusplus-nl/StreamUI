@@ -1,5 +1,6 @@
 import { buildIframeDocument } from "../runtime/streamui/sandboxDocument";
 import type { PageThemeMode, RenderSnapshot } from "../runtime/streamui/types";
+import { htmlToTranscriptText } from "./artifactContext";
 
 const MAX_CANVAS_DIMENSION = 16_384;
 const MAX_CANVAS_PIXELS = 32_000_000;
@@ -8,6 +9,7 @@ const EXPORT_PREPARE_TIMEOUT_MS = 8_000;
 const EXPORT_ASSET_SETTLE_TIMEOUT_MS = 4_000;
 const EXPORT_RASTERIZE_TIMEOUT_MS = 8_000;
 const SVG_MIME_TYPE = "image/svg+xml;charset=utf-8";
+const HTML_MIME_TYPE = "text/html;charset=utf-8";
 const PLAIN_TEXT_MIME_TYPE = "text/plain;charset=utf-8";
 
 type SnapshotDocumentOptions = {
@@ -21,7 +23,19 @@ type PreparedSnapshotDocument = {
   width: number;
 };
 
-type ArtifactExtension = "png" | "svg";
+type ArtifactExtension = "png" | "svg" | "html" | "txt";
+
+type PngExportResult = {
+  blob: Blob;
+  height: number;
+  scale: number;
+  width: number;
+};
+
+export type ArtifactExportDiagnosticsOptions = {
+  exportWidth?: number;
+  themeMode?: PageThemeMode;
+};
 
 function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, timeoutMs));
@@ -129,7 +143,10 @@ function measureDocument(document: Document) {
 }
 
 export function getArtifactExportScale(width: number, height: number) {
-  const deviceScale = Math.min(window.devicePixelRatio || 1, 2);
+  const deviceScale = Math.min(
+    typeof window === "undefined" ? 1 : window.devicePixelRatio || 1,
+    2
+  );
   const dimensionScale = Math.min(
     MAX_CANVAS_DIMENSION / width,
     MAX_CANVAS_DIMENSION / height
@@ -144,6 +161,24 @@ export function getSnapshotSourceCode(snapshot: RenderSnapshot): string {
     snapshot.raw || snapshot.completedHtml || snapshot.iframeDocument || "";
 
   return source.endsWith("\n") ? source : `${source}\n`;
+}
+
+export function getSnapshotVisibleText(snapshot: RenderSnapshot): string {
+  return htmlToTranscriptText(
+    snapshot.completedHtml || snapshot.iframeDocument || snapshot.raw
+  );
+}
+
+export function getSnapshotHtmlDocument(
+  snapshot: RenderSnapshot,
+  themeMode?: PageThemeMode
+): string {
+  const html = snapshot.completedHtml || snapshot.raw;
+  const document = html
+    ? buildIframeDocument(html, themeMode ?? "night")
+    : snapshot.iframeDocument;
+
+  return document.endsWith("\n") ? document : `${document}\n`;
 }
 
 export function createArtifactFilename(
@@ -168,6 +203,48 @@ export function normalizeSvgMarkup(markup: string): string {
   }
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n${trimmed}\n`;
+}
+
+export function getSnapshotDiagnostics(
+  snapshot: RenderSnapshot,
+  options: ArtifactExportDiagnosticsOptions = {}
+): string {
+  const visibleText = getSnapshotVisibleText(snapshot);
+  const lines = [
+    "StreamUI Artifact Diagnostics",
+    `Generated: ${new Date().toISOString()}`,
+    `Status: ${snapshot.status}`,
+    `Theme mode: ${options.themeMode ?? "unknown"}`,
+    `Requested export width: ${options.exportWidth ?? "unknown"}`,
+    "",
+    "Source sizes:",
+    `- Raw source chars: ${snapshot.raw.length}`,
+    `- Completed HTML chars: ${snapshot.completedHtml.length}`,
+    `- Iframe document chars: ${snapshot.iframeDocument.length}`,
+    `- Visible text chars: ${visibleText.length}`,
+    "",
+    "Render errors:",
+    snapshot.errors.length
+      ? snapshot.errors
+          .map((error, index) => {
+            return `${index + 1}. ${error.kind}: ${error.message} (${new Date(
+              error.timestamp
+            ).toISOString()})`;
+          })
+          .join("\n")
+      : "- none",
+    "",
+    "Visible text:",
+    visibleText || "(none)",
+    "",
+    "Raw source:",
+    getSnapshotSourceCode(snapshot),
+    "",
+    "Completed HTML:",
+    snapshot.completedHtml || "(none)"
+  ];
+
+  return `${lines.join("\n")}\n`;
 }
 
 function createHiddenExportFrame(
@@ -401,14 +478,30 @@ export async function renderSnapshotToPngBlob(
   snapshot: RenderSnapshot,
   options: SnapshotDocumentOptions
 ): Promise<Blob> {
+  const result = await renderSnapshotToPngExport(snapshot, options);
+  return result.blob;
+}
+
+async function renderSnapshotToPngExport(
+  snapshot: RenderSnapshot,
+  options: SnapshotDocumentOptions
+): Promise<PngExportResult> {
   return withPreparedSnapshotDocument(snapshot, options, async (prepared) => {
     const svg = renderPreparedDocumentToForeignObjectSvg(prepared);
-    return rasterizeSvgToPngBlob(
+    const scale = getArtifactExportScale(prepared.width, prepared.height);
+    const blob = await rasterizeSvgToPngBlob(
       svg,
       prepared.width,
       prepared.height,
-      getArtifactExportScale(prepared.width, prepared.height)
+      scale
     );
+
+    return {
+      blob,
+      height: prepared.height,
+      scale,
+      width: prepared.width
+    };
   });
 }
 
@@ -477,12 +570,51 @@ export async function copySnapshotSourceCode(
   await copyTextToClipboard(getSnapshotSourceCode(snapshot));
 }
 
+export async function copySnapshotVisibleText(
+  snapshot: RenderSnapshot
+): Promise<void> {
+  const text = getSnapshotVisibleText(snapshot);
+  if (!text) {
+    throw new Error("No visible text found in this artifact.");
+  }
+
+  await copyTextToClipboard(text);
+}
+
+export function downloadSnapshotAsHtml(
+  snapshot: RenderSnapshot,
+  options: { filename: string; themeMode?: PageThemeMode }
+): void {
+  downloadTextFile(
+    getSnapshotHtmlDocument(snapshot, options.themeMode),
+    options.filename,
+    HTML_MIME_TYPE
+  );
+}
+
+export function downloadSnapshotDiagnostics(
+  snapshot: RenderSnapshot,
+  options: ArtifactExportDiagnosticsOptions & { filename: string }
+): void {
+  downloadTextFile(
+    getSnapshotDiagnostics(snapshot, options),
+    options.filename,
+    PLAIN_TEXT_MIME_TYPE
+  );
+}
+
 export async function downloadSnapshotAsPng(
   snapshot: RenderSnapshot,
   options: SnapshotDocumentOptions & { filename: string }
-): Promise<void> {
-  const blob = await renderSnapshotToPngBlob(snapshot, options);
-  downloadBlob(blob, options.filename);
+): Promise<Omit<PngExportResult, "blob">> {
+  const result = await renderSnapshotToPngExport(snapshot, options);
+  downloadBlob(result.blob, options.filename);
+
+  return {
+    height: result.height,
+    scale: result.scale,
+    width: result.width
+  };
 }
 
 export async function downloadSnapshotAsSvg(

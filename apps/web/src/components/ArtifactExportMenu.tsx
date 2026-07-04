@@ -1,20 +1,32 @@
 import {
+  Bug,
   Check,
   Code2,
+  Copy,
   Ellipsis,
   FileDown,
+  FileText,
   ImageDown
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   copySnapshotSourceCode,
+  copySnapshotVisibleText,
   createArtifactFilename,
+  downloadSnapshotAsHtml,
   downloadSnapshotAsPng,
-  downloadSnapshotAsSvg
+  downloadSnapshotAsSvg,
+  downloadSnapshotDiagnostics
 } from "../core/artifactExport";
 import type { PageThemeMode, RenderSnapshot } from "../core/types";
 
-type ArtifactExportAction = "copy-code" | "download-png" | "download-svg";
+type ArtifactExportAction =
+  | "copy-code"
+  | "copy-text"
+  | "download-html"
+  | "download-png"
+  | "download-svg"
+  | "download-diagnostics";
 
 type ArtifactExportMenuProps = {
   filenameBase: string;
@@ -29,8 +41,31 @@ type ExportStatus = {
   message: string;
 };
 
+type MenuAction = {
+  action: ArtifactExportAction;
+  icon: typeof Code2;
+  label: string;
+};
+
+const MENU_ACTIONS: MenuAction[] = [
+  { action: "copy-code", icon: Code2, label: "Copy Code" },
+  { action: "copy-text", icon: Copy, label: "Copy Text" },
+  { action: "download-html", icon: FileText, label: "Download HTML" },
+  { action: "download-png", icon: ImageDown, label: "Download PNG" },
+  { action: "download-svg", icon: FileDown, label: "Download SVG" },
+  { action: "download-diagnostics", icon: Bug, label: "Diagnostics" }
+];
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Export failed.";
+}
+
+function formatPngStatus(result: { scale: number }): string {
+  if (result.scale >= 0.99) {
+    return "PNG downloaded";
+  }
+
+  return `PNG downloaded (${Math.round(result.scale * 100)}% scale)`;
 }
 
 export function ArtifactExportMenu({
@@ -48,6 +83,8 @@ export function ArtifactExportMenu({
 
   const filenames = useMemo(
     () => ({
+      diagnostics: createArtifactFilename(`${filenameBase}-diagnostics`, "txt"),
+      html: createArtifactFilename(filenameBase, "html"),
       png: createArtifactFilename(filenameBase, "png"),
       svg: createArtifactFilename(filenameBase, "svg")
     }),
@@ -89,18 +126,30 @@ export function ArtifactExportMenu({
 
     try {
       const width = getExportWidth();
+
       if (action === "copy-code") {
         await copySnapshotSourceCode(snapshot);
-        setStatus({
-          action,
-          kind: "success",
-          message: "已复制"
+        setStatus({ action, kind: "success", message: "Code copied" });
+        return;
+      }
+
+      if (action === "copy-text") {
+        await copySnapshotVisibleText(snapshot);
+        setStatus({ action, kind: "success", message: "Text copied" });
+        return;
+      }
+
+      if (action === "download-html") {
+        downloadSnapshotAsHtml(snapshot, {
+          filename: filenames.html,
+          themeMode
         });
+        setStatus({ action, kind: "success", message: "HTML downloaded" });
         return;
       }
 
       if (action === "download-png") {
-        await downloadSnapshotAsPng(snapshot, {
+        const result = await downloadSnapshotAsPng(snapshot, {
           filename: filenames.png,
           themeMode,
           width
@@ -108,20 +157,30 @@ export function ArtifactExportMenu({
         setStatus({
           action,
           kind: "success",
-          message: "PNG 已下载"
+          message: formatPngStatus(result)
         });
         return;
       }
 
-      await downloadSnapshotAsSvg(snapshot, {
-        filename: filenames.svg,
-        themeMode,
-        width
+      if (action === "download-svg") {
+        await downloadSnapshotAsSvg(snapshot, {
+          filename: filenames.svg,
+          themeMode,
+          width
+        });
+        setStatus({ action, kind: "success", message: "SVG downloaded" });
+        return;
+      }
+
+      downloadSnapshotDiagnostics(snapshot, {
+        exportWidth: width,
+        filename: filenames.diagnostics,
+        themeMode
       });
       setStatus({
         action,
         kind: "success",
-        message: "SVG 已下载"
+        message: "Diagnostics downloaded"
       });
     } catch (error) {
       setStatus({
@@ -152,45 +211,22 @@ export function ArtifactExportMenu({
         role="menu"
         aria-hidden={!isInteractive}
       >
-        <button
-          className="artifact-export-menu-item"
-          type="button"
-          role="menuitem"
-          disabled={isBusy}
-          tabIndex={isInteractive ? 0 : -1}
-          onClick={() => {
-            void runAction("copy-code");
-          }}
-        >
-          <Code2 size={14} strokeWidth={2} aria-hidden="true" />
-          <span>复制代码</span>
-        </button>
-        <button
-          className="artifact-export-menu-item"
-          type="button"
-          role="menuitem"
-          disabled={isBusy}
-          tabIndex={isInteractive ? 0 : -1}
-          onClick={() => {
-            void runAction("download-png");
-          }}
-        >
-          <ImageDown size={14} strokeWidth={2} aria-hidden="true" />
-          <span>下载 PNG</span>
-        </button>
-        <button
-          className="artifact-export-menu-item"
-          type="button"
-          role="menuitem"
-          disabled={isBusy}
-          tabIndex={isInteractive ? 0 : -1}
-          onClick={() => {
-            void runAction("download-svg");
-          }}
-        >
-          <FileDown size={14} strokeWidth={2} aria-hidden="true" />
-          <span>下载 SVG</span>
-        </button>
+        {MENU_ACTIONS.map(({ action, icon: Icon, label }) => (
+          <button
+            className="artifact-export-menu-item"
+            type="button"
+            role="menuitem"
+            disabled={isBusy}
+            key={action}
+            tabIndex={isInteractive ? 0 : -1}
+            onClick={() => {
+              void runAction(action);
+            }}
+          >
+            <Icon size={14} strokeWidth={2} aria-hidden="true" />
+            <span>{label}</span>
+          </button>
+        ))}
         {status ? (
           <span
             className={`artifact-export-status is-${status.kind}`}
@@ -207,8 +243,8 @@ export function ArtifactExportMenu({
         className="artifact-export-trigger"
         type="button"
         aria-expanded={isOpen}
-        aria-label="更多导出操作"
-        title="更多导出操作"
+        aria-label="Artifact actions"
+        title="Artifact actions"
         onClick={() => setIsPinned((current) => !current)}
       >
         <Ellipsis size={16} strokeWidth={2.2} aria-hidden="true" />
