@@ -68,6 +68,7 @@ type StoredSession = {
 type StoredSessionState = {
   sessions: StoredSession[];
   activeSessionId: string;
+  deletedSessionIds?: string[];
 };
 
 export type SessionMessageInput = {
@@ -108,6 +109,7 @@ const DEFAULT_SESSION_STATE_KEY = "global";
 const SESSION_CLIENT_ID_HEADER = "x-streamui-client-id";
 const STREAM_INTERRUPTED_ERROR =
   "The stream was interrupted before it completed.";
+const MAX_DELETED_SESSION_TOMBSTONES = 5000;
 
 let saveQueue = Promise.resolve();
 let database: SqliteDatabase | null = null;
@@ -120,7 +122,7 @@ function createId(prefix: string): string {
   return `${prefix}-${now()}-${randomUUID().slice(0, 8)}`;
 }
 
-function createEmptyState(): StoredSessionState {
+function createEmptyState(deletedSessionIds: string[] = []): StoredSessionState {
   const timestamp = now();
   const session: StoredSession = {
     id: createId("session"),
@@ -133,7 +135,8 @@ function createEmptyState(): StoredSessionState {
 
   return {
     sessions: [session],
-    activeSessionId: session.id
+    activeSessionId: session.id,
+    deletedSessionIds
   };
 }
 
@@ -199,9 +202,29 @@ function normalizeStringArray(input: unknown): string[] | undefined {
   return values.length ? values : undefined;
 }
 
-function normalizeDeletedSessionIds(input: unknown): Set<string> {
+function normalizeDeletedSessionIdList(input: unknown): string[] {
   const ids = normalizeStringArray(input);
-  return new Set(ids ?? []);
+  return (ids ?? []).slice(-MAX_DELETED_SESSION_TOMBSTONES);
+}
+
+function normalizeDeletedSessionIds(input: unknown): Set<string> {
+  return new Set(normalizeDeletedSessionIdList(input));
+}
+
+function mergeDeletedSessionIdLists(...inputs: Array<unknown>): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const input of inputs) {
+    for (const id of normalizeDeletedSessionIdList(input)) {
+      if (seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      values.push(id);
+    }
+  }
+
+  return values.slice(-MAX_DELETED_SESSION_TOMBSTONES);
 }
 
 function normalizeSessionFile(input: unknown): StoredSessionFile | null {
@@ -377,15 +400,20 @@ function normalizeState(input: unknown): StoredSessionState {
   }
 
   const state = input as Partial<StoredSessionState>;
+  const deletedSessionIds = normalizeDeletedSessionIdList(
+    state.deletedSessionIds
+  );
+  const deletedSessionIdSet = new Set(deletedSessionIds);
   const sessions = Array.isArray(state.sessions)
     ? state.sessions
         .map(normalizeSession)
         .filter((session): session is StoredSession => session !== null)
+        .filter((session) => !deletedSessionIdSet.has(session.id))
         .sort((a, b) => b.updatedAt - a.updatedAt)
     : [];
 
   if (!sessions.length) {
-    return createEmptyState();
+    return createEmptyState(deletedSessionIds);
   }
 
   const requestedActiveId =
@@ -398,7 +426,8 @@ function normalizeState(input: unknown): StoredSessionState {
 
   return {
     sessions,
-    activeSessionId
+    activeSessionId,
+    deletedSessionIds
   };
 }
 
@@ -565,13 +594,14 @@ function withFileUrls(req: Request, file: StoredSessionFile): StoredSessionFile 
 
 function presentState(req: Request, state: StoredSessionState): StoredSessionState {
   return {
-    ...state,
+    activeSessionId: state.activeSessionId,
     sessions: state.sessions.map((session) => ({
       ...session,
       files: (session.files ?? [])
         .filter((file) => !file.draft)
         .map((file) => withFileUrls(req, file))
-    }))
+    })),
+    deletedSessionIds: []
   };
 }
 
@@ -604,6 +634,10 @@ function ensureSession(
   state.sessions.unshift(session);
   state.activeSessionId = sessionId;
   return session;
+}
+
+function isSessionDeleted(state: StoredSessionState, sessionId: string): boolean {
+  return Boolean(state.deletedSessionIds?.includes(sessionId));
 }
 
 function hasActiveRunMessage(session: StoredSession): boolean {
@@ -688,15 +722,28 @@ function mergeMessagesForClientSave(
   });
 }
 
-function mergeClientSaveState(
+export function mergeClientSaveState(
   current: StoredSessionState,
   incoming: StoredSessionState,
   deletedSessionIds = new Set<string>()
 ): StoredSessionState {
-  const currentById = new Map(current.sessions.map((session) => [session.id, session]));
-  const incomingIds = new Set(incoming.sessions.map((session) => session.id));
-  const sessions = incoming.sessions
-    .filter((session) => !deletedSessionIds.has(session.id))
+  const mergedDeletedSessionIds = mergeDeletedSessionIdLists(
+    current.deletedSessionIds,
+    incoming.deletedSessionIds,
+    Array.from(deletedSessionIds)
+  );
+  const tombstones = new Set(mergedDeletedSessionIds);
+  const currentSessions = current.sessions.filter(
+    (session) => !tombstones.has(session.id)
+  );
+  const incomingSessions = incoming.sessions.filter(
+    (session) => !tombstones.has(session.id)
+  );
+  const currentById = new Map(
+    currentSessions.map((session) => [session.id, session])
+  );
+  const incomingIds = new Set(incomingSessions.map((session) => session.id));
+  const sessions = incomingSessions
     .map((session) => {
     const currentSession = currentById.get(session.id);
     if (!currentSession) {
@@ -716,8 +763,8 @@ function mergeClientSaveState(
     };
     });
 
-  for (const session of current.sessions) {
-    if (!incomingIds.has(session.id) && !deletedSessionIds.has(session.id)) {
+  for (const session of currentSessions) {
+    if (!incomingIds.has(session.id)) {
       sessions.push(session);
     }
   }
@@ -730,7 +777,8 @@ function mergeClientSaveState(
 
   return normalizeState({
     sessions,
-    activeSessionId
+    activeSessionId,
+    deletedSessionIds: mergedDeletedSessionIds
   });
 }
 
@@ -801,6 +849,9 @@ export async function upsertSessionMessages({
   files?: StoredSessionFile[];
 }): Promise<void> {
   await enqueueSessionStateUpdate(stateKey, (state) => {
+    if (isSessionDeleted(state, sessionId)) {
+      return;
+    }
     const session = ensureSession(state, sessionId);
     upsertMessages(session, messages);
     if (files?.length) {
@@ -822,6 +873,9 @@ export async function patchSessionMessage({
   patch: SessionMessagePatch;
 }): Promise<void> {
   await enqueueSessionStateUpdate(stateKey, (state) => {
+    if (isSessionDeleted(state, sessionId)) {
+      return;
+    }
     const session = findSession(state, sessionId);
     if (!session) {
       return;
