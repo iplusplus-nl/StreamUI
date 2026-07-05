@@ -1744,6 +1744,14 @@ button {
   transform: scale(0.98);
 }
 
+.reasoning-panel.is-status-only .reasoning-trigger {
+  cursor: default;
+}
+
+.reasoning-panel.is-status-only .reasoning-trigger:active {
+  transform: none;
+}
+
 .reasoning-trigger::-webkit-details-marker {
   display: none;
 }

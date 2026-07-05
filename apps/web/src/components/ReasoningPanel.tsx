@@ -18,6 +18,7 @@ export function ReasoningPanel({
   const [elapsedMs, setElapsedMs] = useState(0);
   const visibleReasoning = stripSyntheticReasoningStatus(reasoning);
   const hasReasoning = visibleReasoning.trim().length > 0;
+  const showStatusOnly = isStreaming && !hasReasoning;
 
   useEffect(() => {
     if (isStreaming) {
@@ -44,34 +45,42 @@ export function ReasoningPanel({
     setIsOpen(false);
   }, [isStreaming, startedAt]);
 
-  if (!hasReasoning) {
+  if (!hasReasoning && !showStatusOnly) {
     return null;
   }
 
   const durationSeconds =
     startedAt || elapsedMs > 0 ? Math.max(1, Math.round(elapsedMs / 1000)) : null;
-  const label = isStreaming
-    ? "Reasoning"
+  const label = showStatusOnly
+    ? "Generating..."
+    : isStreaming
+      ? "Reasoning"
     : durationSeconds
       ? `Reasoned for ${durationSeconds}s`
       : "Reasoning";
 
   return (
     <details
-      className={`reasoning-panel ${isStreaming ? "is-streaming" : "is-complete"}`}
-      open={isOpen}
+      className={`reasoning-panel ${isStreaming ? "is-streaming" : "is-complete"} ${
+        showStatusOnly ? "is-status-only" : ""
+      }`}
+      open={!showStatusOnly && isOpen}
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
     >
       <summary className="reasoning-trigger">
         <span className="reasoning-mark" aria-hidden="true" />
         <span className="reasoning-label">{label}</span>
-        <span className="reasoning-chevron" aria-hidden="true" />
+        {!showStatusOnly ? (
+          <span className="reasoning-chevron" aria-hidden="true" />
+        ) : null}
       </summary>
-      <div className="reasoning-content" aria-busy={isStreaming}>
-        <pre className="reasoning-text">
-          {visibleReasoning}
-        </pre>
-      </div>
+      {!showStatusOnly ? (
+        <div className="reasoning-content" aria-busy={isStreaming}>
+          <pre className="reasoning-text">
+            {visibleReasoning}
+          </pre>
+        </div>
+      ) : null}
     </details>
   );
 }
