@@ -9,6 +9,7 @@ import {
   MoreHorizontal,
   Moon,
   PanelLeftOpen,
+  Plus,
   Search,
   Settings2,
   SquarePen,
@@ -21,21 +22,23 @@ import {
 import {
   API_KEY_SOURCE_OPTIONS,
   API_PROVIDER_PRESETS,
-  DEFAULT_USER_PREFERENCES,
-  MAX_USER_PREFERENCE_FIELD_LENGTH,
+  MAX_MEMORY_ITEMS,
+  MAX_MEMORY_ITEM_TEXT_LENGTH,
+  MAX_USER_PREFERENCE_PROMPT_LENGTH,
   REASONING_EFFORT_OPTIONS,
+  createMemoryItemId,
   getDefaultModelsEndpoint,
   getProviderPreset,
   getApiKeyEnvironmentName,
   getSelectableModelOptions,
   hasCompleteApiSettings,
   normalizeApiSettings,
-  normalizeUserPreferences,
+  normalizeMemoryItems,
   type ApiKeySource,
   type ApiProviderId,
   type ApiSettings,
-  type ReasoningEffort,
-  type UserPreferences
+  type MemoryItem,
+  type ReasoningEffort
 } from "../core/apiSettings";
 import {
   SEARCH_BROWSER_ENGINE_OPTIONS,
@@ -65,40 +68,8 @@ export type SessionListItem = {
 };
 
 type SettingsSection = "api" | "preferences" | "search";
-type UserPreferenceKey = keyof UserPreferences;
 
 const COMPACT_SIDEBAR_QUERY = "(max-width: 720px), (orientation: portrait)";
-const USER_PREFERENCE_FIELDS: Array<{
-  key: UserPreferenceKey;
-  label: string;
-  rows: number;
-  placeholder: string;
-}> = [
-  {
-    key: "responseTone",
-    label: "Response Tone",
-    rows: 3,
-    placeholder: "Warm, concise, Chinese by default..."
-  },
-  {
-    key: "interfaceStyle",
-    label: "Interface Style",
-    rows: 3,
-    placeholder: "Dense controls, restrained cards, compact dashboards..."
-  },
-  {
-    key: "defaultTechnicalPreferences",
-    label: "Technical Defaults",
-    rows: 3,
-    placeholder: "TypeScript, minimal dependencies, test risky changes..."
-  },
-  {
-    key: "longTermMemory",
-    label: "Long-Term Memory",
-    rows: 4,
-    placeholder: "Stable facts and working preferences to remember..."
-  }
-];
 
 function getInitialSidebarCollapsed(): boolean {
   if (typeof window === "undefined") {
@@ -314,19 +285,42 @@ export function SessionSidebar({
     );
   };
 
-  const updateUserPreferenceDraft = (
-    key: UserPreferenceKey,
-    value: string
-  ) => {
+  const updateUserPreferencePromptDraft = (value: string) => {
     setDraftApiSettings((current) =>
       normalizeApiSettings({
         ...current,
-        userPreferences: {
-          ...current.userPreferences,
-          [key]: value
-        }
+        userPreferencePrompt: value
       })
     );
+  };
+
+  const updateMemoryItemDraft = (id: string, text: string) => {
+    setDraftApiSettings((current) => ({
+      ...current,
+      memoryItems: current.memoryItems.map((item) =>
+        item.id === id
+          ? { ...item, text: text.slice(0, MAX_MEMORY_ITEM_TEXT_LENGTH) }
+          : item
+      )
+    }));
+  };
+
+  const handleAddMemoryItem = () => {
+    const item: MemoryItem = {
+      id: createMemoryItemId(),
+      text: "New memory item"
+    };
+    setDraftApiSettings((current) => ({
+      ...current,
+      memoryItems: [...current.memoryItems, item]
+    }));
+  };
+
+  const handleDeleteMemoryItem = (id: string) => {
+    setDraftApiSettings((current) => ({
+      ...current,
+      memoryItems: current.memoryItems.filter((item) => item.id !== id)
+    }));
   };
 
   const updateApiBaseUrl = (baseUrl: string) => {
@@ -427,8 +421,12 @@ export function SessionSidebar({
   };
 
   const handleExportPreferences = () => {
+    const preferences = {
+      userPreferencePrompt: draftApiSettings.userPreferencePrompt.trim(),
+      memoryItems: normalizeMemoryItems(draftApiSettings.memoryItems)
+    };
     const blob = new Blob(
-      [JSON.stringify(draftApiSettings.userPreferences, null, 2)],
+      [JSON.stringify(preferences, null, 2)],
       { type: "application/json;charset=utf-8" }
     );
     const url = URL.createObjectURL(blob);
@@ -453,23 +451,14 @@ export function SessionSidebar({
 
     try {
       const parsed = JSON.parse(await file.text()) as unknown;
-      const object =
-        typeof parsed === "object" && parsed !== null
-          ? (parsed as Record<string, unknown>)
-          : {};
-      const source =
-        typeof object.userPreferences === "object" && object.userPreferences !== null
-          ? object.userPreferences
-          : parsed;
-      const legacyPreference =
-        typeof object.userPreference === "string" ? object.userPreference : "";
-      const userPreferences = normalizeUserPreferences(source, legacyPreference);
-      setDraftApiSettings((current) =>
-        normalizeApiSettings({
+      setDraftApiSettings((current) => {
+        const imported = normalizeApiSettings(parsed);
+        return {
           ...current,
-          userPreferences
-        })
-      );
+          userPreferencePrompt: imported.userPreferencePrompt,
+          memoryItems: imported.memoryItems
+        };
+      });
       setPreferenceImportError(null);
     } catch {
       setPreferenceImportError("Could not import preferences.");
@@ -478,10 +467,10 @@ export function SessionSidebar({
 
   const handleClearPreferences = () => {
     setDraftApiSettings((current) =>
-      normalizeApiSettings({
+      ({
         ...current,
-        userPreferences: DEFAULT_USER_PREFERENCES,
-        userPreference: ""
+        userPreferencePrompt: "",
+        memoryItems: []
       })
     );
     setPreferenceImportError(null);
@@ -940,27 +929,73 @@ export function SessionSidebar({
                   </>
                 ) : settingsSection === "preferences" ? (
                   <>
-                    {USER_PREFERENCE_FIELDS.map((field) => (
-                      <label
-                        className="settings-row settings-row-textarea"
-                        key={field.key}
-                      >
-                        <span>{field.label}</span>
-                        <textarea
-                          value={draftApiSettings.userPreferences[field.key]}
-                          maxLength={MAX_USER_PREFERENCE_FIELD_LENGTH}
-                          rows={field.rows}
-                          placeholder={field.placeholder}
-                          spellCheck={false}
-                          onChange={(event) =>
-                            updateUserPreferenceDraft(
-                              field.key,
-                              event.target.value
-                            )
+                    <label className="settings-row settings-row-textarea">
+                      <span>User Preference Prompt</span>
+                      <textarea
+                        value={draftApiSettings.userPreferencePrompt}
+                        maxLength={MAX_USER_PREFERENCE_PROMPT_LENGTH}
+                        rows={5}
+                        placeholder="Persistent instructions that should shape every reply."
+                        spellCheck={false}
+                        onChange={(event) =>
+                          updateUserPreferencePromptDraft(event.target.value)
+                        }
+                      />
+                    </label>
+
+                    <div className="settings-row settings-row-textarea">
+                      <span>Memory Items</span>
+                      <div className="settings-control-stack settings-memory-list">
+                        {draftApiSettings.memoryItems.length ? (
+                          draftApiSettings.memoryItems.map((item) => (
+                            <div className="settings-memory-row" key={item.id}>
+                              <textarea
+                                value={item.text}
+                                maxLength={MAX_MEMORY_ITEM_TEXT_LENGTH}
+                                rows={2}
+                                placeholder="Stable preference or fact to remember."
+                                spellCheck={false}
+                                onChange={(event) =>
+                                  updateMemoryItemDraft(
+                                    item.id,
+                                    event.target.value
+                                  )
+                                }
+                              />
+                              <button
+                                className="settings-icon-button"
+                                type="button"
+                                aria-label="Delete memory item"
+                                title="Delete memory item"
+                                onClick={() => handleDeleteMemoryItem(item.id)}
+                              >
+                                <Trash2
+                                  size={14}
+                                  strokeWidth={2.1}
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </div>
+                          ))
+                        ) : (
+                          <span className="settings-empty-state">
+                            No memory items yet
+                          </span>
+                        )}
+                        <button
+                          className="settings-small-button settings-add-memory-button"
+                          type="button"
+                          onClick={handleAddMemoryItem}
+                          disabled={
+                            draftApiSettings.memoryItems.length >= MAX_MEMORY_ITEMS
                           }
-                        />
-                      </label>
-                    ))}
+                        >
+                          <Plus size={14} strokeWidth={2.1} aria-hidden="true" />
+                          <span>Add Memory</span>
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="settings-row">
                       <span>Preferences File</span>
                       <div className="settings-control-stack">

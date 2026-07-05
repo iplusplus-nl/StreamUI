@@ -2,26 +2,21 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   DEFAULT_API_SETTINGS,
-  MAX_USER_PREFERENCE_FIELD_LENGTH,
-  MAX_USER_PREFERENCE_LENGTH,
-  formatUserPreferenceFallback,
+  MAX_MEMORY_ITEM_TEXT_LENGTH,
+  MAX_USER_PREFERENCE_PROMPT_LENGTH,
+  createMemoryItemId,
   getDefaultModelsEndpoint,
   getSelectableModelOptions,
   normalizeApiSettings,
-  normalizeUserPreferences,
+  normalizeMemoryItems,
   serializeApiSettings
 } from "./apiSettings";
 
 describe("apiSettings", () => {
-  it("defaults user preference to an empty optional prompt", () => {
-    assert.equal(DEFAULT_API_SETTINGS.userPreference, "");
-    assert.equal(normalizeApiSettings(null).userPreference, "");
-    assert.deepEqual(normalizeApiSettings(null).userPreferences, {
-      responseTone: "",
-      interfaceStyle: "",
-      defaultTechnicalPreferences: "",
-      longTermMemory: ""
-    });
+  it("defaults user memory settings to an empty prompt and table", () => {
+    assert.equal(DEFAULT_API_SETTINGS.userPreferencePrompt, "");
+    assert.equal(normalizeApiSettings(null).userPreferencePrompt, "");
+    assert.deepEqual(normalizeApiSettings(null).memoryItems, []);
   });
 
   it("derives the default models endpoint from the base URL", () => {
@@ -57,130 +52,110 @@ describe("apiSettings", () => {
     ]);
   });
 
-  it("preserves user preference while normalizing settings", () => {
+  it("preserves the new user preference prompt while normalizing settings", () => {
     const normalized = normalizeApiSettings({
       providerId: "openrouter",
-      userPreference: "  Always answer in concise Chinese.  "
+      userPreferencePrompt: "  Always answer in concise Chinese.  "
     });
 
     assert.equal(
-      normalized.userPreference,
-      "  Always answer in concise Chinese.  "
-    );
-    assert.equal(
-      normalized.userPreferences.responseTone,
+      normalized.userPreferencePrompt,
       "  Always answer in concise Chinese.  "
     );
   });
 
-  it("trims user preference only for request serialization", () => {
+  it("trims user preference prompt only for request serialization", () => {
     const serialized = serializeApiSettings({
       ...DEFAULT_API_SETTINGS,
-      userPreference: "  Prefer compact answers.  "
+      userPreferencePrompt: "  Prefer compact answers.  "
     });
 
-    assert.equal(serialized.userPreference, "Prefer compact answers.");
-    assert.equal(
-      serialized.userPreferences.responseTone,
-      "Prefer compact answers."
-    );
+    assert.equal(serialized.userPreferencePrompt, "Prefer compact answers.");
   });
 
-  it("caps user preference length", () => {
-    const oversizedPreference = "x".repeat(MAX_USER_PREFERENCE_LENGTH + 1);
+  it("caps user preference prompt length", () => {
+    const oversizedPreference = "x".repeat(
+      MAX_USER_PREFERENCE_PROMPT_LENGTH + 1
+    );
     const normalized = normalizeApiSettings({
-      userPreference: oversizedPreference
+      userPreferencePrompt: oversizedPreference
     });
 
-    assert.equal(normalized.userPreference.length, MAX_USER_PREFERENCE_LENGTH);
     assert.equal(
-      normalized.userPreferences.responseTone.length,
-      MAX_USER_PREFERENCE_FIELD_LENGTH
+      normalized.userPreferencePrompt.length,
+      MAX_USER_PREFERENCE_PROMPT_LENGTH
     );
   });
 
-  it("normalizes structured user preferences", () => {
+  it("migrates legacy structured preferences into prompt and memory items", () => {
     const normalized = normalizeApiSettings({
       ...DEFAULT_API_SETTINGS,
       userPreferences: {
         responseTone: "  Warm and direct.  ",
         interfaceStyle: "Use dense controls.",
         defaultTechnicalPreferences: "Prefer TypeScript.",
-        longTermMemory: "User ships small increments."
+        longTermMemory: "- User ships small increments.\n- Likes concise plans."
       }
     });
 
-    assert.deepEqual(normalized.userPreferences, {
-      responseTone: "  Warm and direct.  ",
-      interfaceStyle: "Use dense controls.",
-      defaultTechnicalPreferences: "Prefer TypeScript.",
-      longTermMemory: "User ships small increments."
-    });
     assert.equal(
-      normalized.userPreference,
+      normalized.userPreferencePrompt,
       [
         "Response tone: Warm and direct.",
         "Interface style: Use dense controls.",
-        "Default technical preferences: Prefer TypeScript.",
-        "Long-term memory: User ships small increments."
+        "Default technical preferences: Prefer TypeScript."
       ].join("\n")
+    );
+    assert.deepEqual(
+      normalized.memoryItems.map((item) => item.text),
+      ["User ships small increments.", "Likes concise plans."]
     );
   });
 
-  it("serializes structured preferences trimmed by section", () => {
+  it("migrates legacy userPreference into the prompt", () => {
+    const normalized = normalizeApiSettings({
+      ...DEFAULT_API_SETTINGS,
+      userPreference: "  Prefer compact answers.  "
+    });
+
+    assert.equal(normalized.userPreferencePrompt, "Prefer compact answers.");
+    assert.deepEqual(normalized.memoryItems, []);
+  });
+
+  it("serializes memory settings with trimmed prompt and normalized items", () => {
     const serialized = serializeApiSettings({
       ...DEFAULT_API_SETTINGS,
-      userPreferences: {
-        responseTone: "  Warm.  ",
-        interfaceStyle: "  Compact UI.  ",
-        defaultTechnicalPreferences: "",
-        longTermMemory: "  Likes concise plans.  "
-      }
+      userPreferencePrompt: "  Warm.  ",
+      memoryItems: [
+        { id: "one", text: "  Likes concise plans.  " },
+        { id: "two", text: "" }
+      ]
     });
 
-    assert.deepEqual(serialized.userPreferences, {
-      responseTone: "Warm.",
-      interfaceStyle: "Compact UI.",
-      defaultTechnicalPreferences: "",
-      longTermMemory: "Likes concise plans."
-    });
-    assert.equal(
-      serialized.userPreference,
-      [
-        "Response tone: Warm.",
-        "Interface style: Compact UI.",
-        "Long-term memory: Likes concise plans."
-      ].join("\n")
-    );
+    assert.equal(serialized.userPreferencePrompt, "Warm.");
+    assert.deepEqual(serialized.memoryItems, [
+      { id: "one", text: "Likes concise plans." }
+    ]);
   });
 
-  it("caps each structured preference field", () => {
-    const oversizedPreference = "x".repeat(MAX_USER_PREFERENCE_FIELD_LENGTH + 1);
-    const normalized = normalizeUserPreferences({
-      responseTone: oversizedPreference,
-      interfaceStyle: oversizedPreference
-    });
+  it("normalizes memory items by dropping empty text, capping text, and deduping ids", () => {
+    const oversizedMemory = "x".repeat(MAX_MEMORY_ITEM_TEXT_LENGTH + 1);
+    const normalized = normalizeMemoryItems([
+      { id: "same", text: "  First  " },
+      { id: "same", text: oversizedMemory },
+      { id: "empty", text: "   " }
+    ]);
 
-    assert.equal(
-      normalized.responseTone.length,
-      MAX_USER_PREFERENCE_FIELD_LENGTH
+    assert.deepEqual(
+      normalized.map((item) => item.id),
+      ["same", "same-2"]
     );
-    assert.equal(
-      normalized.interfaceStyle.length,
-      MAX_USER_PREFERENCE_FIELD_LENGTH
-    );
+    assert.equal(normalized[0].text, "First");
+    assert.equal(normalized[1].text.length, MAX_MEMORY_ITEM_TEXT_LENGTH);
   });
 
-  it("formats a single response tone as the legacy fallback", () => {
-    assert.equal(
-      formatUserPreferenceFallback({
-        responseTone: "Warm.",
-        interfaceStyle: "",
-        defaultTechnicalPreferences: "",
-        longTermMemory: ""
-      }),
-      "Warm."
-    );
+  it("creates deterministic memory item ids when inputs are injected", () => {
+    assert.equal(createMemoryItemId(123, () => 0.5), "memory-3f-i");
   });
 
   it("omits manual API key when environment key source is selected", () => {
@@ -188,10 +163,10 @@ describe("apiSettings", () => {
       ...DEFAULT_API_SETTINGS,
       apiKeySource: "environment",
       apiKey: "secret",
-      userPreference: "Use a warmer tone."
+      userPreferencePrompt: "Use a warmer tone."
     });
 
     assert.equal(serialized.apiKey, "");
-    assert.equal(serialized.userPreference, "Use a warmer tone.");
+    assert.equal(serialized.userPreferencePrompt, "Use a warmer tone.");
   });
 });

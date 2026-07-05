@@ -33,6 +33,10 @@ import {
   type ReasoningEffort
 } from "./core/apiSettings";
 import {
+  applyMemoryStreamEvent,
+  type MemoryStreamEvent
+} from "./core/memoryStreamEvents";
+import {
   loadSearchSettings,
   normalizeSearchSettings,
   saveSearchSettings,
@@ -69,10 +73,12 @@ import type {
   StreamingRenderer
 } from "./runtime/streamui/types";
 
-type ChatStreamEvent = {
+type TextStreamEvent = {
   type?: "content" | "reasoning";
   text?: string;
 };
+
+type ChatStreamEvent = TextStreamEvent | MemoryStreamEvent;
 
 type SendStreamUiRequestOptions = {
   appendUserMessage?: boolean;
@@ -957,6 +963,10 @@ export default function App() {
     []
   );
 
+  const handleMemoryStreamEvent = useCallback((event: MemoryStreamEvent) => {
+    setApiSettings((current) => applyMemoryStreamEvent(current, event));
+  }, []);
+
   const sendStreamUiRequest = useCallback(
     async (
       text: string,
@@ -1044,6 +1054,10 @@ export default function App() {
 
         try {
           const event = JSON.parse(line) as ChatStreamEvent;
+          if (event.type === "memory") {
+            handleMemoryStreamEvent(event);
+            return;
+          }
           if (event.type === "reasoning" && event.text) {
             reasoning += event.text;
             updateAssistant(assistantId, { reasoning });
@@ -1146,6 +1160,7 @@ export default function App() {
     },
     [
       apiSettings,
+      handleMemoryStreamEvent,
       searchSettings,
       themeMode,
       updateActiveSessionMessages,

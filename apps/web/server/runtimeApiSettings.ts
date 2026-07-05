@@ -19,11 +19,9 @@ export type RuntimeApiCredentials = {
   apiKey: string;
 };
 
-export type RuntimeUserPreferences = {
-  responseTone: "";
-  interfaceStyle: "";
-  defaultTechnicalPreferences: "";
-  longTermMemory: "";
+export type RuntimeMemoryItem = {
+  id: string;
+  text: string;
 };
 
 export type RuntimeApiDefaults = {
@@ -36,8 +34,8 @@ export type RuntimeApiDefaults = {
   modelOptions: string[];
   modelsEndpoint: string;
   reasoningEffort: RuntimeReasoningEffort;
-  userPreferences: RuntimeUserPreferences;
-  userPreference: "";
+  userPreferencePrompt: "";
+  memoryItems: RuntimeMemoryItem[];
 };
 
 export type EnvironmentKeyStatus = {
@@ -274,13 +272,8 @@ export function getRuntimeApiDefaults(): RuntimeApiDefaults {
     reasoningEffort: normalizeRuntimeReasoningEffort(
       envString("OPENROUTER_REASONING_EFFORT")
     ),
-    userPreferences: {
-      responseTone: "",
-      interfaceStyle: "",
-      defaultTechnicalPreferences: "",
-      longTermMemory: ""
-    },
-    userPreference: ""
+    userPreferencePrompt: "",
+    memoryItems: []
   };
 }
 

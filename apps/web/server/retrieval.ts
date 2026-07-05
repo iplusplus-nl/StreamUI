@@ -2107,7 +2107,7 @@ export async function collectRetrievalContext(
     used: sources.length > 0 || notes.length > 0,
     reason:
       sources.length > 0
-        ? "Independent StreamUI retrieval collected external context."
+        ? "The StreamUI retrieve tool collected external context."
         : "Retrieval ran but did not return usable sources.",
     nowIso,
     searchProvider: searchResults[0]?.provider,
@@ -2554,14 +2554,17 @@ function sourcesWithVerifiedImages(
   }));
 }
 
-export function buildRetrievalContextPrompt(context: RetrievalContext): string {
-  const maxChars = getRetrievalConfig().contextMaxChars;
+export function buildRetrievalContextPrompt(
+  context: RetrievalContext,
+  settingsInput?: unknown
+): string {
+  const maxChars = getRetrievalConfig(settingsInput).contextMaxChars;
   const lines: string[] = [
     "Current runtime context:",
     `- Server timestamp: ${context.nowIso}`,
     "- Use this timestamp for current date/time grounding unless the user gives a different date.",
     "",
-    "Independent StreamUI retrieval:",
+    "StreamUI retrieve tool result:",
     `- Status: ${context.used ? "ran" : "not run"}`,
     `- Reason: ${context.reason}`
   ];

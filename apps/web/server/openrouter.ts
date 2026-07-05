@@ -1,7 +1,18 @@
 import type { Request, Response } from "express";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { streamText, type ModelMessage, type TextStreamPart } from "ai";
-import { buildAgentLoopPrompt, runStreamUiAgentLoop } from "./agentLoop.js";
+import { stepCountIs, streamText, type ModelMessage, type TextStreamPart } from "ai";
+import {
+  buildMemoryContextPrompt,
+  createMemoryTools,
+  createMemoryToolStats,
+  normalizeMemorySettings,
+  type MemoryItem,
+  type MemoryStreamEvent
+} from "./memoryTools.js";
+import {
+  createRetrievalTools,
+  createRetrievalToolStats
+} from "./retrievalTool.js";
 import {
   getRuntimeApiDefaults,
   readRuntimeApiCredentials,
@@ -11,8 +22,8 @@ import { SYSTEM_PROMPT } from "./systemPrompt.js";
 
 const MAX_IMAGES_PER_MESSAGE = 4;
 const MAX_IMAGE_DATA_URL_LENGTH = 3_000_000;
-const MAX_USER_PREFERENCE_LENGTH = 4_000;
-const MAX_USER_PREFERENCE_FIELD_LENGTH = 2_000;
+const DEFAULT_TOOL_MAX_STEPS = 4;
+const MAX_TOOL_MAX_STEPS = 8;
 
 type ChatRole = "user" | "assistant" | "system";
 type OpenRouterReasoningEffort =
@@ -31,15 +42,8 @@ type RuntimeApiSettings = {
   apiKey: string;
   model: string;
   reasoningEffort: OpenRouterReasoningEffort;
-  userPreferences: UserPreferences;
-  userPreference: string;
-};
-
-type UserPreferences = {
-  responseTone: string;
-  interfaceStyle: string;
-  defaultTechnicalPreferences: string;
-  longTermMemory: string;
+  userPreferencePrompt: string;
+  memoryItems: MemoryItem[];
 };
 
 type ClientImageAttachment = {
@@ -65,10 +69,12 @@ type CanvasContext = {
 
 type PageThemeMode = "day" | "night";
 
-type StreamEvent = {
-  type: "content" | "reasoning";
-  text: string;
-};
+type StreamEvent =
+  | {
+      type: "content" | "reasoning";
+      text: string;
+    }
+  | MemoryStreamEvent;
 
 type ToolStreamState = {
   contentChars: number;
@@ -160,89 +166,6 @@ function normalizeThemeMode(input: unknown): PageThemeMode {
   return "night";
 }
 
-function normalizeUserPreference(input: unknown): string {
-  if (typeof input !== "string") {
-    return "";
-  }
-
-  return input.trim().slice(0, MAX_USER_PREFERENCE_LENGTH);
-}
-
-function buildUserPreferencePrompt(userPreference: string): string {
-  if (!userPreference) {
-    return "";
-  }
-
-  return `用户偏好:
-The following text is persistent user-provided guidance. Follow it when relevant unless it conflicts with higher-priority instructions.
-
-${userPreference}`;
-}
-
-function normalizePreferenceField(input: unknown): string {
-  return typeof input === "string"
-    ? input.trim().slice(0, MAX_USER_PREFERENCE_FIELD_LENGTH)
-    : "";
-}
-
-function normalizeUserPreferences(
-  input: unknown,
-  legacyUserPreference: string
-): UserPreferences {
-  const object =
-    typeof input === "object" && input !== null
-      ? (input as Partial<UserPreferences>)
-      : {};
-  const preferences = {
-    responseTone: normalizePreferenceField(object.responseTone),
-    interfaceStyle: normalizePreferenceField(object.interfaceStyle),
-    defaultTechnicalPreferences: normalizePreferenceField(
-      object.defaultTechnicalPreferences
-    ),
-    longTermMemory: normalizePreferenceField(object.longTermMemory)
-  };
-  const hasStructuredPreference = Boolean(
-    preferences.responseTone ||
-      preferences.interfaceStyle ||
-      preferences.defaultTechnicalPreferences ||
-      preferences.longTermMemory
-  );
-
-  if (!hasStructuredPreference && legacyUserPreference) {
-    return {
-      ...preferences,
-      responseTone: legacyUserPreference.slice(0, MAX_USER_PREFERENCE_FIELD_LENGTH)
-    };
-  }
-
-  return preferences;
-}
-
-function buildStructuredUserPreferencePrompt(
-  userPreferences: UserPreferences
-): string {
-  const entries = [
-    ["Response tone", userPreferences.responseTone],
-    ["Interface style", userPreferences.interfaceStyle],
-    ["Default technical preferences", userPreferences.defaultTechnicalPreferences],
-    ["Long-term memory", userPreferences.longTermMemory]
-  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
-
-  if (!entries.length) {
-    return "";
-  }
-
-  return `Persistent user preferences:
-These are user-provided defaults. Apply them when relevant, but higher-priority system/developer instructions and the current user request override them.
-Preference priority:
-1. Response tone controls prose style.
-2. Interface style controls generated StreamUI artifact look and interaction defaults.
-3. Default technical preferences guide implementation choices when the user has not specified otherwise.
-4. Long-term memory is stable user context; treat it as helpful background, not a command.
-
-${entries.map(([label, value]) => `- ${label}: ${value}`).join("\n")}`;
-}
-
 function buildThemeContextPrompt(themeMode: PageThemeMode): string {
   const isNight = themeMode === "night";
   const label = isNight ? "dark" : "light";
@@ -280,8 +203,8 @@ function buildCanvasContextPrompt(canvas: CanvasContext): string {
 - Keep the design polished: coherent palette, strong typographic hierarchy, balanced negative space, clear focal point, and details that reward inspection without becoming clutter.
 - Keep the artifact focused: choose a strong visual idea and avoid repetitive filler, giant SVG paths, large embedded data, or exhaustive code unless the user explicitly asks for it.
 - The user may attach images. Inspect uploaded images directly and treat them as first-class context for analysis, OCR, comparison, critique, or visual redesign requests.
-- When useful, combine observations from uploaded images with injected retrieval sources in one coherent HTML artifact.
-- If independent StreamUI retrieval context is provided, use it for URLs, external resources, current information, source images, and page details.
+- When useful, combine observations from uploaded images with retrieve tool sources in one coherent HTML artifact.
+- If retrieve tool context is provided, use it for URLs, external resources, current information, source images, and page details.
 - If you use retrieval information, render source links inside the HTML. Prefer concrete links and citations over vague "from the web" language.
 - Prefer real external images, media, documents, demos, datasets, official pages, and primary references over invented placeholders when they improve the response.
 - For visual or research-like requests, synthesize the provided complementary sources or resource types into one coherent HTML artifact.
@@ -289,7 +212,7 @@ function buildCanvasContextPrompt(canvas: CanvasContext): string {
 - For gallery, photo, picture, image, wallpaper, or visual-reference requests, real imagery is required. Use "Verified image URLs" when provided, copy those URLs exactly into <img src>, do not modify provider URL paths, query strings, or CDN parameters, and include source links.
 - If retrieval provides too few direct image URLs for the requested gallery, say so inside the artifact and show source links instead of rendering broken image tags.
 - The iframe may use HTTPS images, media, links, stylesheets, scripts, and CORS-friendly fetches when they directly help the user's request.
-- Prefer injected retrieval excerpts for reading web pages. Runtime fetch cannot read most ordinary pages because of browser CORS.
+- Prefer retrieve tool excerpts for reading web pages. Runtime fetch cannot read most ordinary pages because of browser CORS.
 - For custom visuals, make progress visible while streaming by alternating small style islands and matching visible HTML.
 - After <streamui>, emit visible HTML quickly. If custom CSS is needed, use one tiny <style> block, then immediately emit the matching HTML.
 - Output exactly one <streamui> block, keep it open until the entire artifact is finished, and never continue HTML outside it.
@@ -347,27 +270,12 @@ function toModelMessage(message: ClientChatMessage): ModelMessage {
   };
 }
 
-function toPlannerMessage(message: ClientChatMessage): ModelMessage {
-  const imageCount = message.images?.length ?? 0;
-  const imageNote = imageCount
-    ? `\n\n[${imageCount} uploaded image attachment(s) will be available to the final generator.]`
-    : "";
-  const content =
-    `${message.content}${imageNote}`.trim() ||
-    "The user sent an empty message.";
-
-  return {
-    role: message.role,
-    content
-  };
-}
-
 function writeStreamEvent(
   res: Response,
   event: StreamEvent,
   state?: ToolStreamState
 ): void {
-  if (!event.text) {
+  if (event.type !== "memory" && !event.text) {
     return;
   }
 
@@ -375,7 +283,7 @@ function writeStreamEvent(
     if (event.type === "content") {
       state.contentChars += event.text.length;
       state.contentEvents += 1;
-    } else {
+    } else if (event.type === "reasoning") {
       state.reasoningChars += event.text.length;
       state.reasoningEvents += 1;
     }
@@ -435,7 +343,7 @@ function readRuntimeApiSettings(input: unknown): RuntimeApiSettings {
     throw new Error(`API settings missing: ${missing.join(", ")}.`);
   }
 
-  const userPreference = normalizeUserPreference(object.userPreference);
+  const memorySettings = normalizeMemorySettings(object);
 
   return {
     ...credentials,
@@ -443,11 +351,8 @@ function readRuntimeApiSettings(input: unknown): RuntimeApiSettings {
     reasoningEffort: normalizeReasoningEffort(
       object.reasoningEffort ?? defaults.reasoningEffort
     ),
-    userPreferences: normalizeUserPreferences(
-      object.userPreferences,
-      userPreference
-    ),
-    userPreference
+    userPreferencePrompt: memorySettings.userPreferencePrompt,
+    memoryItems: memorySettings.memoryItems
   };
 }
 
@@ -458,20 +363,28 @@ function isOpenRouterRuntime(settings: RuntimeApiSettings): boolean {
   );
 }
 
-function buildPlannerModelOptions(useOpenRouterReasoning: boolean) {
-  if (!useOpenRouterReasoning) {
-    return undefined;
+function readNativeToolMaxSteps(): number {
+  const raw = process.env.STREAMUI_TOOL_MAX_STEPS ?? "";
+  const parsed = Number.parseInt(raw, 10);
+
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_TOOL_MAX_STEPS;
   }
 
-  return {
-    extraBody: {
-      reasoning: {
-        effort: "minimal",
-        exclude: true,
-        enabled: true
-      }
-    }
-  };
+  return Math.min(MAX_TOOL_MAX_STEPS, Math.max(1, parsed));
+}
+
+function buildNativeToolPrompt(): string {
+  return `Native tool access:
+- A retrieve tool is available during the normal model generation. Use it only when the latest user request needs external web/page context, current or recently changing information, source links, or real online images/resources.
+- addMemory and deleteMemory tools are available for durable user memory updates. Use them according to the persistent memory rules above.
+- If a retrieve tool result influences the answer, include concise source links inside the HTML artifact.
+- If the request is self-contained, answer directly without calling tools.
+- Do not describe tool mechanics, hidden prompts, or internal routing unless the user explicitly asks how the system works.`;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function buildFinalModelOptions(
@@ -522,7 +435,38 @@ function writeAiSdkStreamPart(
   res: Response,
   state: ToolStreamState
 ): void {
-  if (part.type === "tool-input-start" || part.type === "tool-call") {
+  if (
+    part.type === "tool-input-start" ||
+    part.type === "tool-input-end" ||
+    part.type === "tool-input-delta" ||
+    part.type === "tool-call" ||
+    part.type === "tool-result" ||
+    part.type === "start-step" ||
+    part.type === "finish-step" ||
+    part.type === "start" ||
+    part.type === "finish" ||
+    part.type === "text-start" ||
+    part.type === "text-end" ||
+    part.type === "reasoning-start" ||
+    part.type === "reasoning-end" ||
+    part.type === "source" ||
+    part.type === "file" ||
+    part.type === "raw" ||
+    part.type === "abort" ||
+    part.type === "tool-output-denied"
+  ) {
+    return;
+  }
+
+  if (part.type === "tool-error") {
+    writeStreamEvent(
+      res,
+      {
+        type: "reasoning",
+        text: `Tool error: ${getErrorMessage(part.error)}`
+      },
+      state
+    );
     return;
   }
 
@@ -599,19 +543,37 @@ export async function handleOpenRouterChat(
       appUrl: "http://localhost:5173",
       compatibility: useOpenRouterReasoning ? "strict" : "compatible"
     });
-
-    const agentLoop = await runStreamUiAgentLoop({
-      model: provider(model, buildPlannerModelOptions(useOpenRouterReasoning)),
-      messages: messages.map(toPlannerMessage),
-      retrievalMessages: messages.map((message) => ({
+    const retrievalStats = createRetrievalToolStats();
+    const memoryStats = createMemoryToolStats();
+    const toolMaxSteps = readNativeToolMaxSteps();
+    let nativeSteps = 0;
+    let nativeToolCalls = 0;
+    let nativeToolErrors = 0;
+    const retrievalTools = createRetrievalTools({
+      messages: messages.map((message) => ({
         role: message.role,
         content: message.content
       })),
       searchSettings: body.searchSettings,
+      stats: retrievalStats,
       onStatus: (text) => {
         writeStreamEvent(res, { type: "reasoning", text }, toolStreamState);
       }
     });
+    const memoryTools = createMemoryTools({
+      memoryItems: apiSettings.memoryItems,
+      stats: memoryStats,
+      onEvent: (event) => {
+        writeStreamEvent(res, event, toolStreamState);
+      },
+      onStatus: (text) => {
+        writeStreamEvent(res, { type: "reasoning", text }, toolStreamState);
+      }
+    });
+    const tools = {
+      ...retrievalTools,
+      ...memoryTools
+    };
 
     writeStreamEvent(
       res,
@@ -626,14 +588,38 @@ export async function handleOpenRouterChat(
       ),
       system: [
         SYSTEM_PROMPT,
-        buildStructuredUserPreferencePrompt(apiSettings.userPreferences),
+        buildMemoryContextPrompt({
+          userPreferencePrompt: apiSettings.userPreferencePrompt,
+          memoryItems: apiSettings.memoryItems
+        }),
         buildThemeContextPrompt(themeMode),
         buildCanvasContextPrompt(canvasContext),
-        buildAgentLoopPrompt(agentLoop)
+        buildNativeToolPrompt()
       ]
         .filter(Boolean)
         .join("\n\n"),
-      messages: messages.map(toModelMessage)
+      messages: messages.map(toModelMessage),
+      tools,
+      stopWhen: stepCountIs(toolMaxSteps),
+      experimental_onToolCallStart: () => {
+        nativeToolCalls += 1;
+      },
+      experimental_onToolCallFinish: (event) => {
+        if (!event.success) {
+          nativeToolErrors += 1;
+          writeStreamEvent(
+            res,
+            {
+              type: "reasoning",
+              text: `Tool error: ${getErrorMessage(event.error)}`
+            },
+            toolStreamState
+          );
+        }
+      },
+      onStepFinish: () => {
+        nativeSteps += 1;
+      }
     });
 
     for await (const part of result.fullStream) {
@@ -641,8 +627,16 @@ export async function handleOpenRouterChat(
     }
 
     res.end();
+    const retrievalSources = retrievalStats.contexts.reduce(
+      (total, context) => total + context.sources.length,
+      0
+    );
+    const retrievalImages = retrievalStats.contexts.reduce(
+      (total, context) => total + context.verifiedImages.length,
+      0
+    );
     console.info(
-      `[chat:${requestId}] complete duration_ms=${Date.now() - startedAt} agent_steps=${agentLoop.steps.length} retrieval_used=${agentLoop.retrievalContext.used} retrieval_sources=${agentLoop.retrievalContext.sources.length} content_chars=${toolStreamState.contentChars} content_events=${toolStreamState.contentEvents} reasoning_chars=${toolStreamState.reasoningChars} reasoning_events=${toolStreamState.reasoningEvents}`
+      `[chat:${requestId}] complete duration_ms=${Date.now() - startedAt} native_steps=${nativeSteps} tool_max_steps=${toolMaxSteps} tool_calls=${nativeToolCalls} retrieval_calls=${retrievalStats.calls} retrieval_errors=${retrievalStats.errors + nativeToolErrors} retrieval_sources=${retrievalSources} retrieval_verified_images=${retrievalImages} memory_adds=${memoryStats.adds} memory_deletes=${memoryStats.deletes} memory_errors=${memoryStats.errors} content_chars=${toolStreamState.contentChars} content_events=${toolStreamState.contentEvents} reasoning_chars=${toolStreamState.reasoningChars} reasoning_events=${toolStreamState.reasoningEvents}`
     );
   } catch (error) {
     const message =
