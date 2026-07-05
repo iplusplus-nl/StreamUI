@@ -1460,6 +1460,16 @@ button {
   box-shadow: none;
 }
 
+.app-shell[data-theme="night"] .composer-footer.has-messages::before {
+  background:
+    linear-gradient(
+      to top,
+      #1f1f1f 0%,
+      #1f1f1f 72%,
+      rgba(31, 31, 31, 0)
+    );
+}
+
 .app-shell[data-theme="night"] .chat-input-dropzone:focus-within {
   background: #303030;
   box-shadow: none;
@@ -1568,6 +1578,7 @@ button {
 
 .message-list.has-messages {
   padding-top: 24px;
+  scroll-padding-bottom: 150px;
 }
 
 .chat-row {
@@ -2109,6 +2120,7 @@ button {
 }
 
 .composer-footer {
+  position: relative;
   z-index: 2;
   width: min(760px, 100%);
   margin: 0 auto;
@@ -2126,6 +2138,21 @@ button {
   bottom: 0;
   margin-top: auto;
   padding: 12px 0 20px;
+}
+
+.composer-footer.has-messages::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -28px -24px 0;
+  background:
+    linear-gradient(
+      to top,
+      #ffffff 0%,
+      #ffffff 72%,
+      rgba(255, 255, 255, 0)
+    );
+  pointer-events: none;
 }
 
 .chat-input-bar {

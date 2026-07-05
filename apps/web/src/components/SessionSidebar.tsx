@@ -576,7 +576,6 @@ export function SessionSidebar({
                 <button
                   className="session-select-button"
                   type="button"
-                  disabled={isSending && session.id !== activeSessionId}
                   aria-current={
                     session.id === activeSessionId ? "page" : undefined
                   }

@@ -1163,19 +1163,31 @@ export default function App() {
     [updateActiveSession]
   );
 
-  const upsertActiveSessionFiles = useCallback(
-    (files: SessionFile[]) => {
+  const upsertSessionFiles = useCallback(
+    (sessionId: string, files: SessionFile[]) => {
       if (!files.length) {
         return;
       }
 
-      updateActiveSession((session) => ({
-        ...session,
-        updatedAt: Date.now(),
-        files: mergeSessionFiles([...session.files, ...files])
-      }));
+      setSessionStateAndRef((current) => {
+        let didUpdate = false;
+        const sessions = current.sessions.map((session) => {
+          if (session.id !== sessionId) {
+            return session;
+          }
+
+          didUpdate = true;
+          return {
+            ...session,
+            updatedAt: Date.now(),
+            files: mergeSessionFiles([...session.files, ...files])
+          };
+        });
+
+        return didUpdate ? { ...current, sessions: sortSessions(sessions) } : current;
+      });
     },
-    [updateActiveSession]
+    [setSessionStateAndRef]
   );
 
   const updateAssistant = useCallback(
@@ -1294,10 +1306,6 @@ export default function App() {
   }, [setSessionStateAndRef]);
 
   const handleSelectSession = useCallback((id: string) => {
-    if (isSendingRef.current && id !== activeSessionIdRef.current) {
-      return;
-    }
-
     setSessionStateAndRef((current) =>
       current.sessions.some((session) => session.id === id)
         ? { ...current, activeSessionId: id }
@@ -1717,7 +1725,7 @@ export default function App() {
         );
         if (artifactUpload) {
           try {
-            upsertActiveSessionFiles([
+            upsertSessionFiles(requestSessionId, [
               await uploadSessionFile(
                 requestSessionId,
                 artifactUpload,
@@ -1768,7 +1776,7 @@ export default function App() {
       themeMode,
       updateActiveSession,
       updateAssistant,
-      upsertActiveSessionFiles
+      upsertSessionFiles
     ]
   );
 
