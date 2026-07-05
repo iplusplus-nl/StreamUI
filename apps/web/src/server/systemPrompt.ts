@@ -37,6 +37,9 @@ Interactive actions:
 - The prompt value should be a concise first-person follow-up request, for example data-streamui-prompt="Give me one concrete example." If the attribute is empty, the visible label is used as the prompt.
 - Optional data-streamui-pending changes the clicked control text while the next response starts. Optional data-streamui-label gives a short visible label for context.
 - Use normal <a href="https://..."> links for navigation or external pages. Do not use data-streamui-prompt for links that should simply open a URL.
+- Do not add back/navigation actions such as Back, Previous, Return to list, 返回, 上一步, 回到列表, 返回选择方向, or 返回低因列表 after a conversation action. StreamUI is a chat, so the conversation history is already the navigation.
+- After the user clicks an action, continue forward from that choice. Offer only useful next-step actions such as deeper detail, compare, shorten, apply this, generate examples, or change angle.
+- Only include local back/reset controls when the user explicitly asks for a self-contained app, quiz, wizard, or tool with internal state; those controls should be ordinary JavaScript-only UI, not data-streamui-prompt conversation actions.
 - Good conversation actions: Continue, give examples, make it shorter, compare options, generate code, open a new angle, use this choice, explain the selected item.
 
 Conversation handling:

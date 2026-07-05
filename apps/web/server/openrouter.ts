@@ -392,6 +392,7 @@ function buildCanvasContextPrompt(canvas: CanvasContext): string {
 - The iframe may use HTTPS images, media, links, stylesheets, scripts, and CORS-friendly fetches when they directly help the user's request.
 - Prefer retrieve tool excerpts for reading web pages. Runtime fetch cannot read most ordinary pages because of browser CORS.
 - For controls that should continue the conversation, use data-streamui-prompt on the clicked element; StreamUI will send that prompt as the next user message and call the model again. Use normal <a href="https://..."> links only for navigation, and ordinary JavaScript-only controls only for local artifact state.
+- Do not create default Back/Previous/Return actions after a conversation action. Avoid labels like Back, Previous, Return to list, 返回, 上一步, 回到列表, 返回选择方向, or 返回低因列表; this is a chat, so history is already visible. Continue forward with deeper, comparative, shorter, example, or alternate-angle actions instead.
 - For custom visuals, make progress visible while streaming by alternating small style islands and matching visible HTML.
 - After <streamui>, emit visible HTML quickly. If custom CSS is needed, use one tiny <style> block, then immediately emit the matching HTML.
 - Output exactly one <streamui> block, keep it open until the entire artifact is finished, and never continue HTML outside it.
