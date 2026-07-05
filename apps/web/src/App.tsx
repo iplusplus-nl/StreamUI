@@ -80,9 +80,27 @@ import type {
 type TextStreamEvent = {
   type?: "content" | "reasoning";
   text?: string;
+  runId?: string;
+  seq?: number;
 };
 
-type ChatStreamEvent = TextStreamEvent | MemoryStreamEvent;
+type DoneStreamEvent = {
+  type: "done";
+  status?: "complete" | "error";
+  error?: string;
+  runId?: string;
+  seq?: number;
+};
+
+type SequencedMemoryStreamEvent = MemoryStreamEvent & {
+  runId?: string;
+  seq?: number;
+};
+
+type ChatStreamEvent =
+  | TextStreamEvent
+  | DoneStreamEvent
+  | SequencedMemoryStreamEvent;
 
 type SendStreamUiRequestOptions = {
   appendUserMessage?: boolean;
@@ -708,6 +726,7 @@ export default function App() {
   const saveAbortRef = useRef<AbortController | null>(null);
   const lastSavedSessionPayloadRef = useRef<string | null>(null);
   const renderersRef = useRef<Map<string, StreamingRenderer>>(new Map());
+  const runConnectionsRef = useRef<Map<string, AbortController>>(new Map());
   const runtimeRepairQueueRef = useRef<
     ((id: string, error: RenderError) => void) | null
   >(null);
@@ -783,6 +802,13 @@ export default function App() {
   useEffect(() => {
     sessionsLoadedRef.current = sessionsLoaded;
   }, [sessionsLoaded]);
+
+  useEffect(() => {
+    return () => {
+      runConnectionsRef.current.forEach((controller) => controller.abort());
+      runConnectionsRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1211,11 +1237,14 @@ export default function App() {
         status: "complete"
       };
       const assistantId = createId("assistant");
+      const generationRunId = createId("run");
       const assistantMessage: ClientMessage = {
         id: assistantId,
         role: "assistant",
         content: "",
         rawStream: "",
+        generationRunId,
+        streamSequence: 0,
         status: "streaming",
         ...(options.initialReasoning
           ? { reasoning: options.initialReasoning }
@@ -1224,6 +1253,8 @@ export default function App() {
       };
       const renderer = createStreamingRenderer(themeMode);
       renderersRef.current.set(assistantId, renderer);
+      const streamController = new AbortController();
+      runConnectionsRef.current.set(generationRunId, streamController);
 
       const unsubscribeSnapshot = renderer.onSnapshot((snapshot) => {
         updateAssistant(assistantId, { snapshot });
@@ -1246,7 +1277,11 @@ export default function App() {
 
       let raw = "";
       let reasoning = options.initialReasoning ?? "";
-      const handleContentChunk = (chunk: string) => {
+      let lastStreamSequence = 0;
+      let streamConnected = false;
+      let doneStatus: "complete" | "error" | undefined;
+      let doneError = "";
+      const handleContentChunk = (chunk: string, streamSequence?: number) => {
         raw += chunk;
         const parts = extractStreamUiParts(raw);
 
@@ -1271,7 +1306,8 @@ export default function App() {
           ...(artifactContext ? { artifactContext } : {}),
           ...(sessionTitle ? { sessionTitle } : {}),
           hasStreamUi: parts.hasStreamUi,
-          streamUiComplete: parts.streamUiComplete
+          streamUiComplete: parts.streamUiComplete,
+          ...(typeof streamSequence === "number" ? { streamSequence } : {})
         });
       };
 
@@ -1282,17 +1318,38 @@ export default function App() {
 
         try {
           const event = JSON.parse(line) as ChatStreamEvent;
+          const streamSequence =
+            typeof event.seq === "number" && Number.isFinite(event.seq)
+              ? Math.max(0, Math.round(event.seq))
+              : undefined;
+          if (typeof streamSequence === "number") {
+            lastStreamSequence = streamSequence;
+          }
+          if (event.type === "done") {
+            doneStatus = event.status === "error" ? "error" : "complete";
+            doneError = event.error ?? "";
+            if (typeof streamSequence === "number") {
+              updateAssistant(assistantId, { streamSequence });
+            }
+            return;
+          }
           if (event.type === "memory") {
             handleMemoryStreamEvent(event);
+            if (typeof streamSequence === "number") {
+              updateAssistant(assistantId, { streamSequence });
+            }
             return;
           }
           if (event.type === "reasoning" && event.text) {
             reasoning += event.text;
-            updateAssistant(assistantId, { reasoning });
+            updateAssistant(assistantId, {
+              reasoning,
+              ...(typeof streamSequence === "number" ? { streamSequence } : {})
+            });
             return;
           }
           if (event.type === "content" && event.text) {
-            handleContentChunk(event.text);
+            handleContentChunk(event.text, streamSequence);
             return;
           }
         } catch {
@@ -1305,9 +1362,10 @@ export default function App() {
           throw new Error("Image upload is still in progress. Please wait before sending.");
         }
 
+        const requestSessionId = activeSessionIdRef.current;
         const requestHistory = options.requestHistory ?? [...previousMessages, userMessage];
         const requestSession = sessionStateRef.current.sessions.find(
-          (session) => session.id === activeSessionIdRef.current
+          (session) => session.id === requestSessionId
         );
         const requestFiles = mergeSessionFiles([
           ...(requestSession?.files ?? []),
@@ -1319,7 +1377,12 @@ export default function App() {
           headers: {
             "Content-Type": "application/json"
           },
+          signal: streamController.signal,
           body: JSON.stringify({
+            sessionId: requestSessionId,
+            runId: generationRunId,
+            userMessage: appendUserMessage ? userMessage : undefined,
+            assistantMessage,
             messages: toApiMessages(requestHistory),
             files: requestFiles,
             canvas: getCanvasContext(),
@@ -1333,6 +1396,7 @@ export default function App() {
           const errorText = await response.text();
           throw new Error(errorText || `Request failed with ${response.status}.`);
         }
+        streamConnected = true;
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -1358,6 +1422,22 @@ export default function App() {
           streamBuffer.split("\n").forEach(handleStreamEvent);
         }
 
+        if (doneStatus === "error") {
+          const finalParts = extractStreamUiParts(raw);
+          updateAssistant(assistantId, {
+            content:
+              finalParts.chat ||
+              finalParts.fallbackText ||
+              "I could not complete that request.",
+            reasoning,
+            rawStream: raw,
+            streamSequence: lastStreamSequence,
+            error: doneError || "The chat request failed.",
+            status: "error"
+          });
+          return;
+        }
+
         const finalParts = extractStreamUiParts(raw);
         let finalSnapshot: RenderSnapshot | undefined;
         const artifactContext =
@@ -1378,6 +1458,7 @@ export default function App() {
             ? { sessionTitle: finalParts.sessionTitle }
             : {}),
           rawStream: raw,
+          streamSequence: lastStreamSequence,
           ...(finalSnapshot ? { snapshot: finalSnapshot } : {}),
           ...(artifactContext ? { artifactContext } : {}),
           hasStreamUi: finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,
@@ -1393,7 +1474,7 @@ export default function App() {
         if (artifactUpload) {
           try {
             upsertActiveSessionFiles([
-              await uploadSessionFile(activeSessionIdRef.current, artifactUpload)
+              await uploadSessionFile(requestSessionId, artifactUpload)
             ]);
           } catch (uploadError) {
             console.warn("Could not persist StreamUI artifact file.", uploadError);
@@ -1402,17 +1483,28 @@ export default function App() {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "The chat request failed.";
+        if (streamConnected && doneStatus !== "error") {
+          updateAssistant(assistantId, {
+            reasoning,
+            rawStream: raw,
+            streamSequence: lastStreamSequence,
+            status: "streaming"
+          });
+          return;
+        }
         updateAssistant(assistantId, {
           content: "I could not complete that request.",
           error: message,
           reasoning,
           rawStream: raw,
+          streamSequence: lastStreamSequence,
           status: "error"
         });
       } finally {
         unsubscribeSnapshot();
         renderersRef.current.delete(assistantId);
-        setIsSending(false);
+        runConnectionsRef.current.delete(generationRunId);
+        setIsSending(runConnectionsRef.current.size > 0);
       }
     },
     [
@@ -1425,6 +1517,237 @@ export default function App() {
       upsertActiveSessionFiles
     ]
   );
+
+  useEffect(() => {
+    if (!sessionsLoaded) {
+      return;
+    }
+
+    const refreshSessionsFromServer = async () => {
+      const response = await fetch("/api/sessions");
+      if (!response.ok) {
+        throw new Error(`Session load failed with HTTP ${response.status}.`);
+      }
+      setSessionStateAndRef(normalizeStoredSessionState(await response.json()));
+    };
+
+    for (const session of sessionState.sessions) {
+      for (const message of session.messages) {
+        const generationRunId = message.generationRunId;
+        if (
+          message.role !== "assistant" ||
+          message.status !== "streaming" ||
+          !generationRunId ||
+          runConnectionsRef.current.has(generationRunId)
+        ) {
+          continue;
+        }
+
+        const controller = new AbortController();
+        runConnectionsRef.current.set(generationRunId, controller);
+        setIsSending(true);
+
+        void (async () => {
+          const renderer = createStreamingRenderer(themeMode);
+          renderersRef.current.set(message.id, renderer);
+          const unsubscribeSnapshot = renderer.onSnapshot((snapshot) => {
+            updateAssistant(message.id, { snapshot });
+          });
+          let raw = message.rawStream ?? "";
+          let reasoning = message.reasoning ?? "";
+          let lastStreamSequence = message.streamSequence ?? 0;
+          let doneStatus: "complete" | "error" | undefined;
+          let doneError = "";
+
+          const handleContentChunk = (chunk: string, streamSequence?: number) => {
+            raw += chunk;
+            const parts = extractStreamUiParts(raw);
+
+            if (parts.hasStreamUi) {
+              renderer.replace(parts.streamui);
+            }
+
+            const snapshot = parts.hasStreamUi
+              ? renderer.getSnapshot()
+              : undefined;
+            const artifactContext =
+              parts.hasStreamUi && parts.streamUiComplete && parts.streamui.trim()
+                ? buildArtifactContext(raw)
+                : undefined;
+            const sessionTitle =
+              parts.sessionTitleComplete && parts.sessionTitle.trim()
+                ? parts.sessionTitle
+                : undefined;
+
+            updateAssistant(message.id, {
+              content: parts.chat || (!parts.hasStreamUi ? parts.fallbackText : ""),
+              rawStream: raw,
+              ...(snapshot ? { snapshot } : {}),
+              ...(artifactContext ? { artifactContext } : {}),
+              ...(sessionTitle ? { sessionTitle } : {}),
+              hasStreamUi: parts.hasStreamUi,
+              streamUiComplete: parts.streamUiComplete,
+              ...(typeof streamSequence === "number" ? { streamSequence } : {})
+            });
+          };
+
+          const handleStreamEvent = (line: string) => {
+            if (!line.trim()) {
+              return;
+            }
+
+            try {
+              const event = JSON.parse(line) as ChatStreamEvent;
+              const streamSequence =
+                typeof event.seq === "number" && Number.isFinite(event.seq)
+                  ? Math.max(0, Math.round(event.seq))
+                  : undefined;
+              if (typeof streamSequence === "number") {
+                lastStreamSequence = streamSequence;
+              }
+              if (event.type === "done") {
+                doneStatus = event.status === "error" ? "error" : "complete";
+                doneError = event.error ?? "";
+                if (typeof streamSequence === "number") {
+                  updateAssistant(message.id, { streamSequence });
+                }
+                return;
+              }
+              if (event.type === "memory") {
+                handleMemoryStreamEvent(event);
+                if (typeof streamSequence === "number") {
+                  updateAssistant(message.id, { streamSequence });
+                }
+                return;
+              }
+              if (event.type === "reasoning" && event.text) {
+                reasoning += event.text;
+                updateAssistant(message.id, {
+                  reasoning,
+                  ...(typeof streamSequence === "number"
+                    ? { streamSequence }
+                    : {})
+                });
+                return;
+              }
+              if (event.type === "content" && event.text) {
+                handleContentChunk(event.text, streamSequence);
+                return;
+              }
+            } catch {
+              handleContentChunk(line);
+            }
+          };
+
+          try {
+            const response = await fetch(
+              `/api/chat/runs/${encodeURIComponent(
+                generationRunId
+              )}/events?after=${encodeURIComponent(String(lastStreamSequence))}`,
+              { signal: controller.signal }
+            );
+
+            if (response.status === 404) {
+              await refreshSessionsFromServer();
+              return;
+            }
+
+            if (!response.ok || !response.body) {
+              const errorText = await response.text();
+              throw new Error(
+                errorText || `Run resume failed with HTTP ${response.status}.`
+              );
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let streamBuffer = "";
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+
+              streamBuffer += decoder.decode(value, { stream: true });
+              const lines = streamBuffer.split("\n");
+              streamBuffer = lines.pop() ?? "";
+              lines.forEach(handleStreamEvent);
+            }
+
+            const tail = decoder.decode();
+            if (tail) {
+              streamBuffer += tail;
+            }
+            if (streamBuffer.trim()) {
+              streamBuffer.split("\n").forEach(handleStreamEvent);
+            }
+
+            if (doneStatus === "error") {
+              const finalParts = extractStreamUiParts(raw);
+              updateAssistant(message.id, {
+                content:
+                  finalParts.chat ||
+                  finalParts.fallbackText ||
+                  "I could not complete that request.",
+                reasoning,
+                rawStream: raw,
+                streamSequence: lastStreamSequence,
+                error: doneError || "The chat request failed.",
+                status: "error"
+              });
+              return;
+            }
+
+            const finalParts = extractStreamUiParts(raw);
+            let finalSnapshot: RenderSnapshot | undefined;
+            const artifactContext =
+              finalParts.hasStreamUi && finalParts.streamui.trim()
+                ? buildArtifactContext(raw)
+                : undefined;
+
+            if (finalParts.hasStreamUi && finalParts.streamui.trim()) {
+              renderer.replace(finalParts.streamui);
+              renderer.complete();
+              finalSnapshot = renderer.getSnapshot();
+            }
+
+            updateAssistant(message.id, {
+              content: finalParts.chat || finalParts.fallbackText,
+              reasoning,
+              ...(finalParts.sessionTitleComplete && finalParts.sessionTitle.trim()
+                ? { sessionTitle: finalParts.sessionTitle }
+                : {}),
+              rawStream: raw,
+              streamSequence: lastStreamSequence,
+              ...(finalSnapshot ? { snapshot: finalSnapshot } : {}),
+              ...(artifactContext ? { artifactContext } : {}),
+              hasStreamUi:
+                finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,
+              streamUiComplete: finalParts.streamUiComplete,
+              status: "complete"
+            });
+          } catch (error) {
+            if ((error as { name?: unknown }).name !== "AbortError") {
+              console.warn("Could not resume StreamUI run.", error);
+            }
+          } finally {
+            unsubscribeSnapshot();
+            renderersRef.current.delete(message.id);
+            runConnectionsRef.current.delete(generationRunId);
+            setIsSending(runConnectionsRef.current.size > 0);
+          }
+        })();
+      }
+    }
+  }, [
+    handleMemoryStreamEvent,
+    sessionState.sessions,
+    sessionsLoaded,
+    setSessionStateAndRef,
+    themeMode,
+    updateAssistant
+  ]);
 
   const requestRuntimeRepair = useCallback(
     async (id: string, error: RenderError) => {

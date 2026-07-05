@@ -23,6 +23,8 @@ export type ClientMessage = {
   runtimeErrors?: RenderError[];
   repairOfMessageId?: string;
   repairAttempt?: number;
+  generationRunId?: string;
+  streamSequence?: number;
   status?: "streaming" | "complete" | "error";
   error?: string;
 };
@@ -531,13 +533,16 @@ export function rebuildAssistantSnapshot(message: ClientMessage): ClientMessage 
     message.runtimeErrors
   );
 
+  const shouldCompletePartialStream =
+    message.status === "streaming" && !message.generationRunId;
+
   return {
     ...message,
     snapshot,
     hasStreamUi: true,
     streamUiComplete: parts.streamUiComplete,
     artifactContext: message.artifactContext ?? buildArtifactContext(message.rawStream),
-    status: message.status === "streaming" ? "complete" : message.status
+    status: shouldCompletePartialStream ? "complete" : message.status
   };
 }
 
@@ -576,10 +581,18 @@ export function normalizeStoredMessage(message: unknown): ClientMessage | null {
       typeof input.repairAttempt === "number" && Number.isFinite(input.repairAttempt)
         ? Math.max(1, Math.round(input.repairAttempt))
         : undefined,
+    generationRunId:
+      typeof input.generationRunId === "string" && input.generationRunId.trim()
+        ? input.generationRunId.trim()
+        : undefined,
+    streamSequence:
+      typeof input.streamSequence === "number" && Number.isFinite(input.streamSequence)
+        ? Math.max(0, Math.round(input.streamSequence))
+        : undefined,
     status:
-      input.status === "streaming"
-        ? "complete"
-        : input.status === "complete" || input.status === "error"
+      input.status === "streaming" ||
+      input.status === "complete" ||
+      input.status === "error"
           ? input.status
           : input.role === "assistant"
             ? "complete"
@@ -680,14 +693,6 @@ export function serializeMessage(
     attachments: _attachments,
     ...serializable
   } = message;
-
-  if (serializable.status === "streaming") {
-    return {
-      ...serializable,
-      status: "error",
-      error: serializable.error ?? STREAM_INTERRUPTED_ERROR
-    };
-  }
 
   return {
     ...serializable

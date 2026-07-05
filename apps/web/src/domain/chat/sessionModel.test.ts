@@ -8,7 +8,6 @@ import {
   normalizeStoredMessage,
   normalizeStoredSessionState,
   serializeSessions,
-  STREAM_INTERRUPTED_ERROR,
   summarizeSession,
   titleFromText,
   type ChatSession,
@@ -68,6 +67,23 @@ describe("sessionModel", () => {
     assert.match(message?.snapshot?.iframeDocument ?? "", /<p>Saved<\/p>/);
     assert.equal(message?.artifactContext?.textSummary, "Saved");
     assert.match(message?.artifactContext?.id ?? "", /^artifact-[a-z0-9]+$/);
+  });
+
+  it("preserves resumable stored assistant streams", () => {
+    const message = normalizeStoredMessage({
+      id: "a1",
+      role: "assistant",
+      content: "",
+      status: "streaming",
+      generationRunId: "run-1",
+      streamSequence: 4,
+      rawStream: "<chat></chat><streamui><p>Still streaming"
+    });
+
+    assert.equal(message?.status, "streaming");
+    assert.equal(message?.generationRunId, "run-1");
+    assert.equal(message?.streamSequence, 4);
+    assert.equal(message?.hasStreamUi, true);
   });
 
   it("migrates stored assistant artifacts into session files", () => {
@@ -166,7 +182,7 @@ describe("sessionModel", () => {
     );
   });
 
-  it("serializes sessions without transient snapshots and marks active streams", () => {
+  it("serializes sessions without transient snapshots and preserves active streams", () => {
     const sessions: ChatSession[] = [
       {
         id: "s1",
@@ -179,6 +195,8 @@ describe("sessionModel", () => {
             id: "a1",
             role: "assistant",
             content: "",
+            generationRunId: "run-1",
+            streamSequence: 12,
             status: "streaming",
             snapshot: {
               raw: "",
@@ -194,8 +212,10 @@ describe("sessionModel", () => {
 
     const serialized = serializeSessions(sessions);
 
-    assert.equal(serialized[0].messages[0].status, "error");
-    assert.equal(serialized[0].messages[0].error, STREAM_INTERRUPTED_ERROR);
+    assert.equal(serialized[0].messages[0].status, "streaming");
+    assert.equal(serialized[0].messages[0].error, undefined);
+    assert.equal(serialized[0].messages[0].generationRunId, "run-1");
+    assert.equal(serialized[0].messages[0].streamSequence, 12);
     assert.equal("snapshot" in serialized[0].messages[0], false);
   });
 

@@ -29,11 +29,13 @@ type StoredMessage = {
   runtimeErrors?: unknown[];
   repairOfMessageId?: string;
   repairAttempt?: number;
-  status?: "complete" | "error";
+  generationRunId?: string;
+  streamSequence?: number;
+  status?: "streaming" | "complete" | "error";
   error?: string;
 };
 
-type StoredSessionFile = {
+export type StoredSessionFile = {
   id: string;
   kind: "image" | "artifact" | "text";
   name: string;
@@ -68,6 +70,28 @@ type StoredSessionState = {
   activeSessionId: string;
 };
 
+export type SessionMessageInput = {
+  id: string;
+  role: "user" | "assistant";
+  content?: string;
+  fileIds?: string[];
+  reasoning?: string;
+  sessionTitle?: string;
+  rawStream?: string;
+  hasStreamUi?: boolean;
+  streamUiComplete?: boolean;
+  artifactContext?: unknown;
+  runtimeErrors?: unknown[];
+  repairOfMessageId?: string;
+  repairAttempt?: number;
+  generationRunId?: string;
+  streamSequence?: number;
+  status?: "streaming" | "complete" | "error";
+  error?: string;
+};
+
+export type SessionMessagePatch = Partial<Omit<SessionMessageInput, "id" | "role">>;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 const workspaceRoot = path.resolve(projectRoot, "../..");
@@ -81,6 +105,8 @@ const sqliteFile = path.resolve(
     path.join(sessionsDir, "state.sqlite")
 );
 const SESSION_STATE_KEY = "global";
+const STREAM_INTERRUPTED_ERROR =
+  "The stream was interrupted before it completed.";
 
 let saveQueue = Promise.resolve();
 let database: SqliteDatabase | null = null;
@@ -229,6 +255,15 @@ function normalizeMessage(input: unknown): StoredMessage | null {
     return null;
   }
 
+  const status =
+    message.role === "assistant"
+      ? message.status === "streaming" ||
+        message.status === "complete" ||
+        message.status === "error"
+        ? message.status
+        : "complete"
+      : undefined;
+
   return {
     id: message.id,
     role: message.role,
@@ -255,12 +290,13 @@ function normalizeMessage(input: unknown): StoredMessage | null {
       Number.isFinite(message.repairAttempt)
         ? Math.max(1, Math.round(message.repairAttempt))
         : undefined,
-    status:
-      message.status === "error"
-        ? "error"
-        : message.role === "assistant"
-          ? "complete"
-          : undefined,
+    generationRunId: stringValue(message.generationRunId) || undefined,
+    streamSequence:
+      typeof message.streamSequence === "number" &&
+      Number.isFinite(message.streamSequence)
+        ? Math.max(0, Math.round(message.streamSequence))
+        : undefined,
+    status,
     error: stringValue(message.error) || undefined
   };
 }
@@ -501,6 +537,229 @@ function ensureSession(
   return session;
 }
 
+function hasActiveRunMessage(session: StoredSession): boolean {
+  return session.messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.status === "streaming" &&
+      Boolean(message.generationRunId)
+  );
+}
+
+function mergeSessionFiles(
+  current: StoredSessionFile[] | undefined,
+  incoming: StoredSessionFile[] | undefined
+): StoredSessionFile[] {
+  const files = new Map<string, StoredSessionFile>();
+  for (const file of current ?? []) {
+    files.set(file.id, file);
+  }
+  for (const file of incoming ?? []) {
+    files.set(file.id, file);
+  }
+  return Array.from(files.values()).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function shouldPreserveCurrentRunMessage(
+  current: StoredMessage | undefined,
+  incoming: StoredMessage
+): boolean {
+  if (
+    !current ||
+    current.role !== "assistant" ||
+    !current.generationRunId ||
+    current.generationRunId !== incoming.generationRunId
+  ) {
+    return false;
+  }
+
+  const currentSequence = current.streamSequence ?? -1;
+  const incomingSequence = incoming.streamSequence ?? -1;
+  const incomingInterrupted =
+    incoming.status === "error" && incoming.error === STREAM_INTERRUPTED_ERROR;
+
+  if (currentSequence > incomingSequence) {
+    return true;
+  }
+
+  if (current.status === "complete" && incoming.status !== "complete") {
+    return true;
+  }
+
+  if (current.status === "streaming" && incomingInterrupted) {
+    return true;
+  }
+
+  return false;
+}
+
+function mergeMessagesForClientSave(
+  current: StoredMessage[],
+  incoming: StoredMessage[]
+): StoredMessage[] {
+  const currentById = new Map(current.map((message) => [message.id, message]));
+  const incomingIds = new Set(incoming.map((message) => message.id));
+  const missingActiveRun = current.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.status === "streaming" &&
+      Boolean(message.generationRunId) &&
+      !incomingIds.has(message.id)
+  );
+
+  if (missingActiveRun) {
+    return current;
+  }
+
+  return incoming.map((message) => {
+    const currentMessage = currentById.get(message.id);
+    return shouldPreserveCurrentRunMessage(currentMessage, message)
+      ? currentMessage ?? message
+      : message;
+  });
+}
+
+function mergeClientSaveState(
+  current: StoredSessionState,
+  incoming: StoredSessionState
+): StoredSessionState {
+  const currentById = new Map(current.sessions.map((session) => [session.id, session]));
+  const incomingIds = new Set(incoming.sessions.map((session) => session.id));
+  const sessions = incoming.sessions.map((session) => {
+    const currentSession = currentById.get(session.id);
+    if (!currentSession) {
+      return session;
+    }
+    const hasActiveRun = hasActiveRunMessage(currentSession);
+
+    return {
+      ...session,
+      updatedAt: hasActiveRun
+        ? Math.max(session.updatedAt, currentSession.updatedAt)
+        : session.updatedAt,
+      messages: mergeMessagesForClientSave(currentSession.messages, session.messages),
+      files: hasActiveRun
+        ? mergeSessionFiles(currentSession.files, session.files)
+        : session.files
+    };
+  });
+
+  for (const session of current.sessions) {
+    if (!incomingIds.has(session.id) && hasActiveRunMessage(session)) {
+      sessions.push(session);
+    }
+  }
+
+  const activeSessionId = sessions.some(
+    (session) => session.id === incoming.activeSessionId
+  )
+    ? incoming.activeSessionId
+    : sessions[0]?.id ?? incoming.activeSessionId;
+
+  return normalizeState({
+    sessions,
+    activeSessionId
+  });
+}
+
+function mergeMessage(
+  current: StoredMessage,
+  patch: Partial<StoredMessage>
+): StoredMessage {
+  return (
+    normalizeMessage({
+      ...current,
+      ...patch,
+      id: current.id,
+      role: current.role,
+      content:
+        Object.prototype.hasOwnProperty.call(patch, "content")
+          ? patch.content
+          : current.content
+    }) ?? current
+  );
+}
+
+function upsertMessages(
+  session: StoredSession,
+  inputs: SessionMessageInput[]
+): void {
+  for (const input of inputs) {
+    const message = normalizeMessage(input);
+    if (!message) {
+      continue;
+    }
+
+    const index = session.messages.findIndex(
+      (candidate) => candidate.id === message.id
+    );
+    if (index >= 0) {
+      session.messages[index] = mergeMessage(session.messages[index], message);
+    } else {
+      session.messages.push(message);
+    }
+  }
+}
+
+async function enqueueSessionStateUpdate(
+  updater: (state: StoredSessionState) => void | StoredSessionState
+): Promise<void> {
+  const operation = saveQueue.then(async () => {
+    const state = await readSessionState();
+    const updated = updater(state) ?? state;
+    await writeSessionState(updated);
+  });
+  saveQueue = operation.then(
+    () => undefined,
+    () => undefined
+  );
+  await operation;
+}
+
+export async function upsertSessionMessages({
+  sessionId,
+  messages,
+  files
+}: {
+  sessionId: string;
+  messages: SessionMessageInput[];
+  files?: StoredSessionFile[];
+}): Promise<void> {
+  await enqueueSessionStateUpdate((state) => {
+    const session = ensureSession(state, sessionId);
+    upsertMessages(session, messages);
+    if (files?.length) {
+      session.files = mergeSessionFiles(session.files, files);
+    }
+    session.updatedAt = now();
+  });
+}
+
+export async function patchSessionMessage({
+  sessionId,
+  messageId,
+  patch
+}: {
+  sessionId: string;
+  messageId: string;
+  patch: SessionMessagePatch;
+}): Promise<void> {
+  await enqueueSessionStateUpdate((state) => {
+    const session = findSession(state, sessionId);
+    if (!session) {
+      return;
+    }
+
+    const index = session.messages.findIndex((message) => message.id === messageId);
+    if (index < 0) {
+      return;
+    }
+
+    session.messages[index] = mergeMessage(session.messages[index], patch);
+    session.updatedAt = now();
+  });
+}
+
 function findFileById(
   state: StoredSessionState,
   fileId: string
@@ -578,7 +837,10 @@ export async function handleSaveSessions(
 ): Promise<void> {
   try {
     const state = normalizeState(req.body);
-    saveQueue = saveQueue.then(() => writeSessionState(state));
+    saveQueue = saveQueue.then(async () => {
+      const current = await readSessionState();
+      await writeSessionState(mergeClientSaveState(current, state));
+    });
     await saveQueue;
     res.json({ ok: true });
   } catch (error) {

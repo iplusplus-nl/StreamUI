@@ -19,10 +19,18 @@ import {
   normalizeSessionFiles,
   readFileToolDefinition,
   readFileToolResult,
+  type SessionFile,
   type ResponsesInputContentPart,
   type ResponsesToolDefinition,
   type ResponsesToolOutput
 } from "./sessionFileTools.js";
+import {
+  patchSessionMessage,
+  upsertSessionMessages,
+  type SessionMessageInput,
+  type SessionMessagePatch,
+  type StoredSessionFile
+} from "./sessions.js";
 import {
   getRuntimeApiDefaults,
   readRuntimeApiCredentials,
@@ -106,6 +114,19 @@ type StreamEvent =
     }
   | MemoryStreamEvent;
 
+type ChatDoneEvent = {
+  type: "done";
+  status: "complete" | "error";
+  error?: string;
+};
+
+type SequencedStreamEvent = (StreamEvent | ChatDoneEvent) & {
+  runId: string;
+  seq: number;
+};
+
+type StreamEventWriter = (event: StreamEvent) => void;
+
 type ToolStreamState = {
   contentChars: number;
   contentEvents: number;
@@ -118,11 +139,160 @@ type ResponsesToolExecutionResult = {
   followUpInput?: ResponsesInputItem[];
 };
 
+type ChatRequestBody = {
+  messages?: unknown;
+  files?: unknown;
+  canvas?: unknown;
+  themeMode?: unknown;
+  apiSettings?: unknown;
+  searchSettings?: unknown;
+  sessionId?: unknown;
+  runId?: unknown;
+  userMessage?: unknown;
+  assistantMessage?: unknown;
+};
+
+type ChatRunInput = {
+  requestId: string;
+  startedAt: number;
+  runId: string;
+  sessionId?: string;
+  userMessage?: SessionMessageInput;
+  assistantMessage?: SessionMessageInput;
+  apiSettings: RuntimeApiSettings;
+  model: string;
+  messages: ClientChatMessage[];
+  files: SessionFile[];
+  canvasContext: CanvasContext;
+  themeMode: PageThemeMode;
+  useOpenRouterReasoning: boolean;
+  searchSettings?: unknown;
+};
+
+type ChatRun = {
+  id: string;
+  input: ChatRunInput;
+  events: SequencedStreamEvent[];
+  subscribers: Set<(event: SequencedStreamEvent) => void>;
+  sequence: number;
+  raw: string;
+  reasoning: string;
+  status: "running" | "complete" | "error";
+  error?: string;
+  persistTimer?: NodeJS.Timeout;
+  persistPromise: Promise<void>;
+  cleanupTimer?: NodeJS.Timeout;
+};
+
+const chatRuns = new Map<string, ChatRun>();
+const CHAT_RUN_TTL_MS = 10 * 60 * 1000;
+const STREAM_PERSIST_INTERVAL_MS = 500;
+
 function flushResponse(res: Response): void {
   const flush = (res as Response & { flush?: () => void }).flush;
   if (typeof flush === "function") {
     flush.call(res);
   }
+}
+
+function stringValue(value: unknown, maxLength = 2_000): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function normalizeStringArray(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const item of input) {
+    const value = stringValue(item, 180);
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    values.push(value);
+  }
+
+  return values.length ? values : undefined;
+}
+
+function extractBetweenTag(raw: string, tagName: "sessiontitle" | "chat") {
+  const openPattern = new RegExp(`<${tagName}\\b[^>]*>`, "i");
+  const openMatch = openPattern.exec(raw);
+  if (!openMatch || openMatch.index === undefined) {
+    return { content: "", hasOpen: false, hasClose: false };
+  }
+
+  const start = openMatch.index + openMatch[0].length;
+  const closePattern = new RegExp(`</${tagName}>`, "i");
+  const closeMatch = closePattern.exec(raw.slice(start));
+  const end = closeMatch ? start + closeMatch.index : raw.length;
+
+  return {
+    content: raw.slice(start, end),
+    hasOpen: true,
+    hasClose: Boolean(closeMatch)
+  };
+}
+
+function extractStreamUi(raw: string) {
+  const openPattern = /<streamui\b[^>]*>/i;
+  const openMatch = openPattern.exec(raw);
+  if (!openMatch || openMatch.index === undefined) {
+    return { content: "", hasOpen: false, hasClose: false };
+  }
+
+  const start = openMatch.index + openMatch[0].length;
+  const closePattern = /<\/streamui>/i;
+  const closeMatch = closePattern.exec(raw.slice(start));
+  const end = closeMatch ? start + closeMatch.index : raw.length;
+
+  return {
+    content: raw.slice(start, end),
+    hasOpen: true,
+    hasClose: Boolean(closeMatch)
+  };
+}
+
+function stripProtocolTags(raw: string): string {
+  return raw
+    .replace(/<sessiontitle\b[^>]*>[\s\S]*?<\/sessiontitle>/gi, "")
+    .replace(/<chat\b[^>]*>/gi, "")
+    .replace(/<\/chat>/gi, "")
+    .replace(/<streamui\b[^>]*>[\s\S]*?<\/streamui>/gi, "")
+    .replace(/<streamui\b[^>]*>[\s\S]*$/gi, "")
+    .trim();
+}
+
+function getStreamUiMessagePatch(
+  raw: string,
+  reasoning: string,
+  status: "streaming" | "complete" | "error",
+  streamSequence: number,
+  generationRunId: string,
+  error?: string
+): SessionMessagePatch {
+  const chat = extractBetweenTag(raw, "chat");
+  const sessionTitle = extractBetweenTag(raw, "sessiontitle");
+  const streamui = extractStreamUi(raw);
+  const content = chat.content.trim() || (!streamui.hasOpen ? stripProtocolTags(raw) : "");
+
+  return {
+    content: content || (status === "error" && !raw ? "I could not complete that request." : ""),
+    rawStream: raw,
+    reasoning: reasoning || undefined,
+    ...(sessionTitle.hasClose && sessionTitle.content.trim()
+      ? { sessionTitle: sessionTitle.content.trim() }
+      : {}),
+    hasStreamUi: streamui.hasOpen,
+    streamUiComplete: streamui.hasClose,
+    generationRunId,
+    streamSequence,
+    status,
+    ...(error ? { error } : {})
+  };
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number) {
@@ -279,7 +449,7 @@ function toResponsesInputMessage(
 }
 
 function writeStreamEvent(
-  res: Response,
+  emit: StreamEventWriter,
   event: StreamEvent,
   state?: ToolStreamState
 ): void {
@@ -297,8 +467,373 @@ function writeStreamEvent(
     }
   }
 
-  res.write(`${JSON.stringify(event)}\n`);
-  flushResponse(res);
+  emit(event);
+}
+
+function normalizeSessionMessageInput(input: unknown): SessionMessageInput | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+
+  const message = input as Partial<SessionMessageInput>;
+  if (
+    typeof message.id !== "string" ||
+    (message.role !== "user" && message.role !== "assistant")
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: message.id,
+    role: message.role,
+    content: typeof message.content === "string" ? message.content : "",
+    fileIds: normalizeStringArray(message.fileIds),
+    reasoning: typeof message.reasoning === "string" ? message.reasoning : undefined,
+    sessionTitle:
+      typeof message.sessionTitle === "string" ? message.sessionTitle : undefined,
+    rawStream: typeof message.rawStream === "string" ? message.rawStream : undefined,
+    hasStreamUi: Boolean(message.hasStreamUi),
+    streamUiComplete: Boolean(message.streamUiComplete),
+    artifactContext:
+      message.artifactContext && typeof message.artifactContext === "object"
+        ? message.artifactContext
+        : undefined,
+    runtimeErrors: Array.isArray(message.runtimeErrors)
+      ? message.runtimeErrors
+      : undefined,
+    repairOfMessageId:
+      typeof message.repairOfMessageId === "string"
+        ? message.repairOfMessageId
+        : undefined,
+    repairAttempt:
+      typeof message.repairAttempt === "number" &&
+      Number.isFinite(message.repairAttempt)
+        ? Math.max(1, Math.round(message.repairAttempt))
+        : undefined,
+    generationRunId:
+      typeof message.generationRunId === "string"
+        ? message.generationRunId
+        : undefined,
+    streamSequence:
+      typeof message.streamSequence === "number" &&
+      Number.isFinite(message.streamSequence)
+        ? Math.max(0, Math.round(message.streamSequence))
+        : undefined,
+    status:
+      message.status === "streaming" ||
+      message.status === "complete" ||
+      message.status === "error"
+        ? message.status
+        : message.role === "assistant"
+          ? "complete"
+          : undefined,
+    error: typeof message.error === "string" ? message.error : undefined
+  };
+}
+
+function createChatRunId(): string {
+  return `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createChatRunInput(body: ChatRequestBody, requestId: string): ChatRunInput {
+  const apiSettings = readRuntimeApiSettings(body.apiSettings);
+  const model = apiSettings.model;
+  const messages = normalizeMessages(body.messages);
+  const files = normalizeSessionFiles(body.files);
+  const canvasContext = normalizeCanvasContext(body.canvas);
+  const themeMode = normalizeThemeMode(body.themeMode);
+  const userMessage = normalizeSessionMessageInput(body.userMessage);
+  const assistantMessage = normalizeSessionMessageInput(body.assistantMessage);
+  const requestedRunId = stringValue(body.runId, 160);
+  const runId =
+    requestedRunId ||
+    stringValue(assistantMessage?.generationRunId, 160) ||
+    createChatRunId();
+
+  return {
+    requestId,
+    startedAt: Date.now(),
+    runId,
+    sessionId: stringValue(body.sessionId, 160) || undefined,
+    userMessage:
+      userMessage?.role === "user"
+        ? {
+            ...userMessage,
+            status: "complete"
+          }
+        : undefined,
+    assistantMessage:
+      assistantMessage?.role === "assistant"
+        ? {
+            ...assistantMessage,
+            generationRunId: runId,
+            streamSequence: assistantMessage.streamSequence ?? 0,
+            status: "streaming"
+          }
+        : undefined,
+    apiSettings,
+    model,
+    messages,
+    files,
+    canvasContext,
+    themeMode,
+    useOpenRouterReasoning: isOpenRouterRuntime(apiSettings),
+    searchSettings: body.searchSettings
+  };
+}
+
+function writeNdjsonHeaders(res: Response): void {
+  res.writeHead(200, {
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  res.socket?.setNoDelay(true);
+  res.flushHeaders();
+}
+
+function writeResponseEvent(
+  res: Response,
+  event: SequencedStreamEvent
+): boolean {
+  if (res.destroyed || res.writableEnded) {
+    return false;
+  }
+
+  try {
+    res.write(`${JSON.stringify(event)}\n`);
+    flushResponse(res);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function endResponse(res: Response): void {
+  if (!res.destroyed && !res.writableEnded) {
+    res.end();
+  }
+}
+
+function attachChatRun(
+  req: Request,
+  res: Response,
+  run: ChatRun,
+  afterSequence: number
+): void {
+  writeNdjsonHeaders(res);
+
+  let closed = false;
+  const close = () => {
+    closed = true;
+    run.subscribers.delete(write);
+  };
+  const write = (event: SequencedStreamEvent) => {
+    if (closed) {
+      return;
+    }
+    if (!writeResponseEvent(res, event)) {
+      close();
+      return;
+    }
+    if (event.type === "done") {
+      close();
+      endResponse(res);
+    }
+  };
+
+  req.on("close", close);
+  res.on("close", close);
+
+  for (const event of run.events) {
+    if (event.seq <= afterSequence) {
+      continue;
+    }
+    write(event);
+    if (closed) {
+      return;
+    }
+  }
+
+  if (run.status !== "running") {
+    close();
+    endResponse(res);
+    return;
+  }
+
+  run.subscribers.add(write);
+}
+
+function appendRunEvent(run: ChatRun, event: StreamEvent | ChatDoneEvent): void {
+  const sequenced = {
+    ...event,
+    runId: run.id,
+    seq: run.sequence + 1
+  } as SequencedStreamEvent;
+  run.sequence = sequenced.seq;
+  run.events.push(sequenced);
+
+  for (const subscriber of Array.from(run.subscribers)) {
+    subscriber(sequenced);
+  }
+}
+
+function queueRunPersistence(
+  run: ChatRun,
+  status: "streaming" | "complete" | "error",
+  error?: string
+): Promise<void> {
+  const sessionId = run.input.sessionId;
+  const assistantMessageId = run.input.assistantMessage?.id;
+  if (!sessionId || !assistantMessageId) {
+    return Promise.resolve();
+  }
+
+  const patch = getStreamUiMessagePatch(
+    run.raw,
+    run.reasoning,
+    status,
+    run.sequence,
+    run.id,
+    error
+  );
+  run.persistPromise = run.persistPromise
+    .then(() =>
+      patchSessionMessage({
+        sessionId,
+        messageId: assistantMessageId,
+        patch
+      })
+    )
+    .catch((persistError) => {
+      console.warn(
+        `[chat:${run.input.requestId}] could not persist stream state`,
+        persistError
+      );
+    });
+
+  return run.persistPromise;
+}
+
+function scheduleRunPersistence(run: ChatRun): void {
+  if (run.status !== "running" || run.persistTimer) {
+    return;
+  }
+
+  run.persistTimer = setTimeout(() => {
+    run.persistTimer = undefined;
+    void queueRunPersistence(run, "streaming");
+  }, STREAM_PERSIST_INTERVAL_MS);
+}
+
+async function flushRunPersistence(
+  run: ChatRun,
+  status: "streaming" | "complete" | "error",
+  error?: string
+): Promise<void> {
+  if (run.persistTimer) {
+    clearTimeout(run.persistTimer);
+    run.persistTimer = undefined;
+  }
+
+  await queueRunPersistence(run, status, error);
+}
+
+function scheduleRunCleanup(run: ChatRun): void {
+  if (run.cleanupTimer) {
+    clearTimeout(run.cleanupTimer);
+  }
+
+  run.cleanupTimer = setTimeout(() => {
+    if (!run.subscribers.size) {
+      chatRuns.delete(run.id);
+    }
+  }, CHAT_RUN_TTL_MS);
+}
+
+function emitRunStreamEvent(run: ChatRun, event: StreamEvent): void {
+  if (event.type === "content") {
+    run.raw += event.text;
+  } else if (event.type === "reasoning") {
+    run.reasoning += event.text;
+  }
+
+  appendRunEvent(run, event);
+  scheduleRunPersistence(run);
+}
+
+async function persistInitialRunMessages(run: ChatRun): Promise<void> {
+  const { sessionId, userMessage, assistantMessage, files } = run.input;
+  if (!sessionId || !assistantMessage) {
+    return;
+  }
+
+  await upsertSessionMessages({
+    sessionId,
+    messages: [userMessage, assistantMessage].filter(
+      (message): message is SessionMessageInput => Boolean(message)
+    ),
+    files: files as StoredSessionFile[]
+  });
+}
+
+function finishChatRun(
+  run: ChatRun,
+  status: "complete" | "error",
+  error?: string
+): void {
+  run.status = status;
+  run.error = error;
+  appendRunEvent(run, {
+    type: "done",
+    status,
+    ...(error ? { error } : {})
+  });
+  void flushRunPersistence(run, status, error).finally(() => {
+    scheduleRunCleanup(run);
+  });
+}
+
+async function executeChatRun(run: ChatRun): Promise<void> {
+  try {
+    await persistInitialRunMessages(run);
+    await runOpenRouterChat(run, (event) => emitRunStreamEvent(run, event));
+    finishChatRun(run, "complete");
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown chat proxy error.";
+    console.error(`[chat:${run.input.requestId}] error ${message}`);
+    finishChatRun(run, "error", message);
+  }
+}
+
+function startChatRun(input: ChatRunInput): ChatRun {
+  const run: ChatRun = {
+    id: input.runId,
+    input,
+    events: [],
+    subscribers: new Set(),
+    sequence: 0,
+    raw: input.assistantMessage?.rawStream ?? "",
+    reasoning: input.assistantMessage?.reasoning ?? "",
+    status: "running",
+    persistPromise: Promise.resolve()
+  };
+
+  chatRuns.set(run.id, run);
+  void executeChatRun(run);
+  return run;
+}
+
+function getAfterSequence(input: unknown): number {
+  const value =
+    typeof input === "string"
+      ? Number.parseInt(input, 10)
+      : typeof input === "number"
+        ? input
+        : 0;
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
 }
 
 function normalizeReasoningEffort(value: unknown): OpenRouterReasoningEffort {
@@ -572,7 +1107,7 @@ async function streamResponsesOnce({
   input,
   instructions,
   tools,
-  res,
+  emit,
   state,
   useOpenRouterReasoning
 }: {
@@ -581,7 +1116,7 @@ async function streamResponsesOnce({
   input: ResponsesInputItem[];
   instructions: string;
   tools: ResponsesToolDefinition[];
-  res: Response;
+  emit: StreamEventWriter;
   state: ToolStreamState;
   useOpenRouterReasoning: boolean;
 }): Promise<ResponsesFunctionCallItem[]> {
@@ -636,12 +1171,12 @@ async function streamResponsesOnce({
         type === "response.output_text.delta") &&
       typeof data.delta === "string"
     ) {
-      writeStreamEvent(res, { type: "content", text: data.delta }, state);
+      writeStreamEvent(emit, { type: "content", text: data.delta }, state);
       return;
     }
 
     if (type === "response.reasoning.delta" && typeof data.delta === "string") {
-      writeStreamEvent(res, { type: "reasoning", text: data.delta }, state);
+      writeStreamEvent(emit, { type: "reasoning", text: data.delta }, state);
       return;
     }
 
@@ -717,41 +1252,25 @@ async function streamResponsesOnce({
   return Array.from(calls.values());
 }
 
-export async function handleOpenRouterChat(
-  req: Request,
-  res: Response
+async function runOpenRouterChat(
+  run: ChatRun,
+  emit: StreamEventWriter
 ): Promise<void> {
-  const body = req.body as {
-    messages?: unknown;
-    files?: unknown;
-    canvas?: unknown;
-    themeMode?: unknown;
-    apiSettings?: unknown;
-    searchSettings?: unknown;
-  };
-  const requestId = Math.random().toString(36).slice(2, 9);
-  const startedAt = Date.now();
-
-  try {
-    const apiSettings = readRuntimeApiSettings(body.apiSettings);
-    const model = apiSettings.model;
-    const messages = normalizeMessages(body.messages);
-    const files = normalizeSessionFiles(body.files);
-    const canvasContext = normalizeCanvasContext(body.canvas);
-    const themeMode = normalizeThemeMode(body.themeMode);
-    const useOpenRouterReasoning = isOpenRouterRuntime(apiSettings);
+    const {
+      requestId,
+      startedAt,
+      apiSettings,
+      model,
+      messages,
+      files,
+      canvasContext,
+      themeMode,
+      useOpenRouterReasoning,
+      searchSettings
+    } = run.input;
     console.info(
       `[chat:${requestId}] start provider=${apiSettings.providerName} base_url=${apiSettings.baseUrl} model=${model} messages=${messages.length} theme=${themeMode} reasoning=${apiSettings.reasoningEffort} key_source=${apiSettings.apiKeySource} key_env=${apiSettings.apiKeyEnvironmentName}`
     );
-
-    res.writeHead(200, {
-      "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
-    res.socket?.setNoDelay(true);
-    res.flushHeaders();
 
     const toolStreamState: ToolStreamState = {
       contentChars: 0,
@@ -772,20 +1291,20 @@ export async function handleOpenRouterChat(
         role: message.role,
         content: message.content
       })),
-      searchSettings: body.searchSettings,
+      searchSettings,
       stats: retrievalStats,
       onStatus: (text) => {
-        writeStreamEvent(res, { type: "reasoning", text }, toolStreamState);
+        writeStreamEvent(emit, { type: "reasoning", text }, toolStreamState);
       }
     });
     const memoryTools = createMemoryTools({
       memoryItems: apiSettings.memoryItems,
       stats: memoryStats,
       onEvent: (event) => {
-        writeStreamEvent(res, event, toolStreamState);
+        writeStreamEvent(emit, event, toolStreamState);
       },
       onStatus: (text) => {
-        writeStreamEvent(res, { type: "reasoning", text }, toolStreamState);
+        writeStreamEvent(emit, { type: "reasoning", text }, toolStreamState);
       }
     });
     const tools = {
@@ -850,7 +1369,7 @@ export async function handleOpenRouterChat(
         }
         if (call.name === "listFiles") {
           writeStreamEvent(
-            res,
+            emit,
             { type: "reasoning", text: "Reading session file list..." },
             toolStreamState
           );
@@ -860,7 +1379,7 @@ export async function handleOpenRouterChat(
         }
         if (call.name === "readFile") {
           writeStreamEvent(
-            res,
+            emit,
             { type: "reasoning", text: "Reading session file..." },
             toolStreamState
           );
@@ -884,7 +1403,7 @@ export async function handleOpenRouterChat(
         nativeToolErrors += 1;
         const message = getErrorMessage(error);
         writeStreamEvent(
-          res,
+          emit,
           { type: "reasoning", text: `Tool error: ${message}` },
           toolStreamState
         );
@@ -897,7 +1416,7 @@ export async function handleOpenRouterChat(
     };
 
     writeStreamEvent(
-      res,
+      emit,
       { type: "reasoning", text: "Generating..." },
       toolStreamState
     );
@@ -932,7 +1451,7 @@ export async function handleOpenRouterChat(
         input: responseInput,
         instructions,
         tools: toolDefinitions,
-        res,
+        emit,
         state: toolStreamState,
         useOpenRouterReasoning
       });
@@ -955,7 +1474,6 @@ export async function handleOpenRouterChat(
       }
     }
 
-    res.end();
     const retrievalSources = retrievalStats.contexts.reduce(
       (total, context) => total + context.sources.length,
       0
@@ -967,20 +1485,51 @@ export async function handleOpenRouterChat(
     console.info(
       `[chat:${requestId}] complete duration_ms=${Date.now() - startedAt} native_steps=${nativeSteps} tool_max_steps=${toolMaxSteps ?? "unlimited"} tool_calls=${nativeToolCalls} retrieval_calls=${retrievalStats.calls} retrieval_errors=${retrievalStats.errors + nativeToolErrors} retrieval_sources=${retrievalSources} retrieval_verified_images=${retrievalImages} memory_adds=${memoryStats.adds} memory_deletes=${memoryStats.deletes} memory_errors=${memoryStats.errors} file_lists=${fileStats.lists} file_reads=${fileStats.reads} file_errors=${fileStats.errors} content_chars=${toolStreamState.contentChars} content_events=${toolStreamState.contentEvents} reasoning_chars=${toolStreamState.reasoningChars} reasoning_events=${toolStreamState.reasoningEvents}`
     );
+}
+
+export async function handleOpenRouterChat(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const body = req.body as ChatRequestBody;
+  const requestId = Math.random().toString(36).slice(2, 9);
+
+  try {
+    const requestedRunId = stringValue(body.runId, 160);
+    if (requestedRunId) {
+      const existingRun = chatRuns.get(requestedRunId);
+      if (existingRun) {
+        attachChatRun(req, res, existingRun, getAfterSequence(req.query.after));
+        return;
+      }
+    }
+
+    const input = createChatRunInput(body, requestId);
+    const existingRun = chatRuns.get(input.runId);
+    const run = existingRun ?? startChatRun(input);
+    attachChatRun(req, res, run, getAfterSequence(req.query.after));
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown chat proxy error.";
     console.error(`[chat:${requestId}] error ${message}`);
-
     if (!res.headersSent) {
       res.status(500).type("text/plain").send(message);
       return;
     }
-
-    writeStreamEvent(res, {
-      type: "content",
-      text: `\n\n[proxy error] ${message}`
-    });
-    res.end();
+    endResponse(res);
   }
+}
+
+export async function handleChatRunEvents(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const runId = stringValue(req.params.runId, 160);
+  const run = chatRuns.get(runId);
+  if (!run) {
+    res.status(404).json({ error: "Chat run not found." });
+    return;
+  }
+
+  attachChatRun(req, res, run, getAfterSequence(req.query.after));
 }
