@@ -499,7 +499,7 @@ async function fetchExportResourceAsDataUrl(
 }
 
 async function inlineImageResources(
-  root: HTMLElement,
+  root: Element,
   baseUrl: string,
   cache: ExportResourceDataUrlCache
 ): Promise<void> {
@@ -531,7 +531,7 @@ async function inlineImageResources(
 }
 
 async function inlineSvgImageResources(
-  root: HTMLElement,
+  root: Element,
   baseUrl: string,
   cache: ExportResourceDataUrlCache
 ): Promise<void> {
@@ -615,7 +615,7 @@ async function inlineCssResourceUrls(
 }
 
 async function inlineStyleResources(
-  root: HTMLElement,
+  root: Element,
   baseUrl: string,
   cache: ExportResourceDataUrlCache
 ): Promise<void> {
@@ -649,7 +649,7 @@ async function inlineStyleResources(
 }
 
 async function inlineExternalSnapshotResources(
-  root: HTMLElement,
+  root: Element,
   baseUrl: string
 ): Promise<void> {
   const cache: ExportResourceDataUrlCache = new Map();
@@ -683,6 +683,10 @@ async function renderPreparedDocumentToSvgString(
   prepared: PreparedSnapshotDocument
 ): Promise<string> {
   const { elementToSVG, inlineResources } = await import("dom-to-svg");
+  await inlineExternalSnapshotResources(
+    prepared.document.documentElement,
+    prepared.document.baseURI
+  );
   const svgDocument = elementToSVG(prepared.document.body, {
     captureArea: createCaptureArea(
       prepared.document,
@@ -694,6 +698,10 @@ async function renderPreparedDocumentToSvgString(
     inlineResources(svgDocument.documentElement),
     EXPORT_RASTERIZE_TIMEOUT_MS,
     "Timed out while inlining SVG resources."
+  );
+  await inlineExternalSnapshotResources(
+    svgDocument.documentElement,
+    prepared.document.baseURI
   );
 
   return serializeSvgDocument(svgDocument);
