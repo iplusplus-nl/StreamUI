@@ -33,10 +33,6 @@ type CapabilityStatus = {
   message: string;
 };
 
-type PreviewFrameWindow = Window & {
-  __streamuiExecutedScriptHtml?: string;
-};
-
 const MAX_CAPABILITY_TEXT_CHARS = 1_000_000;
 
 function normalizeCapabilityText(value: unknown): string {
@@ -113,9 +109,8 @@ export function PreviewFrame({
 }: PreviewFrameProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const initialSrcDocRef = useRef<string | null>(null);
-  const frameWindowRef = useRef<Window | null>(null);
+  const lastLoadedFullDocumentRef = useRef("");
   const lastAppliedBodyHtmlRef = useRef("");
-  const lastExecutedScriptHtmlRef = useRef("");
   const [height, setHeight] = useState(96);
   const [capabilityAction, setCapabilityAction] =
     useState<CapabilityAction | null>(null);
@@ -126,64 +121,46 @@ export function PreviewFrame({
     initialSrcDocRef.current = buildIframeDocument("", themeMode);
   }
 
-  const applySnapshotToFrame = useCallback(() => {
-    const frame = frameRef.current;
-    const document = frame?.contentDocument;
-    if (!document?.body) {
-      return;
-    }
-
-    const frameWindow = frame?.contentWindow ?? null;
-    if (frameWindowRef.current !== frameWindow) {
-      frameWindowRef.current = frameWindow;
-      lastAppliedBodyHtmlRef.current = "";
-      lastExecutedScriptHtmlRef.current = "";
-    }
-
-    applyIframeTheme(document, themeMode);
-
-    const bodyHtml = buildIframeBodyHtml(snapshot.completedHtml);
-    if (lastAppliedBodyHtmlRef.current !== bodyHtml) {
-      document.body.innerHTML = bodyHtml;
-      lastAppliedBodyHtmlRef.current = bodyHtml;
-
-      if (snapshot.status !== "complete") {
-        lastExecutedScriptHtmlRef.current = "";
-      }
-    }
-
-    if (
-      snapshot.status === "complete" &&
-      lastExecutedScriptHtmlRef.current !== snapshot.completedHtml
-    ) {
-      const executionWindow = frameWindow as PreviewFrameWindow | null;
-      if (executionWindow?.__streamuiExecutedScriptHtml === snapshot.completedHtml) {
-        lastExecutedScriptHtmlRef.current = snapshot.completedHtml;
-      } else {
-        lastExecutedScriptHtmlRef.current = snapshot.completedHtml;
-        if (executionWindow) {
-          executionWindow.__streamuiExecutedScriptHtml = snapshot.completedHtml;
-        }
-        document.body.querySelectorAll("script").forEach((script) => {
-          const executableScript = document.createElement("script");
-
-          executableScript.async = false;
-          Array.from(script.attributes).forEach((attribute) => {
-            executableScript.setAttribute(attribute.name, attribute.value);
-          });
-          executableScript.text = script.textContent ?? "";
-          script.replaceWith(executableScript);
-        });
-      }
-    }
-
+  const measureFrameHeight = useCallback((document: Document) => {
     window.requestAnimationFrame(() => {
       const nextHeight = Math.max(32, Math.ceil(document.body.scrollHeight));
       setHeight((currentHeight) =>
         Math.abs(nextHeight - currentHeight) > 1 ? nextHeight : currentHeight
       );
     });
-  }, [snapshot.completedHtml, snapshot.status, themeMode]);
+  }, []);
+
+  const applySnapshotToFrame = useCallback(() => {
+    const frame = frameRef.current;
+    const document = frame?.contentDocument;
+    if (!frame || !document?.body) {
+      return;
+    }
+
+    if (snapshot.status === "complete") {
+      const fullDocument = buildIframeDocument(snapshot.completedHtml, themeMode);
+      if (lastLoadedFullDocumentRef.current !== fullDocument) {
+        lastLoadedFullDocumentRef.current = fullDocument;
+        lastAppliedBodyHtmlRef.current = "";
+        frame.srcdoc = fullDocument;
+        return;
+      }
+
+      measureFrameHeight(document);
+      return;
+    }
+
+    lastLoadedFullDocumentRef.current = "";
+    applyIframeTheme(document, themeMode);
+
+    const bodyHtml = buildIframeBodyHtml(snapshot.completedHtml);
+    if (lastAppliedBodyHtmlRef.current !== bodyHtml) {
+      document.body.innerHTML = bodyHtml;
+      lastAppliedBodyHtmlRef.current = bodyHtml;
+    }
+
+    measureFrameHeight(document);
+  }, [measureFrameHeight, snapshot.completedHtml, snapshot.status, themeMode]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -409,12 +386,6 @@ export function PreviewFrame({
         sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         srcDoc={initialSrcDocRef.current}
         onLoad={() => {
-          const frameWindow = frameRef.current?.contentWindow ?? null;
-          if (frameWindowRef.current !== frameWindow) {
-            frameWindowRef.current = frameWindow;
-            lastAppliedBodyHtmlRef.current = "";
-            lastExecutedScriptHtmlRef.current = "";
-          }
           applySnapshotToFrame();
         }}
         style={{ height }}
