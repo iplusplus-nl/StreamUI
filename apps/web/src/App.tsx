@@ -171,10 +171,38 @@ const SESSION_CLIENT_ID_STORAGE_KEY = "streamui.clientId.v1";
 const SESSION_INDEX_CACHE_KEY = "streamui.sessionIndex.v1";
 const SESSION_CLIENT_ID_HEADER = "X-ChatHTML-Client-Id";
 const SESSION_SYNC_INTERVAL_MS = 4_000;
+
 type SessionListPreview = {
   activeSessionId: string;
   sessions: SessionListItem[];
 };
+
+function coerceApiSettingsForRuntime(
+  settings: ApiSettings,
+  runtimeSettings: RuntimeSettingsSummary | null
+): ApiSettings {
+  const normalized = normalizeApiSettings(settings);
+  const managedProviderEnabled = Boolean(
+    runtimeSettings?.cloud?.enabled &&
+      runtimeSettings.cloud.managedProviderEnabled
+  );
+
+  if (normalized.apiKeySource !== "managed" || managedProviderEnabled) {
+    return normalized;
+  }
+
+  const defaults = normalizeApiSettings(runtimeSettings?.api.defaults);
+  return normalizeApiSettings({
+    ...defaults,
+    model: normalized.model || defaults.model,
+    modelOptions: normalized.modelOptions.length
+      ? normalized.modelOptions
+      : defaults.modelOptions,
+    reasoningEffort: normalized.reasoningEffort,
+    userPreferencePrompt: normalized.userPreferencePrompt,
+    memoryItems: normalized.memoryItems
+  });
+}
 
 function mergeSessionFiles(files: SessionFile[]): SessionFile[] {
   const merged = new Map<string, SessionFile>();
@@ -1376,9 +1404,11 @@ export default function App() {
         }
 
         setRuntimeSettings(settings);
-        if (!hadSavedApiSettings) {
-          setApiSettings(normalizeApiSettings(settings.api.defaults));
-        }
+        setApiSettings((current) =>
+          !hadSavedApiSettings
+            ? normalizeApiSettings(settings.api.defaults)
+            : coerceApiSettingsForRuntime(current, settings)
+        );
       })
       .catch((error) => {
         if (!cancelled) {
@@ -2083,10 +2113,13 @@ export default function App() {
       const requestModel = (
         requestSessionForModel.model || apiSettings.model
       ).trim();
-      const requestApiSettings = normalizeApiSettings({
-        ...apiSettings,
-        model: requestModel
-      });
+      const requestApiSettings = coerceApiSettingsForRuntime(
+        normalizeApiSettings({
+          ...apiSettings,
+          model: requestModel
+        }),
+        runtimeSettings
+      );
       if (
         requestApiSettings.apiKeySource === "managed" &&
         cloudEnabled &&
@@ -2515,6 +2548,7 @@ export default function App() {
       cloudEnabled,
       handleMemoryStreamEvent,
       refreshAuthSummary,
+      runtimeSettings,
       searchSettings,
       themeMode,
       updateAssistant,

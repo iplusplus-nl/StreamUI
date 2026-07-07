@@ -392,28 +392,35 @@ export function readRuntimeApiCredentials(input: unknown): RuntimeApiCredentials
   const apiKeySource = normalizeApiKeySource(object.apiKeySource);
   const isManagedProvider =
     requestedProviderId === "chathtml-cloud" || apiKeySource === "managed";
+  if (isManagedProvider) {
+    const apiKeyEnvironmentName = getApiKeyEnvironmentName(
+      defaults.providerName,
+      defaults.baseUrl,
+      defaults.providerId
+    );
+    return {
+      providerName: defaults.providerName,
+      baseUrl: defaults.baseUrl,
+      apiKeySource: defaults.apiKeySource,
+      apiKeyEnvironmentName,
+      apiKey: process.env[apiKeyEnvironmentName]?.trim() ?? ""
+    };
+  }
   const providerName =
-    isManagedProvider
-      ? "ChatHTML Cloud"
-      : typeof object.providerName === "string" && object.providerName.trim()
-        ? object.providerName.trim().slice(0, 80)
-        : defaults.providerName;
-  const baseUrl = isManagedProvider ? "" : normalizeBaseUrl(object.baseUrl);
-  const effectiveBaseUrl = isManagedProvider
-    ? ""
-    : baseUrl || (hasOwn(object, "baseUrl") ? "" : defaults.baseUrl);
-  const effectiveApiKeySource: ApiKeySource = isManagedProvider
-    ? "managed"
-    : apiKeySource;
+    typeof object.providerName === "string" && object.providerName.trim()
+      ? object.providerName.trim().slice(0, 80)
+      : defaults.providerName;
+  const baseUrl = normalizeBaseUrl(object.baseUrl);
+  const effectiveBaseUrl =
+    baseUrl || (hasOwn(object, "baseUrl") ? "" : defaults.baseUrl);
+  const effectiveApiKeySource: ApiKeySource = apiKeySource;
   const apiKeyEnvironmentName = getApiKeyEnvironmentName(
     providerName,
     effectiveBaseUrl,
     requestedProviderId
   );
   const apiKey =
-    effectiveApiKeySource === "managed"
-      ? ""
-      : effectiveApiKeySource === "environment"
+    effectiveApiKeySource === "environment"
       ? process.env[apiKeyEnvironmentName]?.trim() ?? ""
       : typeof object.apiKey === "string"
         ? object.apiKey.trim()
