@@ -1121,6 +1121,10 @@ function StreamThread({
       <ThreadPrimitive.Viewport
         ref={viewportRef}
         className={`message-list ${isNewChat ? "is-new" : "has-messages"}`}
+        autoScroll={false}
+        scrollToBottomOnRunStart={false}
+        scrollToBottomOnInitialize={false}
+        scrollToBottomOnThreadSwitch={false}
       >
         <AuiIf condition={(state) => state.thread.messages.length === 0}>
           <section className="thread-welcome">
