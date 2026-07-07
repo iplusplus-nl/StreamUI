@@ -41,69 +41,12 @@ The root script delegates to `@chathtml/web`. The Vite app runs at `http://127.0
 
 The browser calls the local backend at `POST /api/chat`; the backend reads `OPENROUTER_API_KEY` from `.env` and forwards the request to OpenRouter's `/responses` endpoint. The API key is never sent to the browser. The backend streams newline-delimited JSON events with separate `reasoning`, `content`, and memory-update chunks.
 
-## HTML Hosting MCP
+## HTML Hosting
 
-ChatHTML includes a local MCP server that lets MCP clients publish HTML and get
-back a public artifact link. Start the normal backend first so the returned URL
-can be opened:
-
-```bash
-npm run server
-```
-
-Then configure your MCP host to launch:
-
-```bash
-npm --silent run mcp:html-host
-```
-
-Example MCP config:
-
-```json
-{
-  "mcpServers": {
-    "chathtml-html-host": {
-      "command": "npm",
-      "args": ["--silent", "run", "mcp:html-host"],
-      "cwd": "/absolute/path/to/ChatHtml"
-    }
-  }
-}
-```
-
-The MCP tool is `publish_html`. It accepts `html`, plus optional `title`,
-`themeMode`, and `sourceMessageId`. If `sourceMessageId` is reused, the same
-public link is updated instead of creating a new one.
-
-Returned links use `CHATHTML_PUBLIC_URL`, `STREAMUI_PUBLIC_URL`, or
-`PUBLIC_URL` when set, otherwise `http://127.0.0.1:8787`. The hosted pages are
-served at `/artifacts/:shareId`; the older experimental route remains as a
-compatibility alias.
-
-For a deployed ChatHTML backend, set `CHATHTML_PUBLIC_URL` in the MCP server's
-environment. The MCP server will POST to that deployment's `/api/html-shares`
-endpoint instead of writing to local storage:
-
-```json
-{
-  "mcpServers": {
-    "chathtml-html-host": {
-      "command": "npm",
-      "args": ["--silent", "run", "mcp:html-host"],
-      "cwd": "/absolute/path/to/ChatHtml",
-      "env": {
-        "CHATHTML_PUBLIC_URL": "https://your-chathtml-domain.example"
-      }
-    }
-  }
-}
-```
-
-Use `CHATHTML_HTML_HOST_API_URL` only when the API origin differs from the
-public link origin.
-
-The same hosting path is also available over HTTP: `POST /api/html-shares` with
-`{ "html": "...", "title": "..." }`.
+HTML artifact hosting is provided by the standalone
+[`aietheia/oops`](https://github.com/aietheia/oops) service. ChatHTML posts share
+requests to `POST /api/html-shares`; production deployments should route that
+path, plus `/artifacts/*`, to the Oops service.
 
 ## Open Source and Hosted Cloud
 

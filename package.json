@@ -12,7 +12,6 @@
   "scripts": {
     "dev": "npm --workspace @chathtml/web run dev",
     "server": "npm --workspace @chathtml/web run server",
-    "mcp:html-host": "npm --silent --workspace @chathtml/web run mcp:html-host",
     "build": "npm --workspace @chathtml/web run build",
     "preview": "npm --workspace @chathtml/web run preview",
     "test": "npm --workspace @chathtml/web run test"
