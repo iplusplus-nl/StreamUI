@@ -26,6 +26,9 @@ test("artifact share page embeds the document safely", () => {
   assert.match(html, /\\u003cscript>window\.__ok = true;\\u003c\/script>/);
   assert.match(html, /sandbox="allow-scripts allow-forms/);
   assert.doesNotMatch(html, /allow-same-origin/);
+  assert.match(html, /data\.source === "streamui-runtime"/);
+  assert.match(html, /data\.kind === "resize"/);
+  assert.doesNotMatch(html, /contentDocument/);
 });
 
 test("artifact share public URLs use the stable artifact path", () => {

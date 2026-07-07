@@ -299,14 +299,15 @@ export function createArtifactSharePageHtml(record: ArtifactShareRecord): string
       text-transform: uppercase;
     }
     .share-main {
-      width: min(960px, 100%);
+      width: min(1200px, 100%);
       margin: 0 auto;
       padding: 18px 14px 28px;
     }
     iframe {
       display: block;
       width: 100%;
-      min-height: 220px;
+      height: calc(100vh - 90px);
+      min-height: 360px;
       border: 0;
       background: transparent;
     }
@@ -328,28 +329,25 @@ export function createArtifactSharePageHtml(record: ArtifactShareRecord): string
   <script>
     const frame = document.getElementById("artifact-frame");
     const documentPayload = document.getElementById("artifact-document");
-    const resizeFrame = () => {
-      const doc = frame.contentDocument;
-      if (!doc) return;
-      const body = doc.body;
-      const root = doc.documentElement;
-      const height = Math.ceil(Math.max(
-        body ? body.scrollHeight : 0,
-        body ? body.offsetHeight : 0,
-        root ? root.scrollHeight : 0,
-        root ? root.offsetHeight : 0,
-        220
-      ));
-      frame.style.height = height + "px";
+    const MIN_FRAME_HEIGHT = 360;
+    const MAX_FRAME_HEIGHT = 20000;
+    const setFrameHeight = (height) => {
+      if (!Number.isFinite(height)) return;
+      frame.style.height = Math.min(
+        Math.max(Math.ceil(height), MIN_FRAME_HEIGHT),
+        MAX_FRAME_HEIGHT
+      ) + "px";
     };
-    frame.addEventListener("load", () => {
-      resizeFrame();
-      const doc = frame.contentDocument;
-      if (!doc || typeof ResizeObserver === "undefined") return;
-      const observer = new ResizeObserver(resizeFrame);
-      observer.observe(doc.documentElement);
-      if (doc.body) observer.observe(doc.body);
-      window.addEventListener("beforeunload", () => observer.disconnect(), { once: true });
+    window.addEventListener("message", (event) => {
+      if (event.source !== frame.contentWindow) return;
+      const data = event.data || {};
+      if (
+        data.source === "streamui-runtime" &&
+        data.kind === "resize" &&
+        typeof data.height === "number"
+      ) {
+        setFrameHeight(data.height);
+      }
     });
     frame.srcdoc = JSON.parse(documentPayload.textContent || '""');
   </script>
