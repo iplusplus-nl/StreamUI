@@ -34,9 +34,14 @@ const workspaceRoot = path.resolve(projectRoot, "../..");
 const sessionsDir = path.resolve(
   process.env.STREAMUI_SESSION_DIR || path.join(workspaceRoot, "sessions")
 );
+const sessionDbDir = process.env.STREAMUI_SESSION_DB
+  ? path.dirname(path.resolve(process.env.STREAMUI_SESSION_DB))
+  : "";
 const artifactSharesDir = path.resolve(
   process.env.STREAMUI_ARTIFACT_SHARE_DIR ||
-    path.join(sessionsDir, "artifact-shares")
+    (sessionDbDir
+      ? path.join(sessionDbDir, "artifact-shares")
+      : path.join(sessionsDir, "artifact-shares"))
 );
 
 class ArtifactShareError extends Error {
