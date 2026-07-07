@@ -80,6 +80,28 @@ Returned links use `CHATHTML_PUBLIC_URL`, `STREAMUI_PUBLIC_URL`, or
 served at `/artifacts/:shareId`; the older experimental route remains as a
 compatibility alias.
 
+For a deployed ChatHTML backend, set `CHATHTML_PUBLIC_URL` in the MCP server's
+environment. The MCP server will POST to that deployment's `/api/html-shares`
+endpoint instead of writing to local storage:
+
+```json
+{
+  "mcpServers": {
+    "chathtml-html-host": {
+      "command": "npm",
+      "args": ["--silent", "run", "mcp:html-host"],
+      "cwd": "/absolute/path/to/ChatHtml",
+      "env": {
+        "CHATHTML_PUBLIC_URL": "https://your-chathtml-domain.example"
+      }
+    }
+  }
+}
+```
+
+Use `CHATHTML_HTML_HOST_API_URL` only when the API origin differs from the
+public link origin.
+
 The same hosting path is also available over HTTP: `POST /api/html-shares` with
 `{ "html": "...", "title": "..." }`.
 
