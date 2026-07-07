@@ -1014,6 +1014,10 @@ function StreamThread({
     () => new Map(messages.map((message) => [message.id, message])),
     [messages]
   );
+  const hasStreamingMessage = useMemo(
+    () => messages.some((message) => message.status === "streaming"),
+    [messages]
+  );
   const fileById = useMemo(
     () => new Map(files.map((file) => [file.id, file])),
     [files]
@@ -1022,7 +1026,7 @@ function StreamThread({
   useEffect(() => {
     const viewport = viewportRef.current;
 
-    if (!viewport) {
+    if (!viewport || !hasStreamingMessage) {
       return undefined;
     }
 
@@ -1060,7 +1064,7 @@ function StreamThread({
       window.clearTimeout(settleTimeoutId);
       resizeObserver?.disconnect();
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, hasStreamingMessage]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -1087,10 +1091,6 @@ function StreamThread({
     const isNewMessageTarget =
       lastAutoScrollTargetRef.current.count !== messages.length ||
       lastAutoScrollTargetRef.current.lastMessageId !== (lastMessage?.id ?? "");
-    const hasStreamingMessage = messages.some(
-      (message) => message.status === "streaming"
-    );
-
     lastAutoScrollTargetRef.current = {
       count: messages.length,
       lastMessageId: lastMessage?.id ?? ""
@@ -1099,7 +1099,8 @@ function StreamThread({
     if (
       !viewport ||
       !shouldFollowBottomRef.current ||
-      (!hasStreamingMessage && !isNewMessageTarget)
+      !hasStreamingMessage ||
+      !isNewMessageTarget
     ) {
       return undefined;
     }
