@@ -165,8 +165,9 @@ function normalizeClientId(input: unknown): string {
   return value.length >= 8 ? value : "";
 }
 
-export function getSessionStateKeyFromClientId(_input: unknown): string {
-  return DEFAULT_SESSION_STATE_KEY;
+export function getSessionStateKeyFromClientId(input: unknown): string {
+  const normalized = normalizeClientId(input);
+  return normalized ? `client:${normalized}` : DEFAULT_SESSION_STATE_KEY;
 }
 
 function getRequestClientId(req: Request): string {
@@ -190,8 +191,7 @@ function getRequestClientId(req: Request): string {
 }
 
 function getRequestStateKey(req: Request): string {
-  getRequestClientId(req);
-  return DEFAULT_SESSION_STATE_KEY;
+  return getSessionStateKeyFromClientId(getRequestClientId(req));
 }
 
 function normalizeStringArray(input: unknown): string[] | undefined {

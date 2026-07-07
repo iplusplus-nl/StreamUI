@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mergeClientSaveState } from "../../server/sessions.js";
+import {
+  getSessionStateKeyFromClientId,
+  mergeClientSaveState
+} from "../../server/sessions.js";
 
 function userMessage(id: string, content: string) {
   return {
@@ -26,6 +29,14 @@ function session(
 }
 
 describe("server session merge", () => {
+  it("scopes anonymous state by browser client id", () => {
+    assert.equal(
+      getSessionStateKeyFromClientId("client-test-12345678"),
+      "client:client-test-12345678"
+    );
+    assert.equal(getSessionStateKeyFromClientId("short"), "global");
+  });
+
   it("does not resurrect sessions deleted by another client", () => {
     const current = {
       sessions: [session("kept", 2)],

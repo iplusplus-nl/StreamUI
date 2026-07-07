@@ -58,7 +58,7 @@ See `docs/cloud-api.md` for the hosted-backend contract.
 
 ## Session Storage
 
-Chat sessions are stored persistently in SQLite as one shared testing state, so every browser and device connected to the same deployment sees the same chat history. The client periodically syncs from the backend while the page is open, and session saves are merged so an older tab is less likely to overwrite chats created elsewhere.
+Chat sessions are stored persistently in SQLite under a browser client id, so browsers connected to the same deployment do not share one global chat history. The client periodically syncs from the backend while the page is open, and session saves are merged so an older tab from the same browser profile is less likely to overwrite chats created elsewhere.
 
 By default the backend writes to `sessions/state.sqlite`. Existing `sessions/state.json` data is migrated into SQLite the first time the shared state is empty.
 
