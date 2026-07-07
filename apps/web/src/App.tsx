@@ -171,6 +171,7 @@ const SESSION_CLIENT_ID_STORAGE_KEY = "streamui.clientId.v1";
 const SESSION_INDEX_CACHE_KEY = "streamui.sessionIndex.v1";
 const SESSION_CLIENT_ID_HEADER = "X-ChatHTML-Client-Id";
 const SESSION_SYNC_INTERVAL_MS = 4_000;
+const CHAT_CANCELLED_MESSAGE = "Generation stopped.";
 
 type SessionListPreview = {
   activeSessionId: string;
@@ -608,6 +609,36 @@ function sanitizeChatErrorMessage(
   }
 
   return compactErrorText(raw).slice(0, 500);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function isChatCancelledMessage(value: string | undefined): boolean {
+  return compactErrorText(value ?? "") === CHAT_CANCELLED_MESSAGE;
+}
+
+function createCancelledAssistantPatch(
+  raw: string,
+  reasoning: string,
+  streamSequence: number
+): Partial<ClientMessage> {
+  const parts = extractStreamUiParts(raw);
+
+  return {
+    content:
+      parts.chat ||
+      (!parts.hasStreamUi ? parts.fallbackText : "") ||
+      CHAT_CANCELLED_MESSAGE,
+    reasoning: reasoning || undefined,
+    rawStream: raw,
+    streamSequence,
+    hasStreamUi: parts.hasStreamUi,
+    streamUiComplete: parts.streamUiComplete,
+    status: "complete",
+    error: undefined
+  };
 }
 
 function formatChatHttpError(response: Response, bodyText: string): string {
@@ -1256,6 +1287,7 @@ export default function App() {
   );
   const renderersRef = useRef<Map<string, StreamingRenderer>>(new Map());
   const runConnectionsRef = useRef<Map<string, AbortController>>(new Map());
+  const cancelledRunIdsRef = useRef<Set<string>>(new Set());
   const pendingManagedRequestRef = useRef<PendingManagedRequest | null>(null);
   const pendingArtifactActionRef = useRef<PendingArtifactAction | null>(null);
   const attachmentAdapter = useMemo(
@@ -1610,7 +1642,10 @@ export default function App() {
     let cancelled = false;
 
     const syncSessions = async () => {
-      if (runConnectionsRef.current.size > 0) {
+      if (
+        runConnectionsRef.current.size > 0 ||
+        cancelledRunIdsRef.current.size > 0
+      ) {
         return;
       }
 
@@ -1966,6 +2001,91 @@ export default function App() {
     },
     [setSessionStateAndRef]
   );
+
+  const markRunsCancelled = useCallback(
+    (runIds: string[]) => {
+      const runIdSet = new Set(runIds);
+      if (!runIdSet.size) {
+        return;
+      }
+
+      setSessionStateAndRef((current) => {
+        let didUpdate = false;
+        const now = Date.now();
+        const sessions = current.sessions.map((session) => {
+          let sessionChanged = false;
+          const messages = session.messages.map((message) => {
+            if (
+              message.role !== "assistant" ||
+              message.status !== "streaming" ||
+              !message.generationRunId ||
+              !runIdSet.has(message.generationRunId)
+            ) {
+              return message;
+            }
+
+            didUpdate = true;
+            sessionChanged = true;
+            return {
+              ...message,
+              ...createCancelledAssistantPatch(
+                message.rawStream ?? "",
+                message.reasoning ?? "",
+                message.streamSequence ?? 0
+              )
+            };
+          });
+
+          if (!sessionChanged) {
+            return session;
+          }
+
+          return {
+            ...session,
+            title: summarizeSession(messages),
+            updatedAt: now,
+            messages
+          };
+        });
+
+        return didUpdate
+          ? {
+              ...current,
+              sessions: sortSessions(sessions)
+            }
+          : current;
+      });
+    },
+    [setSessionStateAndRef]
+  );
+
+  const handleCancelRun = useCallback(async () => {
+    const entries = Array.from(runConnectionsRef.current.entries());
+    if (!entries.length) {
+      return;
+    }
+
+    const runIds = entries.map(([runId]) => runId);
+    runIds.forEach((runId) => cancelledRunIdsRef.current.add(runId));
+
+    const cancelRequests = runIds.map((runId) =>
+      fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: "POST",
+        headers: sessionRequestHeaders(sessionClientIdRef.current)
+      }).catch((error) => {
+        console.warn("Could not cancel ChatHTML run on the server.", error);
+      })
+    );
+
+    entries.forEach(([, controller]) => controller.abort());
+    markRunsCancelled(runIds);
+    setIsSending(false);
+
+    await Promise.allSettled(cancelRequests);
+    window.setTimeout(() => {
+      runIds.forEach((runId) => cancelledRunIdsRef.current.delete(runId));
+    }, SESSION_SYNC_INTERVAL_MS);
+  }, [markRunsCancelled]);
 
   const handleSelectBranch = useCallback(
     (groupId: string, variantId: string) => {
@@ -2356,7 +2476,10 @@ export default function App() {
             lastStreamSequence = streamSequence;
           }
           if (event.type === "done") {
-            doneStatus = event.status === "error" ? "error" : "complete";
+            doneStatus =
+              event.status === "error" && !isChatCancelledMessage(event.error)
+                ? "error"
+                : "complete";
             doneError = sanitizeChatErrorMessage(event.error, "");
             if (typeof streamSequence === "number") {
               updateAssistant(assistantId, { streamSequence });
@@ -2527,6 +2650,17 @@ export default function App() {
         }
       } catch (error) {
         if (completedFromServer) {
+          return;
+        }
+        if (
+          cancelledRunIdsRef.current.has(generationRunId) ||
+          streamController.signal.aborted ||
+          isAbortError(error)
+        ) {
+          updateAssistant(
+            assistantId,
+            createCancelledAssistantPatch(raw, reasoning, lastStreamSequence)
+          );
           return;
         }
         const message =
@@ -2950,7 +3084,10 @@ export default function App() {
                 lastStreamSequence = streamSequence;
               }
               if (event.type === "done") {
-                doneStatus = event.status === "error" ? "error" : "complete";
+                doneStatus =
+                  event.status === "error" && !isChatCancelledMessage(event.error)
+                    ? "error"
+                    : "complete";
                 doneError = sanitizeChatErrorMessage(event.error, "");
                 if (typeof streamSequence === "number") {
                   updateAssistant(message.id, { streamSequence });
@@ -3090,6 +3227,17 @@ export default function App() {
             if (completedFromServer) {
               return;
             }
+            if (
+              cancelledRunIdsRef.current.has(generationRunId) ||
+              controller.signal.aborted ||
+              isAbortError(error)
+            ) {
+              updateAssistant(
+                message.id,
+                createCancelledAssistantPatch(raw, reasoning, lastStreamSequence)
+              );
+              return;
+            }
             if ((error as { name?: unknown }).name !== "AbortError") {
               console.warn("Could not resume ChatHTML run.", error);
             }
@@ -3155,6 +3303,7 @@ export default function App() {
       attachmentUploadGate.errorIds.length > 0,
     convertMessage,
     onNew: handleNewMessage,
+    onCancel: handleCancelRun,
     adapters: {
       attachments: attachmentAdapter
     }

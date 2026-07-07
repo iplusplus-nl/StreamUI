@@ -167,6 +167,7 @@ export function ChatInput({
                 className="send-button cancel-button"
                 type="button"
                 aria-label="Stop response"
+                title="Stop response"
               >
                 <span className="stop-square" aria-hidden="true" />
               </ComposerPrimitive.Cancel>

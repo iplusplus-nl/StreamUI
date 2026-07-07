@@ -183,6 +183,8 @@ type ChatRunInput = {
 type ChatRun = {
   id: string;
   input: ChatRunInput;
+  abortController: AbortController;
+  cancelRequested?: boolean;
   events: SequencedStreamEvent[];
   subscribers: Set<(event: SequencedStreamEvent) => void>;
   sequence: number;
@@ -198,6 +200,7 @@ type ChatRun = {
 const chatRuns = new Map<string, ChatRun>();
 const CHAT_RUN_TTL_MS = 10 * 60 * 1000;
 const STREAM_PERSIST_INTERVAL_MS = 500;
+const CHAT_CANCELLED_MESSAGE = "Generation stopped.";
 
 function flushResponse(res: Response): void {
   const flush = (res as Response & { flush?: () => void }).flush;
@@ -289,9 +292,16 @@ function getStreamUiMessagePatch(
   const sessionTitle = extractBetweenTag(raw, "sessiontitle");
   const streamui = extractStreamUi(raw);
   const content = chat.content.trim() || (!streamui.hasOpen ? stripProtocolTags(raw) : "");
+  const isCancelled = status === "complete" && error === CHAT_CANCELLED_MESSAGE;
 
   return {
-    content: content || (status === "error" && !raw ? "I could not complete that request." : ""),
+    content:
+      content ||
+      (isCancelled
+        ? CHAT_CANCELLED_MESSAGE
+        : status === "error" && !raw
+          ? "I could not complete that request."
+          : ""),
     rawStream: raw,
     reasoning: reasoning || undefined,
     ...(sessionTitle.hasClose && sessionTitle.content.trim()
@@ -302,8 +312,27 @@ function getStreamUiMessagePatch(
     generationRunId,
     streamSequence,
     status,
-    ...(error ? { error } : {})
+    ...(error && !isCancelled ? { error } : {})
   };
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.message === CHAT_CANCELLED_MESSAGE)
+  );
+}
+
+function createAbortError(): Error {
+  const error = new Error(CHAT_CANCELLED_MESSAGE);
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw createAbortError();
+  }
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number) {
@@ -781,6 +810,10 @@ function scheduleRunCleanup(run: ChatRun): void {
 }
 
 function emitRunStreamEvent(run: ChatRun, event: StreamEvent): void {
+  if (run.status !== "running") {
+    return;
+  }
+
   if (event.type === "content") {
     run.raw += event.text;
   } else if (event.type === "reasoning") {
@@ -812,16 +845,31 @@ function finishChatRun(
   status: "complete" | "error",
   error?: string
 ): void {
+  if (run.status !== "running") {
+    return;
+  }
+
   run.status = status;
   run.error = error;
   appendRunEvent(run, {
     type: "done",
     status,
-    ...(error ? { error } : {})
+    ...(status === "error" && error ? { error } : {})
   });
   void flushRunPersistence(run, status, error).finally(() => {
     scheduleRunCleanup(run);
   });
+}
+
+function cancelChatRun(run: ChatRun): boolean {
+  if (run.status !== "running") {
+    return false;
+  }
+
+  run.cancelRequested = true;
+  run.abortController.abort();
+  finishChatRun(run, "complete", CHAT_CANCELLED_MESSAGE);
+  return true;
 }
 
 async function executeChatRun(run: ChatRun): Promise<void> {
@@ -830,6 +878,14 @@ async function executeChatRun(run: ChatRun): Promise<void> {
     await runOpenRouterChat(run, (event) => emitRunStreamEvent(run, event));
     finishChatRun(run, "complete");
   } catch (error) {
+    if (run.status !== "running") {
+      return;
+    }
+    if (run.cancelRequested || isAbortError(error)) {
+      finishChatRun(run, "complete", CHAT_CANCELLED_MESSAGE);
+      return;
+    }
+
     const message =
       error instanceof Error ? error.message : "Unknown chat proxy error.";
     console.error(`[chat:${run.input.requestId}] error ${message}`);
@@ -841,6 +897,7 @@ function startChatRun(input: ChatRunInput): ChatRun {
   const run: ChatRun = {
     id: input.runId,
     input,
+    abortController: new AbortController(),
     events: [],
     subscribers: new Set(),
     sequence: 0,
@@ -1473,6 +1530,7 @@ async function streamResponsesOnce({
   tools,
   emit,
   state,
+  signal,
   useOpenRouterReasoning
 }: {
   endpoint: string;
@@ -1482,8 +1540,11 @@ async function streamResponsesOnce({
   tools: ResponsesToolDefinition[];
   emit: StreamEventWriter;
   state: ToolStreamState;
+  signal: AbortSignal;
   useOpenRouterReasoning: boolean;
 }): Promise<ResponsesFunctionCallItem[]> {
+  throwIfAborted(signal);
+
   const body: Record<string, unknown> = {
     model: apiSettings.model,
     input,
@@ -1509,6 +1570,7 @@ async function streamResponsesOnce({
       "HTTP-Referer": "http://localhost:5173",
       "X-Title": "ChatHTML Runtime Demo"
     },
+    signal,
     body: JSON.stringify(body)
   });
 
@@ -1682,16 +1744,23 @@ async function streamResponsesOnce({
   };
 
   const reader = response.body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
+  try {
+    while (true) {
+      throwIfAborted(signal);
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    lines.forEach(flushLine);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+      lines.forEach(flushLine);
+    }
+  } finally {
+    if (signal.aborted) {
+      await reader.cancel().catch(() => undefined);
+    }
   }
 
   const tail = decoder.decode();
@@ -1895,6 +1964,7 @@ async function runOpenRouterChat(
       toolMaxSteps === null || step < toolMaxSteps;
       step += 1
     ) {
+      throwIfAborted(run.abortController.signal);
       nativeSteps += 1;
       const functionCalls = await streamResponsesOnce({
         endpoint,
@@ -1904,8 +1974,11 @@ async function runOpenRouterChat(
         tools: toolDefinitions,
         emit,
         state: toolStreamState,
+        signal: run.abortController.signal,
         useOpenRouterReasoning
       });
+
+      throwIfAborted(run.abortController.signal);
 
       if (!functionCalls.length) {
         if (toolStreamState.contentChars === 0) {
@@ -1915,8 +1988,10 @@ async function runOpenRouterChat(
       }
 
       for (const call of functionCalls) {
+        throwIfAborted(run.abortController.signal);
         responseInput.push(call);
         const toolResult = await executeResponsesTool(call);
+        throwIfAborted(run.abortController.signal);
         responseInput.push({
           type: "function_call_output",
           call_id: call.call_id,
@@ -1992,4 +2067,24 @@ export async function handleChatRunEvents(
   }
 
   attachChatRun(req, res, run, getAfterSequence(req.query.after));
+}
+
+export async function handleCancelChatRun(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const runId = stringValue(req.params.runId, 160);
+  const run = chatRuns.get(runId);
+  if (!run) {
+    res.status(404).json({ error: "Chat run not found." });
+    return;
+  }
+
+  const cancelled = cancelChatRun(run);
+  res.json({
+    ok: true,
+    runId: run.id,
+    status: run.status,
+    cancelled
+  });
 }

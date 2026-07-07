@@ -4,7 +4,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleModelsRequest } from "./models.js";
-import { handleChatRunEvents, handleOpenRouterChat } from "./openrouter.js";
+import {
+  handleCancelChatRun,
+  handleChatRunEvents,
+  handleOpenRouterChat
+} from "./openrouter.js";
 import { handleExportResourceRequest } from "./exportResources.js";
 import { handleRetrievalRequest } from "./retrieval.js";
 import { handleGetRuntimeSettings } from "./runtimeApiSettings.js";
@@ -41,6 +45,7 @@ app.get("/api/health", (_req, res) => {
 
 app.post("/api/chat", handleOpenRouterChat);
 app.get("/api/chat/runs/:runId/events", handleChatRunEvents);
+app.post("/api/chat/runs/:runId/cancel", handleCancelChatRun);
 app.post("/api/models", handleModelsRequest);
 app.post("/api/retrieve", handleRetrievalRequest);
 app.get("/api/export-resource", handleExportResourceRequest);
