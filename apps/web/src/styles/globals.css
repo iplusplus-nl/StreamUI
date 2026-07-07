@@ -700,6 +700,16 @@ button {
   opacity: 0.42;
 }
 
+.settings-version {
+  margin: auto 8px 2px;
+  color: #a1a1aa;
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.2;
+  letter-spacing: 0;
+  user-select: none;
+}
+
 .settings-content {
   display: flex;
   position: relative;
@@ -1391,6 +1401,11 @@ button {
 .app-shell[data-theme="night"] .settings-nav-item,
 .settings-overlay[data-theme="night"] .settings-nav-item {
   color: #f4f4f5;
+}
+
+.app-shell[data-theme="night"] .settings-version,
+.settings-overlay[data-theme="night"] .settings-version {
+  color: #a1a1aa;
 }
 
 .app-shell[data-theme="night"] .settings-nav-item.is-active,
@@ -3257,6 +3272,11 @@ button {
   .settings-nav-item {
     width: auto;
     min-width: max-content;
+  }
+
+  .settings-version {
+    margin: 0 6px 0 auto;
+    flex: 0 0 auto;
   }
 
   .settings-content {

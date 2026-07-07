@@ -64,6 +64,7 @@ import {
 import type { AuthUser } from "../core/cloudAuth";
 import { topUpBalance } from "../core/cloudBilling";
 import { fetchModelCatalog } from "../features/settings/modelCatalog";
+import packageJson from "../../package.json";
 import { ModelImportDialog } from "./ModelImportDialog";
 
 export type ThemeMode = "day" | "night";
@@ -76,6 +77,7 @@ export type SessionListItem = {
 type SettingsSection = "api" | "billing" | "preferences" | "display" | "search";
 
 const COMPACT_SIDEBAR_QUERY = "(max-width: 720px), (orientation: portrait)";
+const APP_VERSION = packageJson.version;
 
 function getInitialSidebarCollapsed(): boolean {
   if (typeof window === "undefined") {
@@ -866,6 +868,9 @@ export function SessionSidebar({
                 <Search size={18} strokeWidth={2.1} aria-hidden="true" />
                 <span>Web Search</span>
               </button>
+              <div className="settings-version" aria-label={`Version ${APP_VERSION}`}>
+                v{APP_VERSION}
+              </div>
             </aside>
 
             <div className="settings-content">
