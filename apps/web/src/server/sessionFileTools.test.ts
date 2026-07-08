@@ -132,6 +132,29 @@ test("readFile returns image metadata and separate multimodal follow-up content"
   ]);
 });
 
+test("readFile omits image follow-up content when image input is unavailable", async () => {
+  const result = await readFileToolResult(
+    [
+      {
+        id: "image-1",
+        kind: "image",
+        name: "photo.png",
+        mimeType: "image/png",
+        size: 12,
+        createdAt: 1,
+        dataUrl: "data:image/png;base64,aaaa"
+      }
+    ],
+    { id: "image-1" },
+    undefined,
+    { allowImageInput: false }
+  );
+
+  assert.equal(typeof result.output, "string");
+  assert.match(result.output as string, /metadata_only/);
+  assert.equal(result.followUpContent, undefined);
+});
+
 test("readFile prefers storage bytes over stale inline image data", async () => {
   const fileId = createStoredFileId("image");
   const imageDataUrl =

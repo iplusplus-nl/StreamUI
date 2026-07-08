@@ -38,6 +38,7 @@ import {
   type ApiKeySource
 } from "./runtimeApiSettings.js";
 import { SYSTEM_PROMPT } from "./systemPrompt.js";
+import { modelLikelySupportsImageInput } from "../src/core/modelCapabilities.js";
 
 type ChatRole = "user" | "assistant" | "system";
 type OpenRouterReasoningEffort =
@@ -162,6 +163,31 @@ type ChatRequestBody = {
   assistantMessage?: unknown;
 };
 
+type ArtifactEditReference = {
+  kind: "element" | "text";
+  key: string;
+  selector: string;
+  label: string;
+  preview: string;
+  tagName?: string;
+  text?: string;
+  html?: string;
+};
+
+type ArtifactEditRequestBody = {
+  source?: unknown;
+  prompt?: unknown;
+  references?: unknown;
+  apiSettings?: unknown;
+};
+
+type ArtifactSourceEdit = {
+  find: string;
+  replace: string;
+  occurrence?: number;
+  note?: string;
+};
+
 type ChatRunInput = {
   requestId: string;
   startedAt: number;
@@ -211,6 +237,10 @@ function flushResponse(res: Response): void {
 
 function stringValue(value: unknown, maxLength = 2_000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function rawStringValue(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.slice(0, maxLength) : "";
 }
 
 function normalizeStringArray(input: unknown): string[] | undefined {
@@ -417,6 +447,13 @@ function buildCanvasContextPrompt(canvas: CanvasContext): string {
 - Use cards only when structurally necessary, and make surfaces feel integrated through precise spacing, restrained radius, tactile borders, shadow, texture, unusual geometry, or material contrast.
 - Keep the design polished: coherent palette, strong typographic hierarchy, balanced negative space, clear focal point, and details that reward inspection without becoming clutter.
 - Keep the artifact focused: choose a strong visual idea and avoid repetitive filler, giant SVG paths, large embedded data, or exhaustive code unless the user explicitly asks for it.
+- Honor requested quantity. If the user asks for one object, scene, chart, game, or device, render one primary subject. Only show multiple views, variants, before/after states, or duplicated objects when the user asks for them, and label/arrange them intentionally.
+- IDs must be unique across the artifact. Never emit two elements with the same id. Use classes for repeated styling and reserve ids for one-off script targets only.
+- Do not create a styled empty placeholder and then later emit another element for the same visual. If you need a JavaScript mount point, keep the placeholder unstyled or populate that exact element; do not duplicate it.
+- Budget fixed dimensions against the ${canvas.canvasWidth}px canvas: prefer max-width:min(100%, ...), box-sizing:border-box, aspect-ratio, and responsive media queries over rigid widths that can spill out.
+- The root composition should not cause horizontal overflow. Avoid child widths plus padding/borders that exceed the root, long unwrapped labels, and absolutely positioned parts that escape the subject.
+- Make the first viewport look intentional: the main subject should be visible, centered or deliberately placed, and not preceded by a large blank shell, empty frame, or duplicate scaffold.
+- Silently review the final HTML/CSS before closing </streamui>: unique ids, no accidental duplicate primary subjects, no empty styled placeholders, no unintended horizontal overflow, no clipped or overlapping text, and the latest user request is visibly satisfied.
 - The user may attach images. Inspect uploaded images directly and treat them as first-class context for analysis, OCR, comparison, critique, or visual redesign requests.
 - When useful, combine observations from uploaded images with retrieve tool sources in one coherent HTML artifact.
 - If retrieve tool context is provided, use it for URLs, external resources, current information, source images, and page details.
@@ -563,6 +600,17 @@ function normalizeSessionMessageInput(input: unknown): SessionMessageInput | und
         ? message.branchVariantId
         : undefined,
     branchAnchor: message.branchAnchor ? true : undefined,
+    artifactEditBaseRawStream:
+      typeof message.artifactEditBaseRawStream === "string"
+        ? message.artifactEditBaseRawStream
+        : undefined,
+    artifactEdits: Array.isArray(message.artifactEdits)
+      ? message.artifactEdits
+      : undefined,
+    activeArtifactEditId:
+      typeof message.activeArtifactEditId === "string"
+        ? message.activeArtifactEditId
+        : undefined,
     generationRunId:
       typeof message.generationRunId === "string"
         ? message.generationRunId
@@ -1549,11 +1597,13 @@ async function streamResponsesOnce({
     model: apiSettings.model,
     input,
     instructions,
-    tools,
-    tool_choice: "auto",
     stream: true,
     max_output_tokens: 9000
   };
+  if (tools.length) {
+    body.tools = tools;
+    body.tool_choice = "auto";
+  }
   const reasoning = getResponsesReasoning(
     apiSettings.reasoningEffort,
     useOpenRouterReasoning
@@ -1778,6 +1828,383 @@ async function streamResponsesOnce({
   return Array.from(calls.values());
 }
 
+function normalizeArtifactEditReference(input: unknown): ArtifactEditReference | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const reference = input as Partial<ArtifactEditReference>;
+  const kind =
+    reference.kind === "element" || reference.kind === "text"
+      ? reference.kind
+      : null;
+  const key = stringValue(reference.key, 240);
+  const selector = stringValue(reference.selector, 500);
+  if (!kind || !key || !selector) {
+    return null;
+  }
+
+  return {
+    kind,
+    key,
+    selector,
+    label: stringValue(reference.label, 160) || "Reference",
+    preview: stringValue(reference.preview, 500),
+    tagName: stringValue(reference.tagName, 80) || undefined,
+    text: stringValue(reference.text, 2_000) || undefined,
+    html: rawStringValue(reference.html, 8_000) || undefined
+  };
+}
+
+function normalizeArtifactEditReferences(input: unknown): ArtifactEditReference[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const references: ArtifactEditReference[] = [];
+  for (const item of input) {
+    const reference = normalizeArtifactEditReference(item);
+    if (!reference || seen.has(reference.key)) {
+      continue;
+    }
+    seen.add(reference.key);
+    references.push(reference);
+    if (references.length >= 8) {
+      break;
+    }
+  }
+
+  return references;
+}
+
+function extractJsonObjectText(value: string): string {
+  const trimmed = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "");
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  return start >= 0 && end > start ? trimmed.slice(start, end + 1) : trimmed;
+}
+
+function normalizeArtifactSourceEdits(input: unknown): ArtifactSourceEdit[] {
+  if (!input || typeof input !== "object") {
+    return [];
+  }
+
+  const editsInput = (input as { edits?: unknown }).edits;
+  if (!Array.isArray(editsInput)) {
+    return [];
+  }
+
+  const edits: ArtifactSourceEdit[] = [];
+  for (const item of editsInput) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const edit = item as Partial<ArtifactSourceEdit>;
+    if (typeof edit.find !== "string" || typeof edit.replace !== "string") {
+      continue;
+    }
+
+    const occurrence =
+      typeof edit.occurrence === "number" && Number.isFinite(edit.occurrence)
+        ? Math.max(1, Math.round(edit.occurrence))
+        : undefined;
+    edits.push({
+      find: edit.find,
+      replace: edit.replace,
+      occurrence,
+      note: stringValue(edit.note, 240) || undefined
+    });
+    if (edits.length >= 24) {
+      break;
+    }
+  }
+
+  return edits;
+}
+
+function countOccurrences(source: string, needle: string): number {
+  if (!needle) {
+    return 0;
+  }
+
+  let count = 0;
+  let index = 0;
+  while (index <= source.length) {
+    const found = source.indexOf(needle, index);
+    if (found < 0) {
+      break;
+    }
+    count += 1;
+    index = found + needle.length;
+  }
+
+  return count;
+}
+
+function findOccurrenceIndex(
+  source: string,
+  needle: string,
+  occurrence: number
+): number {
+  let index = 0;
+  let seen = 0;
+  while (index <= source.length) {
+    const found = source.indexOf(needle, index);
+    if (found < 0) {
+      return -1;
+    }
+    seen += 1;
+    if (seen === occurrence) {
+      return found;
+    }
+    index = found + needle.length;
+  }
+
+  return -1;
+}
+
+export function applyArtifactSourceEdits(
+  source: string,
+  edits: ArtifactSourceEdit[]
+): {
+  rawStream: string;
+  applied: Array<{
+    note?: string;
+    occurrence?: number;
+    findLength: number;
+    replaceLength: number;
+  }>;
+} {
+  if (!edits.length) {
+    throw new Error("The model did not return any source edits.");
+  }
+
+  let current = source;
+  const applied: Array<{
+    note?: string;
+    occurrence?: number;
+    findLength: number;
+    replaceLength: number;
+  }> = [];
+
+  edits.forEach((edit, index) => {
+    if (!edit.find) {
+      throw new Error(`Edit ${index + 1} has an empty find string.`);
+    }
+    if (edit.find === edit.replace) {
+      throw new Error(`Edit ${index + 1} does not change the source.`);
+    }
+
+    const matches = countOccurrences(current, edit.find);
+    if (matches === 0) {
+      throw new Error(`Edit ${index + 1} did not match the current source.`);
+    }
+    if (!edit.occurrence && matches > 1) {
+      throw new Error(
+        `Edit ${index + 1} matched ${matches} places. The model must specify occurrence.`
+      );
+    }
+
+    const occurrence = edit.occurrence ?? 1;
+    if (occurrence > matches) {
+      throw new Error(
+        `Edit ${index + 1} requested occurrence ${occurrence}, but only ${matches} matched.`
+      );
+    }
+
+    const start = findOccurrenceIndex(current, edit.find, occurrence);
+    if (start < 0) {
+      throw new Error(`Edit ${index + 1} could not be applied.`);
+    }
+
+    current =
+      current.slice(0, start) +
+      edit.replace +
+      current.slice(start + edit.find.length);
+    applied.push({
+      note: edit.note,
+      occurrence: edit.occurrence,
+      findLength: edit.find.length,
+      replaceLength: edit.replace.length
+    });
+  });
+
+  if (current === source) {
+    throw new Error("The source edits did not change the artifact.");
+  }
+  if (/<streamui\b/i.test(source) && !/<streamui\b/i.test(current)) {
+    throw new Error("The source edits removed the streamui artifact block.");
+  }
+
+  return { rawStream: current, applied };
+}
+
+function buildArtifactEditInstructions(): string {
+  return `You edit existing ChatHTML artifact source with precise patches.
+
+Return only JSON with this exact shape:
+{"summary":"short change summary","edits":[{"find":"exact source substring","replace":"replacement substring","occurrence":1,"note":"optional"}]}
+
+Rules:
+- Apply the user's request by editing ORIGINAL_SOURCE, not by regenerating the whole artifact.
+- Every find value must be an exact contiguous substring from ORIGINAL_SOURCE or from the source after earlier edits.
+- Keep edits small and targeted. Use multiple edits when that is clearer.
+- If a find substring appears more than once, include a 1-based occurrence number.
+- Preserve valid ChatHTML protocol tags, especially <chat> and <streamui>.
+- Use selected references as anchors. DOM html/text may differ from source after parsing, so match against ORIGINAL_SOURCE carefully.
+- Do not include markdown, comments outside JSON, or a full rewritten artifact.`;
+}
+
+async function runArtifactEditModel({
+  apiSettings,
+  source,
+  prompt,
+  references,
+  signal
+}: {
+  apiSettings: RuntimeApiSettings;
+  source: string;
+  prompt: string;
+  references: ArtifactEditReference[];
+  signal: AbortSignal;
+}): Promise<{
+  summary: string;
+  edits: ArtifactSourceEdit[];
+  rawModelText: string;
+}> {
+  const endpoint = getResponsesEndpoint(apiSettings.baseUrl);
+  const state: ToolStreamState = {
+    contentChars: 0,
+    contentEvents: 0,
+    reasoningChars: 0,
+    reasoningEvents: 0
+  };
+  let rawModelText = "";
+  await streamResponsesOnce({
+    endpoint,
+    apiSettings,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "USER_PROMPT:",
+              prompt,
+              "",
+              "SELECTED_REFERENCES_JSON:",
+              JSON.stringify(references, null, 2),
+              "",
+              "ORIGINAL_SOURCE:",
+              source
+            ].join("\n")
+          }
+        ]
+      }
+    ],
+    instructions: buildArtifactEditInstructions(),
+    tools: [],
+    emit: (event) => {
+      if (event.type === "content") {
+        rawModelText += event.text;
+      }
+    },
+    state,
+    signal,
+    useOpenRouterReasoning: isOpenRouterRuntime(apiSettings)
+  });
+
+  const parsed = safeJsonParse(extractJsonObjectText(rawModelText));
+  const edits = normalizeArtifactSourceEdits(parsed);
+  const summary =
+    parsed && typeof parsed === "object"
+      ? stringValue((parsed as { summary?: unknown }).summary, 500)
+      : "";
+
+  return {
+    summary,
+    edits,
+    rawModelText
+  };
+}
+
+export async function handleArtifactEdit(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const body = req.body as ArtifactEditRequestBody;
+  const requestId = Math.random().toString(36).slice(2, 9);
+  const abortController = new AbortController();
+  let completed = false;
+
+  res.on("close", () => {
+    if (!completed) {
+      abortController.abort();
+    }
+  });
+
+  try {
+    const source = typeof body.source === "string" ? body.source : "";
+    const prompt = stringValue(body.prompt, 8_000);
+    const references = normalizeArtifactEditReferences(body.references);
+    if (!source.trim()) {
+      res.status(400).json({ error: "Artifact source is required." });
+      completed = true;
+      return;
+    }
+    if (source.length > 2_000_000) {
+      res.status(413).json({ error: "Artifact source is too large to edit safely." });
+      completed = true;
+      return;
+    }
+    if (!prompt) {
+      res.status(400).json({ error: "Edit prompt is required." });
+      completed = true;
+      return;
+    }
+    if (!references.length) {
+      res.status(400).json({ error: "At least one artifact reference is required." });
+      completed = true;
+      return;
+    }
+
+    const apiSettings = readRuntimeApiSettings(body.apiSettings);
+    console.info(
+      `[artifact-edit:${requestId}] start provider=${apiSettings.providerName} base_url=${apiSettings.baseUrl} model=${apiSettings.model} source_chars=${source.length} references=${references.length}`
+    );
+    const startedAt = Date.now();
+    const result = await runArtifactEditModel({
+      apiSettings,
+      source,
+      prompt,
+      references,
+      signal: abortController.signal
+    });
+    const applied = applyArtifactSourceEdits(source, result.edits);
+    completed = true;
+    console.info(
+      `[artifact-edit:${requestId}] complete duration_ms=${Date.now() - startedAt} edits=${applied.applied.length}`
+    );
+    res.json({
+      rawStream: applied.rawStream,
+      summary: result.summary,
+      edits: applied.applied
+    });
+  } catch (error) {
+    completed = true;
+    const message =
+      error instanceof Error ? error.message : "The artifact edit failed.";
+    console.error(`[artifact-edit:${requestId}] error ${message}`);
+    if (!res.headersSent) {
+      res.status(500).json({ error: message });
+    }
+  }
+}
+
 async function runOpenRouterChat(
   run: ChatRun,
   emit: StreamEventWriter
@@ -1808,6 +2235,7 @@ async function runOpenRouterChat(
     const retrievalStats = createRetrievalToolStats();
     const memoryStats = createMemoryToolStats();
     const fileStats = createSessionFileToolStats();
+    const allowImageInput = modelLikelySupportsImageInput(apiSettings.model);
     const toolMaxSteps = readNativeToolMaxSteps();
     let nativeSteps = 0;
     let nativeToolCalls = 0;
@@ -1909,7 +2337,9 @@ async function runOpenRouterChat(
             { type: "reasoning", text: "Reading session file..." },
             toolStreamState
           );
-          const result = await readFileToolResult(files, args, fileStats);
+          const result = await readFileToolResult(files, args, fileStats, {
+            allowImageInput
+          });
           return {
             output: result.output,
             followUpInput: result.followUpContent

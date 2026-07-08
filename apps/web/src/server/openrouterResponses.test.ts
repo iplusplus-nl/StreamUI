@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  applyArtifactSourceEdits,
   describeApiCredentialMismatch,
   extractResponsesReasoningDelta,
   extractResponsesReasoningDoneText,
@@ -113,6 +114,32 @@ describe("openrouter response stream helpers", () => {
         text: "Finished thinking"
       }),
       "Finished thinking"
+    );
+  });
+
+  it("applies artifact source edits with explicit occurrence", () => {
+    const result = applyArtifactSourceEdits("<streamui><p>a</p><p>a</p></streamui>", [
+      {
+        find: "<p>a</p>",
+        replace: "<p>b</p>",
+        occurrence: 2
+      }
+    ]);
+
+    assert.equal(result.rawStream, "<streamui><p>a</p><p>b</p></streamui>");
+    assert.equal(result.applied[0].occurrence, 2);
+  });
+
+  it("rejects ambiguous artifact source edits", () => {
+    assert.throws(
+      () =>
+        applyArtifactSourceEdits("<streamui><p>a</p><p>a</p></streamui>", [
+          {
+            find: "<p>a</p>",
+            replace: "<p>b</p>"
+          }
+        ]),
+      /matched 2 places/
     );
   });
 });

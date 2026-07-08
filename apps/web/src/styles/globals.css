@@ -1633,6 +1633,16 @@ button {
   background: #3a3a3a;
 }
 
+.app-shell[data-theme="night"] .artifact-select-action.is-active {
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.28);
+}
+
+.app-shell[data-theme="night"] .artifact-select-action.is-active:hover:not(:disabled) {
+  color: #ffffff;
+  background: rgba(37, 99, 235, 0.38);
+}
+
 .app-shell[data-theme="night"] .regenerate-action.is-error {
   color: #ffb4a8;
   background: rgba(180, 35, 24, 0.18);
@@ -1646,6 +1656,59 @@ button {
 .app-shell[data-theme="night"] .branch-count,
 .app-shell[data-theme="night"] .message-branch-controls {
   color: #a1a1aa;
+}
+
+.app-shell[data-theme="night"] .artifact-edit-root,
+.app-shell[data-theme="night"] .artifact-edit-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #f4f4f5;
+  background: #2b2b2b;
+}
+
+.app-shell[data-theme="night"] .artifact-edit-root {
+  color: #d4d4d8;
+}
+
+.app-shell[data-theme="night"] .artifact-edit-root.is-active,
+.app-shell[data-theme="night"] .artifact-edit-card.is-active {
+  border-color: rgba(147, 197, 253, 0.55);
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.app-shell[data-theme="night"] .artifact-edit-root:hover:not(:disabled),
+.app-shell[data-theme="night"] .artifact-edit-card:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: #333333;
+}
+
+.app-shell[data-theme="night"] .artifact-edit-card-header {
+  color: #e4e4e7;
+}
+
+.app-shell[data-theme="night"] .artifact-edit-variant-count,
+.app-shell[data-theme="night"] .artifact-edit-prompt,
+.app-shell[data-theme="night"] .artifact-edit-status {
+  color: #a1a1aa;
+}
+
+.app-shell[data-theme="night"] .artifact-edit-reference {
+  color: #a5f3fc;
+  background: rgba(8, 145, 178, 0.2);
+}
+
+.app-shell[data-theme="night"] .artifact-edit-reference.is-text {
+  color: #bbf7d0;
+  background: rgba(22, 163, 74, 0.2);
+}
+
+.app-shell[data-theme="night"] .artifact-edit-card.is-error {
+  border-color: rgba(253, 162, 155, 0.4);
+  background: rgba(180, 35, 24, 0.14);
+}
+
+.app-shell[data-theme="night"] .artifact-edit-status.is-error,
+.app-shell[data-theme="night"] .artifact-edit-card.is-error .artifact-edit-card-header {
+  color: #fda29b;
 }
 
 .app-shell[data-theme="night"] .message-bubble.assistant.is-placeholder {
@@ -1750,6 +1813,37 @@ button {
 
 .app-shell[data-theme="night"] .chat-input-textarea::placeholder {
   color: #a1a1aa;
+}
+
+.app-shell[data-theme="night"] .artifact-selection-chip {
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #f4f4f5;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.app-shell[data-theme="night"] .artifact-selection-kind {
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.26);
+}
+
+.app-shell[data-theme="night"] .artifact-selection-chip.is-text .artifact-selection-kind {
+  color: #bbf7d0;
+  background: rgba(22, 163, 74, 0.22);
+}
+
+.app-shell[data-theme="night"] .artifact-selection-copy span {
+  color: #a1a1aa;
+}
+
+.app-shell[data-theme="night"] .artifact-selection-remove,
+.app-shell[data-theme="night"] .artifact-selection-clear {
+  color: #d4d4d8;
+}
+
+.app-shell[data-theme="night"] .artifact-selection-remove:hover,
+.app-shell[data-theme="night"] .artifact-selection-clear:hover {
+  color: #ffffff;
+  background: #3a3a3a;
 }
 
 .app-shell[data-theme="night"] .attach-button {
@@ -1979,6 +2073,33 @@ button {
   opacity: 0.36;
 }
 
+.artifact-select-action {
+  display: inline-flex;
+  width: auto;
+  min-width: 94px;
+  padding: 0 10px;
+  border-radius: 999px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.artifact-select-action span {
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1;
+}
+
+.artifact-select-action.is-active {
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.artifact-select-action.is-active:hover:not(:disabled) {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
 .user-edit-button {
   margin-right: 2px;
 }
@@ -2021,6 +2142,154 @@ button {
   line-height: 1;
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+
+.artifact-edit-chain {
+  display: grid;
+  width: min(680px, 100%);
+  align-self: stretch;
+  justify-items: end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.artifact-edit-root,
+.artifact-edit-card {
+  border: 1px solid #e4e7ec;
+  color: #18181b;
+  background: #ffffff;
+  box-shadow: none;
+  text-align: left;
+}
+
+.artifact-edit-root {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.artifact-edit-root.is-active,
+.artifact-edit-card.is-active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.artifact-edit-root:hover:not(:disabled),
+.artifact-edit-card:hover:not(:disabled) {
+  border-color: #c7d7ea;
+  background: #f8fafc;
+}
+
+.artifact-edit-card {
+  --artifact-edit-indent: calc(var(--artifact-edit-depth, 0) * 18px);
+  display: grid;
+  width: min(560px, calc(100% - var(--artifact-edit-indent)));
+  min-height: 86px;
+  margin-right: var(--artifact-edit-indent);
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    transform 150ms ease;
+}
+
+.artifact-edit-card:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.artifact-edit-card:disabled,
+.artifact-edit-root:disabled {
+  cursor: default;
+}
+
+.artifact-edit-card-header,
+.artifact-edit-reference-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.artifact-edit-card-header {
+  justify-content: space-between;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.artifact-edit-variant-count {
+  flex: 0 0 auto;
+  color: #667085;
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-edit-reference-row {
+  flex-wrap: wrap;
+}
+
+.artifact-edit-reference {
+  display: inline-flex;
+  max-width: 160px;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  color: #155e75;
+  background: #ecfeff;
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-edit-reference.is-text {
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.artifact-edit-prompt,
+.artifact-edit-status {
+  overflow: hidden;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 520;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.artifact-edit-prompt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.artifact-edit-status {
+  color: #667085;
+  white-space: nowrap;
+}
+
+.artifact-edit-status.is-error,
+.artifact-edit-card.is-error .artifact-edit-card-header {
+  color: #b42318;
+}
+
+.artifact-edit-card.is-error {
+  border-color: #fecdca;
+  background: #fff7f5;
+}
+
+.artifact-edit-card.is-pending {
+  border-style: dashed;
 }
 
 .thread-welcome {
@@ -2670,6 +2939,110 @@ button {
 
 .chat-input-dropzone[data-dragging="true"] {
   background: rgba(244, 244, 245, 0.78);
+}
+
+.artifact-selection-tray {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 1px 0 0;
+}
+
+.artifact-selection-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.artifact-selection-chip {
+  display: grid;
+  width: min(360px, 100%);
+  min-height: 34px;
+  grid-template-columns: auto minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 4px 4px 8px;
+  overflow: hidden;
+  border: 1px solid #dedede;
+  border-radius: 8px;
+  color: #18181b;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.artifact-selection-kind {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+}
+
+.artifact-selection-chip.is-text .artifact-selection-kind {
+  color: #15803d;
+  background: #ecfdf3;
+}
+
+.artifact-selection-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  line-height: 1.2;
+}
+
+.artifact-selection-copy strong,
+.artifact-selection-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-selection-copy strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.artifact-selection-copy span {
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.artifact-selection-remove,
+.artifact-selection-clear {
+  border: 0;
+  color: #52525b;
+  background: transparent;
+}
+
+.artifact-selection-remove {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 7px;
+}
+
+.artifact-selection-remove:hover,
+.artifact-selection-clear:hover {
+  color: #18181b;
+  background: #e8e8e8;
+}
+
+.artifact-selection-clear {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .chat-input-textarea {
@@ -3332,6 +3705,18 @@ button {
 
   .chat-input-dropzone {
     border-radius: 24px;
+  }
+
+  .artifact-selection-tray {
+    grid-template-columns: 1fr;
+  }
+
+  .artifact-selection-chip {
+    width: 100%;
+  }
+
+  .artifact-selection-clear {
+    justify-self: start;
   }
 
   .artifact-export-trigger {

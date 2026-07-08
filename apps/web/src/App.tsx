@@ -62,11 +62,22 @@ import {
 } from "./core/displaySettings";
 import { buildArtifactContext } from "./core/artifactContext";
 import {
+  MAX_ARTIFACT_SELECTIONS,
+  type ArtifactSelection,
+  type ArtifactSelectionPayload
+} from "./core/artifactSelection";
+import {
+  getSnapshotDiagnostics,
+  renderSnapshotToPngBlob
+} from "./core/artifactExport";
+import { modelLikelySupportsImageInput } from "./core/modelCapabilities";
+import {
   compactEmptySessions,
   createEmptySession,
   createId,
   createInitialSessionState,
   filterDeletedSessionState,
+  getSessionStreamingRunIds,
   hasPersistedMessages,
   initialMessages,
   isSessionEmpty,
@@ -77,6 +88,8 @@ import {
   sortSessions,
   STREAM_INTERRUPTED_ERROR,
   summarizeSession,
+  type ArtifactEdit,
+  type ArtifactEditReference,
   type ChatSession,
   type ClientMessage,
   type SessionFile,
@@ -90,6 +103,7 @@ import type {
 import { extractStreamUiParts } from "./runtime/streamui/protocol";
 import { createStreamingRenderer } from "./runtime/streamui/streamingRenderer";
 import type {
+  PageThemeMode,
   RenderError,
   RenderSnapshot,
   StreamUiAction,
@@ -121,9 +135,21 @@ type ChatStreamEvent =
   | DoneStreamEvent
   | SequencedMemoryStreamEvent;
 
+type ArtifactEditResponse = {
+  rawStream: string;
+  summary?: string;
+  edits?: Array<{
+    note?: string;
+    occurrence?: number;
+    findLength?: number;
+    replaceLength?: number;
+  }>;
+};
+
 type SendStreamUiRequestOptions = {
   appendUserMessage?: boolean;
   assistantPatch?: Partial<ClientMessage>;
+  persistUserMessage?: ClientMessage;
   userMessagePatch?: Partial<ClientMessage>;
   initialReasoning?: string;
   requestHistory?:
@@ -387,6 +413,70 @@ function imageAttachmentToFileUpload(
     summary: `Uploaded image ${attachment.name}`,
     draft
   };
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Could not encode the rendered screenshot."));
+    });
+    reader.addEventListener("error", () => {
+      reject(reader.error ?? new Error("Could not read the rendered screenshot."));
+    });
+    reader.readAsDataURL(blob);
+  });
+}
+
+const MAX_VISUAL_REPAIR_DIAGNOSTICS_CHARS = 7_000;
+
+function clipVisualRepairDiagnostics(value: string): string {
+  if (value.length <= MAX_VISUAL_REPAIR_DIAGNOSTICS_CHARS) {
+    return value;
+  }
+
+  return `${value
+    .slice(0, MAX_VISUAL_REPAIR_DIAGNOSTICS_CHARS - 120)
+    .trimEnd()}\n\n[Diagnostics truncated; prioritize fixing layout, scale, overlap, clipping, and blur.]`;
+}
+
+function buildVisualRepairPrompt({
+  diagnostics,
+  hasScreenshot,
+  width
+}: {
+  diagnostics?: string;
+  hasScreenshot: boolean;
+  width: number;
+}): string {
+  const lines = [
+    hasScreenshot
+      ? "Repair the previous ChatHTML artifact using the attached rendering screenshot."
+      : "Repair the previous ChatHTML artifact using the textual render diagnostics below. The selected model cannot inspect image inputs, so infer visual failures from the artifact source, visible text, render errors, and layout intent.",
+    hasScreenshot
+      ? `The screenshot shows the actual rendered output at about ${Math.round(width)}px wide.`
+      : `The diagnostics describe the rendered artifact at about ${Math.round(width)}px wide.`,
+    "Inspect the screenshot or diagnostics for visual failures such as overlapping labels, clustered or unreadable content, clipped elements, bad scaling, excessive blur, tiny text, or poor use of space.",
+    "Use the previous artifact source and the original user intent from the conversation as context.",
+    "Generate a complete corrected ChatHTML artifact. Preserve the user's intent, but change the visual mapping if needed; do not keep realistic proportions when they make the result unreadable.",
+    "Prefer readable compressed/log scales, callouts, legends, exploded views, or separated annotation lanes when exact spatial scale would collapse details.",
+    "Do not explain the repair process outside the artifact."
+  ];
+
+  if (diagnostics) {
+    lines.push(
+      "",
+      "Render diagnostics and artifact source:",
+      clipVisualRepairDiagnostics(diagnostics)
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function createArtifactFileUpload(
@@ -781,6 +871,70 @@ function getAppendMessageText(message: AppendMessage): string {
     .trim();
 }
 
+function artifactSelectionToReference(
+  selection: ArtifactSelection
+): ArtifactEditReference {
+  return {
+    kind: selection.kind,
+    key: selection.key,
+    selector: selection.selector,
+    label: selection.label,
+    preview: selection.preview,
+    tagName: selection.tagName,
+    text: selection.text,
+    html: selection.html
+  };
+}
+
+function buildCompletedAssistantPatchFromRawStream(
+  rawStream: string,
+  themeMode: PageThemeMode
+): Partial<ClientMessage> {
+  const parts = extractStreamUiParts(rawStream);
+  const hasVisibleStreamUi =
+    parts.hasStreamUi && parts.streamui.trim().length > 0;
+  let snapshot: RenderSnapshot | undefined;
+
+  if (hasVisibleStreamUi) {
+    const renderer = createStreamingRenderer(themeMode);
+    renderer.replace(parts.streamui);
+    renderer.complete();
+    snapshot = renderer.getSnapshot();
+  }
+
+  return {
+    content: parts.chat || parts.fallbackText,
+    rawStream,
+    ...(snapshot ? { snapshot } : {}),
+    ...(hasVisibleStreamUi ? { artifactContext: buildArtifactContext(rawStream) } : {}),
+    hasStreamUi: hasVisibleStreamUi,
+    streamUiComplete: parts.streamUiComplete,
+    runtimeErrors: undefined,
+    status: "complete",
+    error: undefined
+  };
+}
+
+function normalizeArtifactEditResponse(input: unknown): ArtifactEditResponse {
+  if (!input || typeof input !== "object") {
+    throw new Error("The artifact edit response was empty.");
+  }
+
+  const response = input as Partial<ArtifactEditResponse>;
+  if (typeof response.rawStream !== "string" || !response.rawStream.trim()) {
+    throw new Error("The artifact edit did not return updated source.");
+  }
+
+  return {
+    rawStream: response.rawStream,
+    summary:
+      typeof response.summary === "string" && response.summary.trim()
+        ? response.summary.trim().slice(0, 500)
+        : undefined,
+    edits: Array.isArray(response.edits) ? response.edits : undefined
+  };
+}
+
 function buildArtifactActionMessage(action: StreamUiAction): string {
   return action.type === "prompt" ? action.prompt.trim().slice(0, 2000) : "";
 }
@@ -965,11 +1119,15 @@ type StreamThreadProps = {
   model: string;
   modelOptions: string[];
   reasoningEffort: ReasoningEffort;
+  artifactSelectionClearVersion: number;
   onRuntimeError(id: string, error: RenderError): void;
   onArtifactAction(id: string, action: StreamUiAction): void;
+  onVisualRepairAssistant(id: string, snapshot: RenderSnapshot, width: number): void;
   onRegenerateAssistant(id: string): void;
   onEditUserMessage(id: string, content: string): void;
   onSelectBranch(groupId: string, variantId: string): void;
+  onSelectArtifactEdit(assistantId: string, editId?: string): void;
+  onArtifactSelectionsChange(selections: ArtifactSelection[]): void;
   onModelChange(model: string): void;
   onReasoningEffortChange(reasoningEffort: ReasoningEffort): void;
 };
@@ -1026,11 +1184,15 @@ function StreamThread({
   model,
   modelOptions,
   reasoningEffort,
+  artifactSelectionClearVersion,
   onRuntimeError,
   onArtifactAction,
+  onVisualRepairAssistant,
   onRegenerateAssistant,
   onEditUserMessage,
   onSelectBranch,
+  onSelectArtifactEdit,
+  onArtifactSelectionsChange,
   onModelChange,
   onReasoningEffortChange
 }: StreamThreadProps) {
@@ -1053,6 +1215,168 @@ function StreamThread({
     () => new Map(files.map((file) => [file.id, file])),
     [files]
   );
+  const [artifactSelections, setArtifactSelections] = useState<
+    ArtifactSelection[]
+  >([]);
+  const [selectionModeMessageId, setSelectionModeMessageId] = useState<
+    string | null
+  >(null);
+  const visibleMessageIds = useMemo(
+    () => new Set(messages.map((message) => message.id)),
+    [messages]
+  );
+  const selectionsByMessageId = useMemo(() => {
+    const grouped = new Map<string, ArtifactSelection[]>();
+    for (const selection of artifactSelections) {
+      const group = grouped.get(selection.messageId) ?? [];
+      group.push(selection);
+      grouped.set(selection.messageId, group);
+    }
+    return grouped;
+  }, [artifactSelections]);
+  const artifactEditTimelineByUserId = useMemo(() => {
+    const timelines = new Map<
+      string,
+      {
+        assistantId: string;
+        edits: ArtifactEdit[];
+        activeEditId?: string;
+        disabled?: boolean;
+      }
+    >();
+
+    for (let index = 0; index < messages.length; index += 1) {
+      const assistant = messages[index];
+      if (
+        assistant.role !== "assistant" ||
+        !assistant.artifactEdits?.length
+      ) {
+        continue;
+      }
+
+      for (let userIndex = index - 1; userIndex >= 0; userIndex -= 1) {
+        const user = messages[userIndex];
+        if (user.role !== "user") {
+          continue;
+        }
+
+        timelines.set(user.id, {
+          assistantId: assistant.id,
+          edits: assistant.artifactEdits,
+          activeEditId: assistant.activeArtifactEditId,
+          disabled:
+            assistant.status === "streaming" ||
+            assistant.artifactEdits.some((edit) => edit.status === "pending")
+        });
+        break;
+      }
+    }
+
+    return timelines;
+  }, [messages]);
+
+  useEffect(() => {
+    setArtifactSelections([]);
+    setSelectionModeMessageId(null);
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    setArtifactSelections((current) => {
+      const next = current.filter((selection) =>
+        visibleMessageIds.has(selection.messageId)
+      );
+      return next.length === current.length ? current : next;
+    });
+    setSelectionModeMessageId((current) => {
+      if (!current || !visibleMessageIds.has(current)) {
+        return null;
+      }
+
+      const activeMessage = messages.find((message) => message.id === current);
+      return activeMessage?.role === "assistant" &&
+        activeMessage.status === "complete"
+        ? current
+        : null;
+    });
+  }, [messages, visibleMessageIds]);
+
+  const handleArtifactSelection = useCallback(
+    (messageId: string, selection: ArtifactSelectionPayload) => {
+      setArtifactSelections((current) => {
+        const nextSelection: ArtifactSelection = {
+          ...selection,
+          id: createId("artifact-selection"),
+          messageId,
+          createdAt: Date.now()
+        };
+        const next = current
+          .filter((item) => item.messageId === messageId && item.key !== selection.key)
+          .concat(nextSelection);
+
+        return next.slice(Math.max(0, next.length - MAX_ARTIFACT_SELECTIONS));
+      });
+    },
+    []
+  );
+
+  const handleArtifactSelectionModeChange = useCallback(
+    (messageId: string, enabled: boolean) => {
+      if (enabled) {
+        setSelectionModeMessageId(messageId);
+        return;
+      }
+
+      setSelectionModeMessageId((current) =>
+        current === messageId ? null : current
+      );
+    },
+    []
+  );
+
+  const handleRemoveArtifactSelection = useCallback((id: string) => {
+    setArtifactSelections((current) =>
+      current.filter((selection) => selection.id !== id)
+    );
+  }, []);
+
+  const handleClearArtifactSelections = useCallback(() => {
+    setArtifactSelections([]);
+  }, []);
+
+  useEffect(() => {
+    onArtifactSelectionsChange(artifactSelections);
+  }, [artifactSelections, onArtifactSelectionsChange]);
+
+  useEffect(() => {
+    if (artifactSelectionClearVersion <= 0) {
+      return;
+    }
+
+    setArtifactSelections([]);
+    setSelectionModeMessageId(null);
+  }, [artifactSelectionClearVersion]);
+
+  useEffect(() => {
+    if (!selectionModeMessageId) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof HTMLIFrameElement &&
+        event.target.classList.contains("preview-frame")
+      ) {
+        return;
+      }
+
+      setSelectionModeMessageId(null);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+    };
+  }, [selectionModeMessageId]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -1185,9 +1509,20 @@ function StreamThread({
                   showRawStream={showRawStream}
                   status={clientMessage.status}
                   error={clientMessage.error}
+                  artifactSelections={
+                    selectionsByMessageId.get(clientMessage.id) ?? []
+                  }
+                  isArtifactSelectionModeActive={
+                    selectionModeMessageId === clientMessage.id
+                  }
                   branchInfo={branchInfo}
                   onRuntimeError={onRuntimeError}
                   onArtifactAction={onArtifactAction}
+                  onArtifactSelection={handleArtifactSelection}
+                  onArtifactSelectionModeChange={
+                    handleArtifactSelectionModeChange
+                  }
+                  onVisualRepair={onVisualRepairAssistant}
                   onRegenerate={onRegenerateAssistant}
                   onSelectBranch={onSelectBranch}
                 />
@@ -1201,7 +1536,11 @@ function StreamThread({
                 files={clientMessage.fileIds
                   ?.map((fileId) => fileById.get(fileId))
                   .filter((file): file is SessionFile => Boolean(file))}
+                artifactEditTimeline={artifactEditTimelineByUserId.get(
+                  clientMessage.id
+                )}
                 onEdit={onEditUserMessage}
+                onSelectArtifactEdit={onSelectArtifactEdit}
               >
                 {clientMessage.content}
               </ChatMessage>
@@ -1215,6 +1554,9 @@ function StreamThread({
             model={model}
             modelOptions={modelOptions}
             reasoningEffort={reasoningEffort}
+            artifactSelections={artifactSelections}
+            onRemoveArtifactSelection={handleRemoveArtifactSelection}
+            onClearArtifactSelections={handleClearArtifactSelections}
             onModelChange={onModelChange}
             onReasoningEffortChange={onReasoningEffortChange}
           />
@@ -1258,6 +1600,7 @@ export default function App() {
     () => getVisibleSessionMessages(activeSession),
     [activeSession]
   );
+  const isActiveSessionSending = getSessionStreamingRunIds(activeSession).length > 0;
   const activeFiles = activeSession?.files ?? [];
   const activeSessionModel = activeSession?.model || apiSettings.model;
   const cloudEnabled = Boolean(runtimeSettings?.cloud?.enabled);
@@ -1279,6 +1622,7 @@ export default function App() {
   const messagesRef = useRef(sessionMessages);
   const activeSessionIdRef = useRef(sessionState.activeSessionId);
   const isSendingRef = useRef(isSending);
+  const artifactSelectionsRef = useRef<ArtifactSelection[]>([]);
   const sessionsLoadedRef = useRef(sessionsLoaded);
   const saveAbortRef = useRef<AbortController | null>(null);
   const lastSavedSessionPayloadRef = useRef<string | null>(null);
@@ -1290,6 +1634,8 @@ export default function App() {
   const cancelledRunIdsRef = useRef<Set<string>>(new Set());
   const pendingManagedRequestRef = useRef<PendingManagedRequest | null>(null);
   const pendingArtifactActionRef = useRef<PendingArtifactAction | null>(null);
+  const [artifactSelectionClearVersion, setArtifactSelectionClearVersion] =
+    useState(0);
   const attachmentAdapter = useMemo(
     () =>
       new StreamImageAttachmentAdapter({
@@ -1921,8 +2267,8 @@ export default function App() {
     [setSessionStateAndRef]
   );
 
-  const updateAssistant = useCallback(
-    (id: string, patch: Partial<ClientMessage>) => {
+  const updateAssistantMessage = useCallback(
+    (id: string, updater: (message: ClientMessage) => ClientMessage) => {
       setSessionStateAndRef((current) => {
         let didUpdate = false;
         const now = Date.now();
@@ -1935,7 +2281,7 @@ export default function App() {
 
             didUpdate = true;
             sessionChanged = true;
-            return { ...message, ...patch };
+            return updater(message);
           });
 
           if (!sessionChanged) {
@@ -1959,6 +2305,13 @@ export default function App() {
       });
     },
     [setSessionStateAndRef]
+  );
+
+  const updateAssistant = useCallback(
+    (id: string, patch: Partial<ClientMessage>) => {
+      updateAssistantMessage(id, (message) => ({ ...message, ...patch }));
+    },
+    [updateAssistantMessage]
   );
 
   const handleRuntimeError = useCallback(
@@ -2060,12 +2413,14 @@ export default function App() {
   );
 
   const handleCancelRun = useCallback(async () => {
-    const entries = Array.from(runConnectionsRef.current.entries());
-    if (!entries.length) {
+    const activeSession = sessionStateRef.current.sessions.find(
+      (session) => session.id === activeSessionIdRef.current
+    );
+    const runIds = getSessionStreamingRunIds(activeSession);
+    if (!runIds.length) {
       return;
     }
 
-    const runIds = entries.map(([runId]) => runId);
     runIds.forEach((runId) => cancelledRunIdsRef.current.add(runId));
 
     const cancelRequests = runIds.map((runId) =>
@@ -2077,9 +2432,13 @@ export default function App() {
       })
     );
 
-    entries.forEach(([, controller]) => controller.abort());
+    runIds.forEach((runId) => {
+      const controller = runConnectionsRef.current.get(runId);
+      controller?.abort();
+      runConnectionsRef.current.delete(runId);
+    });
     markRunsCancelled(runIds);
-    setIsSending(false);
+    setIsSending(runConnectionsRef.current.size > 0);
 
     await Promise.allSettled(cancelRequests);
     window.setTimeout(() => {
@@ -2539,7 +2898,9 @@ export default function App() {
             clientId: sessionClientIdRef.current,
             sessionId: requestSessionId,
             runId: generationRunId,
-            userMessage: appendUserMessage ? userMessage : undefined,
+            userMessage:
+              options.persistUserMessage ??
+              (appendUserMessage ? userMessage : undefined),
             assistantMessage,
             messages: toApiMessages(requestHistory),
             files: requestFiles,
@@ -2720,13 +3081,25 @@ export default function App() {
       visibleMessages,
       userIndex,
       assistantId,
-      nextUserContent
+      nextUserContent,
+      attachments = [],
+      appendUserMessage = true,
+      userMessagePatch,
+      assistantPatch,
+      initialReasoning,
+      requestHistory
     }: {
       session: ChatSession;
       visibleMessages: ClientMessage[];
       userIndex: number;
       assistantId?: string;
       nextUserContent: string;
+      attachments?: ImageAttachment[];
+      appendUserMessage?: boolean;
+      userMessagePatch?: Partial<ClientMessage>;
+      assistantPatch?: Partial<ClientMessage>;
+      initialReasoning?: string;
+      requestHistory?: SendStreamUiRequestOptions["requestHistory"];
     }) => {
       if (isSendingRef.current) {
         return;
@@ -2755,27 +3128,50 @@ export default function App() {
       const branchStartId = activeUser.id;
       const branchAnchorId = activeAssistant?.id;
       const historyBeforeUser = visibleMessages.slice(0, userIndex);
+      const visibleBranchUserMessage: ClientMessage | undefined = appendUserMessage
+        ? undefined
+        : {
+            id: createId("user"),
+            role: "user",
+            content: activeUser.content,
+            fileIds: activeUser.fileIds,
+            status: "complete",
+            branchGroupId: groupId,
+            branchVariantId: nextVariantId
+          };
 
-      void sendStreamUiRequest(nextUserContent, [], {
+      void sendStreamUiRequest(nextUserContent, attachments, {
+        appendUserMessage,
+        initialReasoning,
+        persistUserMessage: visibleBranchUserMessage,
         targetSessionId: session.id,
         branchSelection: { groupId, variantId: nextVariantId },
         userMessagePatch: {
-          fileIds: activeUser.fileIds,
+          ...userMessagePatch,
+          fileIds: userMessagePatch?.fileIds ?? activeUser.fileIds,
           branchGroupId: groupId,
           branchVariantId: nextVariantId
         },
         assistantPatch: {
+          ...assistantPatch,
           branchGroupId: groupId,
           branchVariantId: nextVariantId,
           branchAnchor: true
         },
-        requestHistory: (_previousMessages, userMessage) => [
-          ...historyBeforeUser,
-          userMessage
-        ],
+        requestHistory:
+          requestHistory ??
+          ((_previousMessages, userMessage) => [
+            ...historyBeforeUser,
+            userMessage
+          ]),
         insertMessages: (messages, userMessage, assistantMessage) => {
           if (!isNewGroup) {
-            return [...messages, userMessage, assistantMessage];
+            const nextMessages = appendUserMessage
+              ? [userMessage, assistantMessage]
+              : visibleBranchUserMessage
+                ? [visibleBranchUserMessage, assistantMessage]
+                : [assistantMessage];
+            return [...messages, ...nextMessages];
           }
 
           const startIndex = messages.findIndex(
@@ -2795,11 +3191,134 @@ export default function App() {
             };
           });
 
-          return [...annotatedMessages, userMessage, assistantMessage];
+          const nextMessages = appendUserMessage
+            ? [userMessage, assistantMessage]
+            : visibleBranchUserMessage
+              ? [visibleBranchUserMessage, assistantMessage]
+              : [assistantMessage];
+          return [...annotatedMessages, ...nextMessages];
         }
       });
     },
     [sendStreamUiRequest]
+  );
+
+  const handleVisualRepairAssistant = useCallback(
+    async (assistantId: string, snapshot: RenderSnapshot, width: number) => {
+      if (isSendingRef.current || snapshot.status !== "complete") {
+        return;
+      }
+
+      const session =
+        sessionStateRef.current.sessions.find((candidate) =>
+          candidate.messages.some((message) => message.id === assistantId)
+        ) ??
+        sessionStateRef.current.sessions.find(
+          (candidate) => candidate.id === activeSessionIdRef.current
+        ) ??
+        sessionStateRef.current.sessions[0];
+      if (!session) {
+        return;
+      }
+
+      const visibleMessages = getVisibleSessionMessages(session);
+      const assistantIndex = visibleMessages.findIndex(
+        (message) => message.id === assistantId && message.role === "assistant"
+      );
+      if (assistantIndex < 0) {
+        return;
+      }
+
+      const activeAssistant = visibleMessages[assistantIndex];
+      const userIndex = (() => {
+        for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+          if (visibleMessages[index].role === "user") {
+            return index;
+          }
+        }
+        return -1;
+      })();
+      if (userIndex < 0) {
+        return;
+      }
+
+      const exportWidth = Math.max(320, Math.min(1100, Math.round(width || 900)));
+      const requestModel = (session.model || apiSettings.model).trim();
+      const canUseScreenshot = modelLikelySupportsImageInput(requestModel);
+
+      try {
+        const diagnostics = canUseScreenshot
+          ? undefined
+          : getSnapshotDiagnostics(snapshot, {
+              exportWidth,
+              themeMode
+            });
+        const attachments: ImageAttachment[] = [];
+        if (canUseScreenshot) {
+          const blob = await renderSnapshotToPngBlob(snapshot, {
+            themeMode,
+            width: exportWidth
+          });
+          const dataUrl = await blobToDataUrl(blob);
+          const image: ImageAttachment = {
+            id: createId("render"),
+            name: `${assistantId}-render.png`,
+            mimeType: "image/png",
+            size: blob.size,
+            dataUrl
+          };
+          const uploadedFile = await uploadSessionFile(
+            session.id,
+            imageAttachmentToFileUpload(image, assistantId, true),
+            sessionClientIdRef.current
+          );
+          if (uploadedFile.kind !== "image") {
+            throw new Error("Rendered screenshot upload did not return an image.");
+          }
+
+          attachments.push({
+            ...image,
+            id: uploadedFile.id,
+            name: uploadedFile.name,
+            mimeType: uploadedFile.mimeType,
+            size: uploadedFile.size,
+            width: uploadedFile.width,
+            height: uploadedFile.height,
+            sessionFile: uploadedFile as UploadedSessionFile
+          });
+        }
+        const repairOfMessageId =
+          activeAssistant.repairOfMessageId || activeAssistant.id;
+        const repairAttempt = (activeAssistant.repairAttempt ?? 0) + 1;
+
+        startBranchedTurn({
+          session,
+          visibleMessages,
+          userIndex,
+          assistantId,
+          nextUserContent: buildVisualRepairPrompt({
+            diagnostics,
+            hasScreenshot: canUseScreenshot,
+            width: exportWidth
+          }),
+          attachments,
+          appendUserMessage: false,
+          assistantPatch: {
+            repairOfMessageId,
+            repairAttempt
+          },
+          initialReasoning:
+            "Captured the rendered artifact screenshot for visual repair.",
+          requestHistory: (_previousMessages, userMessage) => [
+            ...visibleMessages.slice(0, assistantIndex + 1),
+            userMessage
+          ]
+        });
+      } catch (error) {
+        console.warn("Could not start visual artifact repair.", error);
+      }
+    },
+    [apiSettings.model, startBranchedTurn, themeMode]
   );
 
   const handleRegenerateAssistant = useCallback(
@@ -2816,6 +3335,26 @@ export default function App() {
         (message) => message.id === assistantId && message.role === "assistant"
       );
       if (assistantIndex < 0) {
+        return;
+      }
+
+      const activeAssistant = visibleMessages[assistantIndex];
+      if (activeAssistant.repairOfMessageId) {
+        const originalRepairSnapshot = session.messages.find(
+          (message) =>
+            message.id === activeAssistant.repairOfMessageId &&
+            message.role === "assistant" &&
+            message.snapshot?.status === "complete"
+        )?.snapshot;
+        const repairSnapshot =
+          activeAssistant.snapshot?.status === "complete"
+            ? activeAssistant.snapshot
+            : originalRepairSnapshot;
+        if (!repairSnapshot) {
+          return;
+        }
+
+        void handleVisualRepairAssistant(activeAssistant.id, repairSnapshot, 900);
         return;
       }
 
@@ -2839,7 +3378,7 @@ export default function App() {
         nextUserContent: visibleMessages[userIndex].content
       });
     },
-    [startBranchedTurn]
+    [handleVisualRepairAssistant, startBranchedTurn]
   );
 
   const handleEditUserMessage = useCallback(
@@ -2920,6 +3459,208 @@ export default function App() {
     pendingArtifactActionRef.current = null;
     runArtifactAction(pending.messageId, pending.action);
   }, [isSending, runArtifactAction]);
+
+  const runArtifactSourceEdit = useCallback(
+    async (
+      prompt: string,
+      selections: ArtifactSelection[],
+      attachments: ImageAttachment[] = []
+    ) => {
+      const trimmed = prompt.trim();
+      if (!trimmed || isSendingRef.current || !selections.length) {
+        return;
+      }
+
+      const selectedMessageIds = Array.from(
+        new Set(selections.map((selection) => selection.messageId))
+      );
+      const assistantId = selectedMessageIds[0];
+      if (!assistantId || selectedMessageIds.length !== 1) {
+        console.warn("Artifact edits require references from a single artifact.");
+        return;
+      }
+
+      const session =
+        sessionStateRef.current.sessions.find((candidate) =>
+          candidate.messages.some((message) => message.id === assistantId)
+        ) ??
+        sessionStateRef.current.sessions.find(
+          (candidate) => candidate.id === activeSessionIdRef.current
+        ) ??
+        sessionStateRef.current.sessions[0];
+      const assistant = session?.messages.find(
+        (message) => message.id === assistantId && message.role === "assistant"
+      );
+      const source = assistant?.rawStream ?? "";
+      if (!session || !assistant || !source.trim()) {
+        console.warn("Artifact edits require a completed artifact source.");
+        return;
+      }
+
+      const requestModel = (session.model || apiSettings.model).trim();
+      const requestApiSettings = coerceApiSettingsForRuntime(
+        normalizeApiSettings({
+          ...apiSettings,
+          model: requestModel
+        }),
+        runtimeSettings
+      );
+      if (
+        requestApiSettings.apiKeySource === "managed" &&
+        cloudEnabled &&
+        !authenticatedUser
+      ) {
+        setIsAuthOverlayOpen(true);
+        return;
+      }
+
+      const editId = createId("artifact-edit");
+      const variantId = createId("artifact-edit-variant");
+      const parentId = assistant.activeArtifactEditId;
+      const createdAt = Date.now();
+      const references = selections.map(artifactSelectionToReference);
+      const pendingEdit: ArtifactEdit = {
+        id: editId,
+        parentId,
+        createdAt,
+        prompt: trimmed,
+        references,
+        activeVariantId: variantId,
+        variants: [
+          {
+            id: variantId,
+            createdAt,
+            status: "pending"
+          }
+        ],
+        status: "pending"
+      };
+
+      updateAssistantMessage(assistantId, (message) => ({
+        ...message,
+        artifactEditBaseRawStream:
+          message.artifactEditBaseRawStream ?? message.rawStream,
+        artifactEdits: [...(message.artifactEdits ?? []), pendingEdit],
+        activeArtifactEditId: editId
+      }));
+      setIsSending(true);
+
+      const failEdit = (errorMessage: string) => {
+        updateAssistantMessage(assistantId, (message) => ({
+          ...message,
+          artifactEdits: (message.artifactEdits ?? []).map((edit) =>
+            edit.id === editId
+              ? {
+                  ...edit,
+                  status: "error",
+                  error: errorMessage,
+                  variants: edit.variants.map((variant) =>
+                    variant.id === variantId
+                      ? {
+                          ...variant,
+                          status: "error",
+                          error: errorMessage
+                        }
+                      : variant
+                  )
+                }
+              : edit
+          ),
+          activeArtifactEditId:
+            message.activeArtifactEditId === editId
+              ? parentId
+              : message.activeArtifactEditId
+        }));
+      };
+
+      try {
+        if (attachments.length > 0) {
+          throw new Error(
+            "Local artifact edits do not support attachments yet. Remove the attachment and try again."
+          );
+        }
+
+        const response = await fetch("/api/artifact-edits", {
+          method: "POST",
+          headers: sessionRequestHeaders(
+            sessionClientIdRef.current,
+            "application/json"
+          ),
+          body: JSON.stringify({
+            source,
+            prompt: trimmed,
+            references,
+            apiSettings: serializeApiSettings(requestApiSettings)
+          })
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(formatChatHttpError(response, errorText));
+        }
+
+        const result = normalizeArtifactEditResponse(await response.json());
+        const patch = buildCompletedAssistantPatchFromRawStream(
+          result.rawStream,
+          themeMode
+        );
+        const editCount = result.edits?.length;
+
+        updateAssistantMessage(assistantId, (message) => ({
+          ...message,
+          ...patch,
+          artifactEditBaseRawStream:
+            message.artifactEditBaseRawStream ?? source,
+          artifactEdits: (message.artifactEdits ?? []).map((edit) =>
+            edit.id === editId
+              ? {
+                  ...edit,
+                  status: "complete",
+                  error: undefined,
+                  activeVariantId: variantId,
+                  variants: edit.variants.map((variant) =>
+                    variant.id === variantId
+                      ? {
+                          ...variant,
+                          status: "complete",
+                          rawStream: result.rawStream,
+                          summary: result.summary,
+                          error: undefined,
+                          editCount
+                        }
+                      : variant
+                  )
+                }
+              : edit
+          ),
+          activeArtifactEditId: editId
+        }));
+        setArtifactSelectionClearVersion((version) => version + 1);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? sanitizeChatErrorMessage(error.message, "The artifact edit failed.")
+            : "The artifact edit failed.";
+        failEdit(message);
+      } finally {
+        setIsSending(runConnectionsRef.current.size > 0);
+        if (requestApiSettings.apiKeySource === "managed") {
+          void refreshAuthSummary().catch((error) => {
+            console.warn("Could not refresh ChatHTML Cloud account.", error);
+          });
+        }
+      }
+    },
+    [
+      apiSettings,
+      authenticatedUser,
+      cloudEnabled,
+      refreshAuthSummary,
+      runtimeSettings,
+      themeMode,
+      updateAssistantMessage
+    ]
+  );
 
   useEffect(() => {
     if (!sessionsLoaded) {
@@ -3277,6 +4018,49 @@ export default function App() {
     void sendStreamUiRequest(pending.text, pending.attachments, pending.options);
   }, [authenticatedUser, cloudEnabled, sendStreamUiRequest, sessionsLoaded]);
 
+  const handleArtifactSelectionsChange = useCallback(
+    (selections: ArtifactSelection[]) => {
+      artifactSelectionsRef.current = selections;
+    },
+    []
+  );
+
+  const handleSelectArtifactEdit = useCallback(
+    (assistantId: string, editId?: string) => {
+      updateAssistantMessage(assistantId, (message) => {
+        if (message.role !== "assistant") {
+          return message;
+        }
+
+        const rawStream = (() => {
+          if (!editId) {
+            return message.artifactEditBaseRawStream;
+          }
+
+          const edit = message.artifactEdits?.find((item) => item.id === editId);
+          if (!edit || edit.status !== "complete") {
+            return undefined;
+          }
+          const variant =
+            edit.variants.find((item) => item.id === edit.activeVariantId) ??
+            edit.variants[0];
+          return variant?.status === "complete" ? variant.rawStream : undefined;
+        })();
+
+        if (!rawStream) {
+          return message;
+        }
+
+        return {
+          ...message,
+          ...buildCompletedAssistantPatchFromRawStream(rawStream, themeMode),
+          activeArtifactEditId: editId
+        };
+      });
+    },
+    [themeMode, updateAssistantMessage]
+  );
+
   const handleNewMessage = useCallback(
     async (message: AppendMessage) => {
       if (
@@ -3286,17 +4070,27 @@ export default function App() {
         return;
       }
 
-      await sendStreamUiRequest(
-        getAppendMessageText(message),
-        getAppendMessageImages(message)
-      );
+      const text = getAppendMessageText(message);
+      const attachments = getAppendMessageImages(message);
+      const artifactSelections = artifactSelectionsRef.current;
+      if (artifactSelections.length > 0) {
+        await runArtifactSourceEdit(text, artifactSelections, attachments);
+        return;
+      }
+
+      await sendStreamUiRequest(text, attachments);
     },
-    [attachmentUploadGate.errorIds.length, attachmentUploadGate.inFlight, sendStreamUiRequest]
+    [
+      attachmentUploadGate.errorIds.length,
+      attachmentUploadGate.inFlight,
+      runArtifactSourceEdit,
+      sendStreamUiRequest
+    ]
   );
 
   const runtime = useExternalStoreRuntime({
     messages,
-    isRunning: isSending,
+    isRunning: isActiveSessionSending,
     isSendDisabled:
       isSending ||
       attachmentUploadGate.inFlight > 0 ||
@@ -3383,11 +4177,15 @@ export default function App() {
             model={activeSessionModel}
             modelOptions={selectableModels}
             reasoningEffort={apiSettings.reasoningEffort}
+            artifactSelectionClearVersion={artifactSelectionClearVersion}
             onRuntimeError={handleRuntimeError}
             onArtifactAction={handleArtifactAction}
+            onVisualRepairAssistant={handleVisualRepairAssistant}
             onRegenerateAssistant={handleRegenerateAssistant}
             onEditUserMessage={handleEditUserMessage}
             onSelectBranch={handleSelectBranch}
+            onSelectArtifactEdit={handleSelectArtifactEdit}
+            onArtifactSelectionsChange={handleArtifactSelectionsChange}
             onModelChange={handleModelChange}
             onReasoningEffortChange={handleReasoningEffortChange}
           />

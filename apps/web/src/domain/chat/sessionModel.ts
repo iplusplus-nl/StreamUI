@@ -8,6 +8,39 @@ import { createStreamingRenderer } from "../../runtime/streamui/streamingRendere
 import type { RenderError, RenderSnapshot } from "../../runtime/streamui/types";
 import { isIgnoredRuntimeError } from "../../core/ignoredRuntimeErrors";
 
+export type ArtifactEditReference = {
+  kind: "element" | "text";
+  key: string;
+  selector: string;
+  label: string;
+  preview: string;
+  tagName?: string;
+  text?: string;
+  html?: string;
+};
+
+export type ArtifactEditVariant = {
+  id: string;
+  createdAt: number;
+  status: "pending" | "complete" | "error";
+  rawStream?: string;
+  summary?: string;
+  error?: string;
+  editCount?: number;
+};
+
+export type ArtifactEdit = {
+  id: string;
+  parentId?: string;
+  createdAt: number;
+  prompt: string;
+  references: ArtifactEditReference[];
+  activeVariantId?: string;
+  variants: ArtifactEditVariant[];
+  status: "pending" | "complete" | "error";
+  error?: string;
+};
+
 export type ClientMessage = {
   id: string;
   role: "user" | "assistant";
@@ -27,6 +60,9 @@ export type ClientMessage = {
   branchGroupId?: string;
   branchVariantId?: string;
   branchAnchor?: boolean;
+  artifactEditBaseRawStream?: string;
+  artifactEdits?: ArtifactEdit[];
+  activeArtifactEditId?: string;
   generationRunId?: string;
   streamSequence?: number;
   status?: "streaming" | "complete" | "error";
@@ -113,6 +149,29 @@ export function isSessionEmpty(
   session: Pick<ChatSession, "messages" | "files">
 ): boolean {
   return session.messages.length === 0 && session.files.length === 0;
+}
+
+export function getSessionStreamingRunIds(
+  session: Pick<ChatSession, "messages"> | undefined
+): string[] {
+  if (!session) {
+    return [];
+  }
+
+  const runIds = new Set<string>();
+  for (const message of session.messages) {
+    if (
+      message.role !== "assistant" ||
+      message.status !== "streaming" ||
+      !message.generationRunId
+    ) {
+      continue;
+    }
+
+    runIds.add(message.generationRunId);
+  }
+
+  return Array.from(runIds);
 }
 
 export function compactEmptySessions(
@@ -513,6 +572,181 @@ function normalizeArtifactContext(input: unknown): ArtifactContext | undefined {
   };
 }
 
+function normalizeBoundedString(
+  input: unknown,
+  maxLength: number
+): string | undefined {
+  if (typeof input !== "string") {
+    return undefined;
+  }
+
+  const value = input.trim().slice(0, maxLength);
+  return value || undefined;
+}
+
+function normalizeArtifactEditReference(
+  input: unknown
+): ArtifactEditReference | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const reference = input as Partial<ArtifactEditReference>;
+  const kind =
+    reference.kind === "element" || reference.kind === "text"
+      ? reference.kind
+      : null;
+  const key = normalizeBoundedString(reference.key, 240);
+  const selector = normalizeBoundedString(reference.selector, 500);
+  if (!kind || !key || !selector) {
+    return null;
+  }
+
+  return {
+    kind,
+    key,
+    selector,
+    label: normalizeBoundedString(reference.label, 160) ?? "Reference",
+    preview: normalizeBoundedString(reference.preview, 500) ?? "",
+    tagName: normalizeBoundedString(reference.tagName, 80),
+    text: normalizeBoundedString(reference.text, 2_000),
+    html: normalizeBoundedString(reference.html, 8_000)
+  };
+}
+
+function normalizeArtifactEditReferences(
+  input: unknown
+): ArtifactEditReference[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const references: ArtifactEditReference[] = [];
+  for (const item of input) {
+    const reference = normalizeArtifactEditReference(item);
+    if (!reference || seen.has(reference.key)) {
+      continue;
+    }
+    seen.add(reference.key);
+    references.push(reference);
+    if (references.length >= 8) {
+      break;
+    }
+  }
+
+  return references;
+}
+
+function normalizeArtifactEditVariant(
+  input: unknown,
+  now = Date.now()
+): ArtifactEditVariant | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const variant = input as Partial<ArtifactEditVariant>;
+  const id = normalizeBoundedString(variant.id, 160);
+  if (!id) {
+    return null;
+  }
+  const status =
+    variant.status === "pending" ||
+    variant.status === "complete" ||
+    variant.status === "error"
+      ? variant.status
+      : "complete";
+  const restoredStatus = status === "pending" ? "error" : status;
+
+  return {
+    id,
+    createdAt:
+      typeof variant.createdAt === "number" && Number.isFinite(variant.createdAt)
+        ? variant.createdAt
+        : now,
+    status: restoredStatus,
+    rawStream:
+      typeof variant.rawStream === "string" ? variant.rawStream : undefined,
+    summary: normalizeBoundedString(variant.summary, 500),
+    error:
+      normalizeBoundedString(variant.error, 800) ??
+      (status === "pending" ? "The local edit was interrupted." : undefined),
+    editCount:
+      typeof variant.editCount === "number" && Number.isFinite(variant.editCount)
+        ? Math.max(0, Math.round(variant.editCount))
+        : undefined
+  };
+}
+
+function normalizeArtifactEdit(input: unknown, now = Date.now()): ArtifactEdit | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const edit = input as Partial<ArtifactEdit>;
+  const id = normalizeBoundedString(edit.id, 160);
+  const prompt = normalizeBoundedString(edit.prompt, 8_000);
+  if (!id || !prompt) {
+    return null;
+  }
+  const variants = Array.isArray(edit.variants)
+    ? edit.variants
+        .map((variant) => normalizeArtifactEditVariant(variant, now))
+        .filter((variant): variant is ArtifactEditVariant => variant !== null)
+    : [];
+  const status =
+    edit.status === "pending" || edit.status === "complete" || edit.status === "error"
+      ? edit.status
+      : variants.some((variant) => variant.status === "pending")
+        ? "pending"
+        : variants.some((variant) => variant.status === "error")
+          ? "error"
+          : "complete";
+  const restoredStatus = status === "pending" ? "error" : status;
+  const activeVariantId = normalizeBoundedString(edit.activeVariantId, 160);
+
+  return {
+    id,
+    parentId: normalizeBoundedString(edit.parentId, 160),
+    createdAt:
+      typeof edit.createdAt === "number" && Number.isFinite(edit.createdAt)
+        ? edit.createdAt
+        : now,
+    prompt,
+    references: normalizeArtifactEditReferences(edit.references),
+    activeVariantId:
+      activeVariantId && variants.some((variant) => variant.id === activeVariantId)
+        ? activeVariantId
+        : variants[0]?.id,
+    variants,
+    status: restoredStatus,
+    error:
+      normalizeBoundedString(edit.error, 800) ??
+      (status === "pending" ? "The local edit was interrupted." : undefined)
+  };
+}
+
+function normalizeArtifactEdits(input: unknown): ArtifactEdit[] | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+
+  const now = Date.now();
+  const seen = new Set<string>();
+  const edits: ArtifactEdit[] = [];
+  for (const item of input) {
+    const edit = normalizeArtifactEdit(item, now);
+    if (!edit || seen.has(edit.id)) {
+      continue;
+    }
+    seen.add(edit.id);
+    edits.push(edit);
+  }
+
+  return edits.length ? edits : undefined;
+}
+
 function normalizeStringArray(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
@@ -869,6 +1103,16 @@ export function normalizeStoredMessage(
         ? input.branchVariantId.trim().slice(0, 160)
         : undefined,
     branchAnchor: input.branchAnchor ? true : undefined,
+    artifactEditBaseRawStream:
+      typeof input.artifactEditBaseRawStream === "string"
+        ? input.artifactEditBaseRawStream
+        : undefined,
+    artifactEdits: normalizeArtifactEdits(input.artifactEdits),
+    activeArtifactEditId:
+      typeof input.activeArtifactEditId === "string" &&
+      input.activeArtifactEditId.trim()
+        ? input.activeArtifactEditId.trim().slice(0, 160)
+        : undefined,
     generationRunId:
       typeof input.generationRunId === "string" && input.generationRunId.trim()
         ? input.generationRunId.trim()

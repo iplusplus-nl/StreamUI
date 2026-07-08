@@ -32,6 +32,9 @@ type StoredMessage = {
   branchGroupId?: string;
   branchVariantId?: string;
   branchAnchor?: boolean;
+  artifactEditBaseRawStream?: string;
+  artifactEdits?: unknown[];
+  activeArtifactEditId?: string;
   generationRunId?: string;
   streamSequence?: number;
   status?: "streaming" | "complete" | "error";
@@ -93,6 +96,9 @@ export type SessionMessageInput = {
   branchGroupId?: string;
   branchVariantId?: string;
   branchAnchor?: boolean;
+  artifactEditBaseRawStream?: string;
+  artifactEdits?: unknown[];
+  activeArtifactEditId?: string;
   generationRunId?: string;
   streamSequence?: number;
   status?: "streaming" | "complete" | "error";
@@ -211,6 +217,17 @@ function normalizeStringArray(input: unknown): string[] | undefined {
   }
 
   return values.length ? values : undefined;
+}
+
+function normalizeArtifactEdits(input: unknown): unknown[] | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+
+  const edits = input.filter(
+    (item) => item && typeof item === "object" && !Array.isArray(item)
+  );
+  return edits.length ? edits : undefined;
 }
 
 function normalizeBranchSelections(input: unknown): Record<string, string> | undefined {
@@ -385,6 +402,12 @@ function normalizeMessage(input: unknown): StoredMessage | null {
     branchGroupId: stringValue(message.branchGroupId) || undefined,
     branchVariantId: stringValue(message.branchVariantId) || undefined,
     branchAnchor: message.branchAnchor ? true : undefined,
+    artifactEditBaseRawStream:
+      typeof message.artifactEditBaseRawStream === "string"
+        ? message.artifactEditBaseRawStream
+        : undefined,
+    artifactEdits: normalizeArtifactEdits(message.artifactEdits),
+    activeArtifactEditId: stringValue(message.activeArtifactEditId) || undefined,
     generationRunId: stringValue(message.generationRunId) || undefined,
     streamSequence:
       typeof message.streamSequence === "number" &&

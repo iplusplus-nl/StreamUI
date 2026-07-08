@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleModelsRequest } from "./models.js";
 import {
+  handleArtifactEdit,
   handleCancelChatRun,
   handleChatRunEvents,
   handleOpenRouterChat
@@ -46,6 +47,7 @@ app.get("/api/health", (_req, res) => {
 app.post("/api/chat", handleOpenRouterChat);
 app.get("/api/chat/runs/:runId/events", handleChatRunEvents);
 app.post("/api/chat/runs/:runId/cancel", handleCancelChatRun);
+app.post("/api/artifact-edits", handleArtifactEdit);
 app.post("/api/models", handleModelsRequest);
 app.post("/api/retrieve", handleRetrievalRequest);
 app.get("/api/export-resource", handleExportResourceRequest);

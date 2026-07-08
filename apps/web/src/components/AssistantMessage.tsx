@@ -1,6 +1,16 @@
 import { MessagePrimitive } from "@assistant-ui/react";
-import { ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  MousePointer2,
+  RotateCcw,
+  Wand2
+} from "lucide-react";
 import { useMemo } from "react";
+import type {
+  ArtifactSelection,
+  ArtifactSelectionPayload
+} from "../core/artifactSelection";
 import { stripInternalArtifactContextText } from "../features/chat/internalArtifactContext";
 import { extractStreamUiParts } from "../runtime/streamui/protocol";
 import { createStreamingRenderer } from "../runtime/streamui/streamingRenderer";
@@ -27,6 +37,8 @@ type AssistantMessageProps = {
   showRawStream: boolean;
   status?: "streaming" | "complete" | "error";
   error?: string;
+  artifactSelections?: ArtifactSelection[];
+  isArtifactSelectionModeActive?: boolean;
   branchInfo?: {
     groupId: string;
     activeIndex: number;
@@ -36,6 +48,9 @@ type AssistantMessageProps = {
   };
   onRuntimeError(id: string, error: RenderError): void;
   onArtifactAction(id: string, action: StreamUiAction): void;
+  onArtifactSelection(id: string, selection: ArtifactSelectionPayload): void;
+  onArtifactSelectionModeChange(id: string, enabled: boolean): void;
+  onVisualRepair(id: string, snapshot: RenderSnapshot, width: number): void;
   onRegenerate(id: string): void;
   onSelectBranch(groupId: string, variantId: string): void;
 };
@@ -73,9 +88,14 @@ export function AssistantMessage({
   showRawStream,
   status,
   error,
+  artifactSelections = [],
+  isArtifactSelectionModeActive = false,
   branchInfo,
   onRuntimeError,
   onArtifactAction,
+  onArtifactSelection,
+  onArtifactSelectionModeChange,
+  onVisualRepair,
   onRegenerate,
   onSelectBranch
 }: AssistantMessageProps) {
@@ -138,8 +158,38 @@ export function AssistantMessage({
   const hasDisplayError = Boolean(
     error || runtimeErrors?.length || resolvedSnapshot?.errors.length
   );
+  const selectionDisabled =
+    status === "streaming" || resolvedSnapshot?.status !== "complete";
+  const repairDisabled =
+    status === "streaming" || resolvedSnapshot?.status !== "complete";
   const turnActions = (
     <div className="assistant-turn-actions" aria-label="Response actions">
+      {hasVisibleArtifact ? (
+        <button
+          className={`message-action-button artifact-select-action ${
+            isArtifactSelectionModeActive ? "is-active" : ""
+          }`}
+          type="button"
+          title={
+            isArtifactSelectionModeActive
+              ? "Stop selecting preview regions"
+              : "Select preview region"
+          }
+          aria-label={
+            isArtifactSelectionModeActive
+              ? "Stop selecting preview regions"
+              : "Select preview region"
+          }
+          aria-pressed={isArtifactSelectionModeActive}
+          disabled={selectionDisabled}
+          onClick={() =>
+            onArtifactSelectionModeChange(id, !isArtifactSelectionModeActive)
+          }
+        >
+          <MousePointer2 size={15} strokeWidth={2.15} aria-hidden="true" />
+          <span>{isArtifactSelectionModeActive ? "Selecting" : "Select"}</span>
+        </button>
+      ) : null}
       <button
         className={`message-action-button regenerate-action ${
           hasDisplayError ? "is-error" : ""
@@ -152,6 +202,18 @@ export function AssistantMessage({
       >
         <RotateCcw size={15} strokeWidth={2.15} aria-hidden="true" />
       </button>
+      {hasVisibleArtifact && resolvedSnapshot ? (
+        <button
+          className="message-action-button visual-repair-action"
+          type="button"
+          title="Repair from screenshot"
+          aria-label="Repair from screenshot"
+          disabled={repairDisabled}
+          onClick={() => onVisualRepair(id, resolvedSnapshot, 900)}
+        >
+          <Wand2 size={15} strokeWidth={2.15} aria-hidden="true" />
+        </button>
+      ) : null}
       {branchInfo ? (
         <div className="message-branch-controls" aria-label="Response branches">
           <button
@@ -211,8 +273,12 @@ export function AssistantMessage({
             snapshot={resolvedSnapshot}
             themeMode={themeMode}
             actions={turnActions}
+            selectionModeActive={isArtifactSelectionModeActive}
+            selections={artifactSelections}
             onRuntimeError={onRuntimeError}
             onArtifactAction={onArtifactAction}
+            onArtifactSelection={onArtifactSelection}
+            onSelectionModeChange={onArtifactSelectionModeChange}
           />
         ) : (
           turnActions

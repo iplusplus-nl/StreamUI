@@ -51,6 +51,10 @@ export type ReadFileToolResult = {
   followUpContent?: ResponsesInputContentPart[];
 };
 
+export type ReadFileToolOptions = {
+  allowImageInput?: boolean;
+};
+
 export type ResponsesToolDefinition = {
   type: "function";
   name: string;
@@ -276,7 +280,8 @@ export function listFilesToolOutput(
 export async function readFileToolResult(
   files: SessionFile[],
   input: unknown,
-  stats?: SessionFileToolStats
+  stats?: SessionFileToolStats,
+  options: ReadFileToolOptions = {}
 ): Promise<ReadFileToolResult> {
   if (stats) {
     stats.reads += 1;
@@ -302,6 +307,7 @@ export async function readFileToolResult(
 
   const metadata = listFileEntry(file);
   if (file.kind === "image") {
+    const allowImageInput = options.allowImageInput ?? true;
     const imageUrl = normalizeImageDataUrl(
       file.storageKey
         ? bufferToDataUrl(
@@ -317,12 +323,14 @@ export async function readFileToolResult(
       {
         file: metadata,
         image: {
-          providedAs: imageUrl
+          providedAs: imageUrl && allowImageInput
             ? "follow_up_multimodal_message"
             : "metadata_only",
-          note: imageUrl
+          note: imageUrl && allowImageInput
             ? "The image content is attached in a follow-up multimodal input message so providers do not receive image bytes inside a tool_result payload."
-            : "Image bytes were unavailable; use embedUrl if present."
+            : imageUrl
+              ? "Image bytes are available but were not attached because the selected model is not known to support image input."
+              : "Image bytes were unavailable; use embedUrl if present."
         }
       },
       null,
@@ -331,7 +339,7 @@ export async function readFileToolResult(
 
     return {
       output,
-      followUpContent: imageUrl
+      followUpContent: imageUrl && allowImageInput
         ? [
             {
               type: "input_text",

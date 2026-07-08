@@ -6,6 +6,7 @@ import {
   createEmptySession,
   createInitialSessionState,
   filterDeletedSessionState,
+  getSessionStreamingRunIds,
   hasPersistedMessages,
   isSessionEmpty,
   mergeSyncedSessionState,
@@ -124,6 +125,40 @@ describe("sessionModel", () => {
     assert.equal(message?.generationRunId, "run-1");
     assert.equal(message?.streamSequence, 4);
     assert.equal(message?.hasStreamUi, true);
+  });
+
+  it("lists streaming run ids for a single session", () => {
+    const session: ChatSession = {
+      id: "s1",
+      title: "Session",
+      createdAt: 1,
+      updatedAt: 1,
+      files: [],
+      messages: [
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          generationRunId: "run-1",
+          status: "streaming"
+        },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "done",
+          generationRunId: "run-2",
+          status: "complete"
+        },
+        {
+          id: "u1",
+          role: "user",
+          content: "hello",
+          status: "complete"
+        }
+      ]
+    };
+
+    assert.deepEqual(getSessionStreamingRunIds(session), ["run-1"]);
   });
 
   it("migrates stored assistant artifacts into session files", () => {
@@ -619,5 +654,103 @@ describe("sessionModel", () => {
 
     assert.equal(serialized[0].messages[0].artifactContext?.id, "artifact-fixed");
     assert.equal("snapshot" in serialized[0].messages[0], false);
+  });
+
+  it("preserves artifact edit hierarchy while normalizing and serializing", () => {
+    const message = normalizeStoredMessage({
+      id: "a1",
+      role: "assistant",
+      content: "Artifact",
+      rawStream: "<chat></chat><streamui><p>Edited</p></streamui>",
+      hasStreamUi: true,
+      streamUiComplete: true,
+      artifactEditBaseRawStream:
+        "<chat></chat><streamui><p>Original</p></streamui>",
+      activeArtifactEditId: "edit-1",
+      artifactEdits: [
+        {
+          id: "edit-1",
+          createdAt: 10,
+          prompt: "Change the copy",
+          references: [
+            {
+              kind: "element",
+              key: "p-0",
+              selector: "p",
+              label: "p",
+              preview: "Original"
+            }
+          ],
+          activeVariantId: "variant-1",
+          variants: [
+            {
+              id: "variant-1",
+              createdAt: 11,
+              status: "complete",
+              rawStream: "<chat></chat><streamui><p>Edited</p></streamui>",
+              editCount: 1
+            }
+          ],
+          status: "complete"
+        }
+      ]
+    });
+
+    assert.equal(message?.activeArtifactEditId, "edit-1");
+    assert.equal(message?.artifactEdits?.[0]?.references[0]?.selector, "p");
+    assert.equal(
+      message?.artifactEdits?.[0]?.variants[0]?.rawStream,
+      "<chat></chat><streamui><p>Edited</p></streamui>"
+    );
+
+    const serialized = serializeSessions([
+      {
+        id: "s1",
+        title: "Session",
+        createdAt: 1,
+        updatedAt: 2,
+        files: [],
+        messages: message ? [message] : []
+      }
+    ]);
+
+    assert.equal(
+      serialized[0].messages[0].artifactEditBaseRawStream,
+      "<chat></chat><streamui><p>Original</p></streamui>"
+    );
+    assert.equal(serialized[0].messages[0].artifactEdits?.[0]?.id, "edit-1");
+    assert.equal("snapshot" in serialized[0].messages[0], false);
+  });
+
+  it("marks restored pending artifact edits as interrupted", () => {
+    const message = normalizeStoredMessage({
+      id: "a1",
+      role: "assistant",
+      content: "Artifact",
+      artifactEdits: [
+        {
+          id: "edit-1",
+          createdAt: 10,
+          prompt: "Still pending",
+          references: [],
+          activeVariantId: "variant-1",
+          variants: [
+            {
+              id: "variant-1",
+              createdAt: 11,
+              status: "pending"
+            }
+          ],
+          status: "pending"
+        }
+      ]
+    });
+
+    assert.equal(message?.artifactEdits?.[0]?.status, "error");
+    assert.match(
+      message?.artifactEdits?.[0]?.error ?? "",
+      /interrupted/i
+    );
+    assert.equal(message?.artifactEdits?.[0]?.variants[0]?.status, "error");
   });
 });

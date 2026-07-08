@@ -6,6 +6,8 @@ import {
   useAuiState,
   type Attachment
 } from "@assistant-ui/react";
+import { X } from "lucide-react";
+import type { ArtifactSelection } from "../core/artifactSelection";
 import { MAX_IMAGE_ATTACHMENTS } from "../core/assistantAttachments";
 import type { ReasoningEffort } from "../core/apiSettings";
 import { ChatModelSelector } from "./ChatModelSelector";
@@ -72,14 +74,72 @@ type ChatInputProps = {
   model: string;
   modelOptions: string[];
   reasoningEffort: ReasoningEffort;
+  artifactSelections?: ArtifactSelection[];
+  onRemoveArtifactSelection?(id: string): void;
+  onClearArtifactSelections?(): void;
   onModelChange(model: string): void;
   onReasoningEffortChange(reasoningEffort: ReasoningEffort): void;
 };
+
+function ArtifactSelectionTray({
+  selections,
+  onRemove,
+  onClear
+}: {
+  selections: ArtifactSelection[];
+  onRemove(id: string): void;
+  onClear(): void;
+}) {
+  if (!selections.length) {
+    return null;
+  }
+
+  return (
+    <div className="artifact-selection-tray" aria-label="Selected preview regions">
+      <div className="artifact-selection-list">
+        {selections.map((selection) => (
+          <div
+            className={`artifact-selection-chip is-${selection.kind}`}
+            key={selection.id}
+          >
+            <span className="artifact-selection-kind">
+              {selection.kind === "text" ? "Text" : "Element"}
+            </span>
+            <span className="artifact-selection-copy">
+              <strong>{selection.label}</strong>
+              <span>{selection.preview}</span>
+            </span>
+            <button
+              className="artifact-selection-remove"
+              type="button"
+              aria-label={`Remove ${selection.label}`}
+              onClick={() => onRemove(selection.id)}
+            >
+              <X size={13} strokeWidth={2.4} aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+      </div>
+      {selections.length > 1 ? (
+        <button
+          className="artifact-selection-clear"
+          type="button"
+          onClick={onClear}
+        >
+          Clear
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 export function ChatInput({
   model,
   modelOptions,
   reasoningEffort,
+  artifactSelections = [],
+  onRemoveArtifactSelection,
+  onClearArtifactSelections,
   onModelChange,
   onReasoningEffortChange
 }: ChatInputProps) {
@@ -98,6 +158,11 @@ export function ChatInput({
   return (
     <ComposerPrimitive.Root className="chat-input-bar">
       <ComposerPrimitive.AttachmentDropzone className="chat-input-dropzone">
+        <ArtifactSelectionTray
+          selections={artifactSelections}
+          onRemove={(id) => onRemoveArtifactSelection?.(id)}
+          onClear={() => onClearArtifactSelections?.()}
+        />
         {attachmentCount > 0 ? (
           <div className="attachment-tray" aria-label="Attached images">
             <ComposerPrimitive.Attachments>

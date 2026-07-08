@@ -41,6 +41,34 @@ describe("sandboxDocument", () => {
     assert.match(document, /post\("action"/);
   });
 
+  it("can disable host actions until the artifact is complete", () => {
+    const document = buildIframeDocument(
+      '<button data-streamui-prompt="Continue">Continue</button>',
+      "night",
+      false
+    );
+
+    assert.match(document, /data-streamui-actions-enabled="false"/);
+    assert.match(document, /body\[data-streamui-actions-enabled="false"\]/);
+    assert.match(document, /areHostActionsEnabled/);
+  });
+
+  it("includes the artifact selection bridge", () => {
+    const document = buildIframeDocument("<section><h1>Hello</h1></section>");
+
+    assert.match(document, /streamui-selection-hover/);
+    assert.match(document, /data\.kind === "selection-mode"/);
+    assert.match(document, /data\.kind === "selection-targets"/);
+    assert.match(document, /post\("selection"/);
+    assert.match(document, /streamui-text-selection-toolbar/);
+    assert.match(document, /Reference/);
+    assert.doesNotMatch(
+      document,
+      /<button type="button" data-selection-kind="element">Element<\/button>/
+    );
+    assert.match(document, /coversIframeViewport/);
+  });
+
   it("includes the local capability action bridge", () => {
     const document = buildIframeDocument(
       '<button data-streamui-copy-target="#code">Copy</button><code id="code">x</code>'
