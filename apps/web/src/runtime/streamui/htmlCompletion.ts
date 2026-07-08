@@ -21,6 +21,7 @@ type CompletionOptions = {
 };
 
 const WIKIMEDIA_DISPLAY_IMAGE_WIDTH = 1280;
+const MAX_FILTER_BLUR_PX = 6;
 
 function removeBrokenTrailingTag(input: string): string {
   const lastLt = input.lastIndexOf("<");
@@ -134,6 +135,29 @@ function stabilizeViewportHeightUnits(input: string): string {
   );
 }
 
+function capBlurFilterFunctions(value: string): string {
+  return value.replace(
+    /\bblur\(\s*([+-]?(?:\d+\.?\d*|\.\d+))px\s*\)/gi,
+    (_match, rawValue: string) => {
+      const px = Number.parseFloat(rawValue);
+
+      if (!Number.isFinite(px) || px <= MAX_FILTER_BLUR_PX) {
+        return `blur(${rawValue}px)`;
+      }
+
+      return `blur(${MAX_FILTER_BLUR_PX}px)`;
+    }
+  );
+}
+
+function stabilizeFilterDeclaration(_match: string, value: string): string {
+  if (/\bdrop-shadow\s*\(/i.test(value)) {
+    return "filter: none;";
+  }
+
+  return `filter: ${capBlurFilterFunctions(value.trim())};`;
+}
+
 function neutralizeExpensiveCssDeclarations(css: string): string {
   return css
     .replace(
@@ -147,8 +171,8 @@ function neutralizeExpensiveCssDeclarations(css: string): string {
     .replace(/\s*-webkit-backdrop-filter\s*:[^;{}]+;?/gi, "")
     .replace(/\s*backdrop-filter\s*:[^;{}]+;?/gi, "")
     .replace(
-      /\bfilter\s*:\s*[^;{}]*(?:blur|drop-shadow)\([^;{}]*;?/gi,
-      "filter: none;"
+      /\bfilter\s*:\s*([^;{}]+);?/gi,
+      stabilizeFilterDeclaration
     )
     .replace(/\bmix-blend-mode\s*:\s*(?!normal\b)[^;{}]+;?/gi, "mix-blend-mode: normal;");
 }

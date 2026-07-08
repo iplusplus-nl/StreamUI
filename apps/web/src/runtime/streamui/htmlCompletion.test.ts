@@ -47,4 +47,14 @@ describe("completePartialHtml", () => {
       '<div style=" background-attachment: scroll;">x</div>'
     );
   });
+
+  it("caps blur filters instead of making clone layers clear", () => {
+    const html = completePartialHtml(
+      '<style>.lens-blur{filter:blur(10px);transform:scale(1.04)}.shadow{filter:drop-shadow(0 2px 8px #000)}</style>'
+    );
+
+    assert.match(html, /filter: blur\(6px\);/);
+    assert.match(html, /filter: none;/);
+    assert.doesNotMatch(html, /filter:blur\(10px\)/);
+  });
 });
