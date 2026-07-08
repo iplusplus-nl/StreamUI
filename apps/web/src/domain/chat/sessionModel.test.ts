@@ -387,6 +387,80 @@ describe("sessionModel", () => {
     assert.equal(local.sessions[0].messages[1].generationRunId, "run-1");
   });
 
+  it("preserves local artifact edit state over stale server sync", () => {
+    const merged = mergeSyncedSessionState(
+      {
+        activeSessionId: "s1",
+        sessions: [
+          {
+            id: "s1",
+            title: "Local",
+            createdAt: 1,
+            updatedAt: 30,
+            files: [],
+            messages: [
+              { id: "u1", role: "user", content: "make a card" },
+              {
+                id: "a1",
+                role: "assistant",
+                content: "",
+                rawStream: "<chat></chat><streamui><p>Edited</p></streamui>",
+                artifactEditBaseRawStream:
+                  "<chat></chat><streamui><p>Original</p></streamui>",
+                activeArtifactEditId: "edit-1",
+                artifactEdits: [
+                  {
+                    id: "edit-1",
+                    createdAt: 20,
+                    prompt: "Change copy",
+                    references: [],
+                    activeVariantId: "variant-1",
+                    variants: [
+                      {
+                        id: "variant-1",
+                        createdAt: 20,
+                        status: "complete",
+                        rawStream:
+                          "<chat></chat><streamui><p>Edited</p></streamui>"
+                      }
+                    ],
+                    status: "complete"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        activeSessionId: "s1",
+        sessions: [
+          {
+            id: "s1",
+            title: "Server stale",
+            createdAt: 1,
+            updatedAt: 10,
+            files: [],
+            messages: [
+              { id: "u1", role: "user", content: "make a card" },
+              {
+                id: "a1",
+                role: "assistant",
+                content: "",
+                rawStream: "<chat></chat><streamui><p>Original</p></streamui>"
+              }
+            ]
+          }
+        ]
+      }
+    );
+
+    const assistant = merged.sessions[0].messages[1];
+    assert.equal(assistant.rawStream, "<chat></chat><streamui><p>Edited</p></streamui>");
+    assert.equal(assistant.activeArtifactEditId, "edit-1");
+    assert.equal(assistant.artifactEdits?.[0]?.id, "edit-1");
+  });
+
   it("filters locally deleted sessions during server sync", () => {
     const merged = mergeSyncedSessionState(
       {
@@ -722,7 +796,7 @@ describe("sessionModel", () => {
     assert.equal("snapshot" in serialized[0].messages[0], false);
   });
 
-  it("marks restored pending artifact edits as interrupted", () => {
+  it("preserves pending artifact edits during ordinary normalization", () => {
     const message = normalizeStoredMessage({
       id: "a1",
       role: "assistant",
@@ -745,6 +819,38 @@ describe("sessionModel", () => {
         }
       ]
     });
+
+    assert.equal(message?.artifactEdits?.[0]?.status, "pending");
+    assert.equal(message?.artifactEdits?.[0]?.error, undefined);
+    assert.equal(message?.artifactEdits?.[0]?.variants[0]?.status, "pending");
+  });
+
+  it("marks restored pending artifact edits as interrupted when requested", () => {
+    const message = normalizeStoredMessage(
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Artifact",
+        artifactEdits: [
+          {
+            id: "edit-1",
+            createdAt: 10,
+            prompt: "Still pending",
+            references: [],
+            activeVariantId: "variant-1",
+            variants: [
+              {
+                id: "variant-1",
+                createdAt: 11,
+                status: "pending"
+              }
+            ],
+            status: "pending"
+          }
+        ]
+      },
+      { interruptPendingArtifactEdits: true }
+    );
 
     assert.equal(message?.artifactEdits?.[0]?.status, "error");
     assert.match(

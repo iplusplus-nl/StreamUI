@@ -283,6 +283,7 @@ export function buildIframeDocument(
       border-radius: 6px;
       color: #18181b;
       background: transparent;
+      cursor: pointer;
       font-size: 12px;
       font-weight: 680;
     }
@@ -602,6 +603,8 @@ export function buildIframeDocument(
       let selectedOverlayLayer = null;
       let textSelectionToolbar = null;
       let textSelectionRange = null;
+      let textSelectionPayload = null;
+      let textSelectionToolbarPointerDown = false;
 
       const compactSelectionText = (value) =>
         String(value || "").replace(/\\s+/g, " ").trim();
@@ -923,9 +926,21 @@ export function buildIframeDocument(
       };
       const hideTextSelectionToolbar = () => {
         textSelectionRange = null;
+        textSelectionPayload = null;
         if (textSelectionToolbar) {
           textSelectionToolbar.style.display = "none";
         }
+      };
+      const hasActiveTextSelection = () => {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+          return Boolean(truncateSelectionText(selection.toString(), 80));
+        }
+        return Boolean(
+          textSelectionPayload &&
+            textSelectionToolbar &&
+            textSelectionToolbar.style.display !== "none"
+        );
       };
       const ensureTextSelectionToolbar = () => {
         if (textSelectionToolbar) {
@@ -942,27 +957,46 @@ export function buildIframeDocument(
         textSelectionToolbar.innerHTML =
           '<span class="streamui-text-selection-preview"></span>' +
           '<button type="button" data-selection-kind="text">Reference</button>';
-        textSelectionToolbar.addEventListener("mousedown", (event) => {
+        const holdTextSelectionForToolbarClick = () => {
+          textSelectionToolbarPointerDown = true;
+          window.setTimeout(() => {
+            textSelectionToolbarPointerDown = false;
+          }, 600);
+        };
+        textSelectionToolbar.addEventListener("pointerdown", (event) => {
+          holdTextSelectionForToolbarClick();
           event.preventDefault();
+          event.stopPropagation();
+        });
+        textSelectionToolbar.addEventListener("mousedown", (event) => {
+          holdTextSelectionForToolbarClick();
+          event.preventDefault();
+          event.stopPropagation();
         });
         textSelectionToolbar.addEventListener("click", (event) => {
           const button = event.target?.closest?.("[data-selection-kind]");
-          if (!button || !textSelectionRange) {
+          if (!button) {
             return;
           }
 
           event.preventDefault();
           event.stopPropagation();
-          const commonNode = textSelectionRange.commonAncestorContainer;
-          const owner = findSelectableElement(commonNode);
-          const selectedText = textSelectionRange.toString();
-          if (owner) {
-            const kind = button.getAttribute("data-selection-kind") || "text";
-            postSelectionPayload(
-              createSelectionPayload(kind, owner, selectedText)
-            );
+          const kind = button.getAttribute("data-selection-kind") || "text";
+          let payload = null;
+          if (textSelectionRange) {
+            const commonNode = textSelectionRange.commonAncestorContainer;
+            const owner = findSelectableElement(commonNode);
+            const selectedText = textSelectionRange.toString();
+            if (owner) {
+              payload = createSelectionPayload(kind, owner, selectedText);
+            }
           }
+          if (!payload && kind === "text") {
+            payload = textSelectionPayload;
+          }
+          postSelectionPayload(payload);
           window.getSelection()?.removeAllRanges();
+          textSelectionToolbarPointerDown = false;
           hideTextSelectionToolbar();
         });
         document.body.appendChild(textSelectionToolbar);
@@ -976,6 +1010,9 @@ export function buildIframeDocument(
 
         const selection = window.getSelection();
         if (!selection || selection.rangeCount < 1 || selection.isCollapsed) {
+          if (textSelectionToolbarPointerDown && textSelectionPayload) {
+            return;
+          }
           hideTextSelectionToolbar();
           return;
         }
@@ -985,12 +1022,29 @@ export function buildIframeDocument(
           MAX_SELECTION_TEXT_CHARS
         );
         if (!selectedText) {
+          if (textSelectionToolbarPointerDown && textSelectionPayload) {
+            return;
+          }
           hideTextSelectionToolbar();
           return;
         }
 
         const range = selection.getRangeAt(0).cloneRange();
         if (!document.body?.contains(range.commonAncestorContainer)) {
+          if (textSelectionToolbarPointerDown && textSelectionPayload) {
+            return;
+          }
+          hideTextSelectionToolbar();
+          return;
+        }
+        const owner = findSelectableElement(range.commonAncestorContainer);
+        const payload = owner
+          ? createSelectionPayload("text", owner, selectedText)
+          : null;
+        if (!payload) {
+          if (textSelectionToolbarPointerDown && textSelectionPayload) {
+            return;
+          }
           hideTextSelectionToolbar();
           return;
         }
@@ -1010,6 +1064,8 @@ export function buildIframeDocument(
         }
 
         textSelectionRange = range;
+        textSelectionPayload = payload;
+        textSelectionToolbarPointerDown = false;
         const preview = toolbar.querySelector(".streamui-text-selection-preview");
         if (preview) {
           preview.textContent = selectedText;
@@ -1194,6 +1250,9 @@ export function buildIframeDocument(
           return;
         }
         if (isInternalSelectionElement(event.target)) {
+          return;
+        }
+        if (hasActiveTextSelection()) {
           return;
         }
 

@@ -1624,6 +1624,15 @@ button {
   box-shadow: none;
 }
 
+.app-shell[data-theme="night"] .message-bubble.user.is-original-trigger:hover:not(:disabled) {
+  background: #383838;
+  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.38);
+}
+
+.app-shell[data-theme="night"] .message-bubble.user.is-original-trigger.is-original-active {
+  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.55);
+}
+
 .app-shell[data-theme="night"] .message-action-button {
   color: #a1a1aa;
 }
@@ -2012,6 +2021,35 @@ button {
   box-shadow: none;
 }
 
+.message-bubble.user.is-original-trigger {
+  cursor: pointer;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  transition:
+    background 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.message-bubble.user.is-original-trigger:hover:not(:disabled) {
+  background: #eeeeee;
+  box-shadow: inset 0 0 0 1px #d7e3f7;
+}
+
+.message-bubble.user.is-original-trigger:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.message-bubble.user.is-original-trigger:active:not(:disabled) {
+  transform: scale(0.995);
+}
+
+.message-bubble.user.is-original-trigger.is-original-active {
+  box-shadow: inset 0 0 0 1px #93c5fd;
+}
+
 .message-bubble.is-editing {
   width: min(680px, 100%);
   padding: 10px;
@@ -2146,11 +2184,27 @@ button {
 
 .artifact-edit-chain {
   display: grid;
-  width: min(680px, 100%);
+  width: min(680px, 88vw);
   align-self: stretch;
   justify-items: end;
-  gap: 6px;
+  gap: 8px;
   margin-top: 2px;
+}
+
+.artifact-edit-children {
+  display: grid;
+  width: min(560px, 100%);
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  justify-self: end;
+  align-items: start;
+  gap: 8px;
+}
+
+.artifact-edit-node {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  gap: 8px;
 }
 
 .artifact-edit-root,
@@ -2187,11 +2241,9 @@ button {
 }
 
 .artifact-edit-card {
-  --artifact-edit-indent: calc(var(--artifact-edit-depth, 0) * 18px);
   display: grid;
-  width: min(560px, calc(100% - var(--artifact-edit-indent)));
+  width: 100%;
   min-height: 86px;
-  margin-right: var(--artifact-edit-indent);
   gap: 6px;
   padding: 9px 10px;
   border-radius: 8px;

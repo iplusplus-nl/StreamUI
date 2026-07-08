@@ -109,12 +109,15 @@ export type SessionState = {
 
 type NormalizeStoredSessionOptions = {
   rebuildSnapshots?: boolean;
+  interruptPendingArtifactEdits?: boolean;
 };
 
 export const initialMessages: ClientMessage[] = [];
 export const UNTITLED_SESSION = "New Session";
 export const STREAM_INTERRUPTED_ERROR =
   "The stream was interrupted before it completed.";
+const LOCAL_ARTIFACT_EDIT_INTERRUPTED_ERROR =
+  "The local edit was interrupted.";
 
 export function createId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -332,6 +335,71 @@ function shouldPreserveLocalStreamingSession(
   return serverMessage?.status !== "complete" && serverMessage?.status !== "error";
 }
 
+function hasArtifactEditState(message: ClientMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    (Boolean(message.artifactEditBaseRawStream) ||
+      Boolean(message.artifactEdits?.length) ||
+      Boolean(message.activeArtifactEditId))
+  );
+}
+
+function hasPendingArtifactEditState(message: ClientMessage): boolean {
+  return Boolean(
+    message.artifactEdits?.some(
+      (edit) =>
+        edit.status === "pending" ||
+        edit.variants.some((variant) => variant.status === "pending")
+    )
+  );
+}
+
+function shouldPreserveLocalArtifactEditSession(
+  currentSession: ChatSession,
+  serverSession: ChatSession
+): boolean {
+  const hasLocalArtifactEdits = currentSession.messages.some(hasArtifactEditState);
+  if (!hasLocalArtifactEdits) {
+    return false;
+  }
+
+  const hasPendingEdit = currentSession.messages.some(hasPendingArtifactEditState);
+  if (hasPendingEdit) {
+    return currentSession.updatedAt >= serverSession.updatedAt;
+  }
+
+  return currentSession.updatedAt > serverSession.updatedAt;
+}
+
+function preserveLocalArtifactEditSessions(
+  current: SessionState,
+  serverState: SessionState
+): SessionState {
+  const currentSessions = new Map(
+    current.sessions.map((session) => [session.id, session])
+  );
+  let didPreserve = false;
+  const sessions = serverState.sessions.map((serverSession) => {
+    const currentSession = currentSessions.get(serverSession.id);
+    if (
+      currentSession &&
+      shouldPreserveLocalArtifactEditSession(currentSession, serverSession)
+    ) {
+      didPreserve = true;
+      return currentSession;
+    }
+
+    return serverSession;
+  });
+
+  return didPreserve
+    ? {
+        ...serverState,
+        sessions: sortSessions(sessions)
+      }
+    : serverState;
+}
+
 export function mergeSyncedSessionState(
   current: SessionState,
   serverState: SessionState,
@@ -391,8 +459,10 @@ export function mergeSyncedSessionState(
     ? current.activeSessionId
     : serverState.activeSessionId;
 
+  const mergedServerState = preserveLocalArtifactEditSessions(current, serverState);
+
   return compactEmptySessions({
-    ...serverState,
+    ...mergedServerState,
     activeSessionId
   });
 }
@@ -640,7 +710,8 @@ function normalizeArtifactEditReferences(
 
 function normalizeArtifactEditVariant(
   input: unknown,
-  now = Date.now()
+  now = Date.now(),
+  interruptPending = false
 ): ArtifactEditVariant | null {
   if (!input || typeof input !== "object") {
     return null;
@@ -657,7 +728,8 @@ function normalizeArtifactEditVariant(
     variant.status === "error"
       ? variant.status
       : "complete";
-  const restoredStatus = status === "pending" ? "error" : status;
+  const shouldInterrupt = interruptPending && status === "pending";
+  const restoredStatus = shouldInterrupt ? "error" : status;
 
   return {
     id,
@@ -671,7 +743,7 @@ function normalizeArtifactEditVariant(
     summary: normalizeBoundedString(variant.summary, 500),
     error:
       normalizeBoundedString(variant.error, 800) ??
-      (status === "pending" ? "The local edit was interrupted." : undefined),
+      (shouldInterrupt ? LOCAL_ARTIFACT_EDIT_INTERRUPTED_ERROR : undefined),
     editCount:
       typeof variant.editCount === "number" && Number.isFinite(variant.editCount)
         ? Math.max(0, Math.round(variant.editCount))
@@ -679,7 +751,11 @@ function normalizeArtifactEditVariant(
   };
 }
 
-function normalizeArtifactEdit(input: unknown, now = Date.now()): ArtifactEdit | null {
+function normalizeArtifactEdit(
+  input: unknown,
+  now = Date.now(),
+  interruptPending = false
+): ArtifactEdit | null {
   if (!input || typeof input !== "object") {
     return null;
   }
@@ -690,20 +766,32 @@ function normalizeArtifactEdit(input: unknown, now = Date.now()): ArtifactEdit |
   if (!id || !prompt) {
     return null;
   }
-  const variants = Array.isArray(edit.variants)
-    ? edit.variants
-        .map((variant) => normalizeArtifactEditVariant(variant, now))
+  const inputVariants = Array.isArray(edit.variants) ? edit.variants : [];
+  const hadPendingVariant = inputVariants.some(
+    (variant) =>
+      variant &&
+      typeof variant === "object" &&
+      (variant as Partial<ArtifactEditVariant>).status === "pending"
+  );
+  const variants = inputVariants.length
+    ? inputVariants
+        .map((variant) =>
+          normalizeArtifactEditVariant(variant, now, interruptPending)
+        )
         .filter((variant): variant is ArtifactEditVariant => variant !== null)
     : [];
   const status =
     edit.status === "pending" || edit.status === "complete" || edit.status === "error"
       ? edit.status
-      : variants.some((variant) => variant.status === "pending")
+      : hadPendingVariant
         ? "pending"
-        : variants.some((variant) => variant.status === "error")
+        : variants.some((variant) => variant.status === "pending")
+          ? "pending"
+          : variants.some((variant) => variant.status === "error")
           ? "error"
           : "complete";
-  const restoredStatus = status === "pending" ? "error" : status;
+  const shouldInterrupt = interruptPending && status === "pending";
+  const restoredStatus = shouldInterrupt ? "error" : status;
   const activeVariantId = normalizeBoundedString(edit.activeVariantId, 160);
 
   return {
@@ -723,11 +811,14 @@ function normalizeArtifactEdit(input: unknown, now = Date.now()): ArtifactEdit |
     status: restoredStatus,
     error:
       normalizeBoundedString(edit.error, 800) ??
-      (status === "pending" ? "The local edit was interrupted." : undefined)
+      (shouldInterrupt ? LOCAL_ARTIFACT_EDIT_INTERRUPTED_ERROR : undefined)
   };
 }
 
-function normalizeArtifactEdits(input: unknown): ArtifactEdit[] | undefined {
+function normalizeArtifactEdits(
+  input: unknown,
+  interruptPending = false
+): ArtifactEdit[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
   }
@@ -736,7 +827,7 @@ function normalizeArtifactEdits(input: unknown): ArtifactEdit[] | undefined {
   const seen = new Set<string>();
   const edits: ArtifactEdit[] = [];
   for (const item of input) {
-    const edit = normalizeArtifactEdit(item, now);
+    const edit = normalizeArtifactEdit(item, now, interruptPending);
     if (!edit || seen.has(edit.id)) {
       continue;
     }
@@ -1107,7 +1198,10 @@ export function normalizeStoredMessage(
       typeof input.artifactEditBaseRawStream === "string"
         ? input.artifactEditBaseRawStream
         : undefined,
-    artifactEdits: normalizeArtifactEdits(input.artifactEdits),
+    artifactEdits: normalizeArtifactEdits(
+      input.artifactEdits,
+      options.interruptPendingArtifactEdits === true
+    ),
     activeArtifactEditId:
       typeof input.activeArtifactEditId === "string" &&
       input.activeArtifactEditId.trim()

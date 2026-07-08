@@ -915,6 +915,25 @@ function buildCompletedAssistantPatchFromRawStream(
   };
 }
 
+function getArtifactEditRawStream(
+  message: ClientMessage,
+  editId: string | undefined
+): string | undefined {
+  if (!editId) {
+    return message.artifactEditBaseRawStream ?? message.rawStream;
+  }
+
+  const edit = message.artifactEdits?.find((item) => item.id === editId);
+  if (!edit || edit.status !== "complete") {
+    return undefined;
+  }
+
+  const variant =
+    edit.variants.find((item) => item.id === edit.activeVariantId) ??
+    edit.variants[0];
+  return variant?.status === "complete" ? variant.rawStream : undefined;
+}
+
 function normalizeArtifactEditResponse(input: unknown): ArtifactEditResponse {
   if (!input || typeof input !== "object") {
     throw new Error("The artifact edit response was empty.");
@@ -1174,6 +1193,13 @@ function scrollToLastOutputStart(viewport: HTMLElement): boolean {
   return true;
 }
 
+function focusComposerInput(): void {
+  window.setTimeout(() => {
+    const input = document.querySelector<HTMLElement>(".chat-input-textarea");
+    input?.focus({ preventScroll: true });
+  }, 0);
+}
+
 function StreamThread({
   activeSessionId,
   messages,
@@ -1315,6 +1341,7 @@ function StreamThread({
 
         return next.slice(Math.max(0, next.length - MAX_ARTIFACT_SELECTIONS));
       });
+      focusComposerInput();
     },
     []
   );
@@ -1929,7 +1956,8 @@ export default function App() {
       .then((data) => {
         if (!cancelled) {
           const serverState = normalizeStoredSessionState(data, Date.now(), {
-            rebuildSnapshots: false
+            rebuildSnapshots: false,
+            interruptPendingArtifactEdits: true
           });
           const legacyState = loadLegacyLocalSessionState();
           const loadedState =
@@ -3491,7 +3519,10 @@ export default function App() {
       const assistant = session?.messages.find(
         (message) => message.id === assistantId && message.role === "assistant"
       );
-      const source = assistant?.rawStream ?? "";
+      const parentId = assistant?.activeArtifactEditId;
+      const source = assistant
+        ? (getArtifactEditRawStream(assistant, parentId) ?? "")
+        : "";
       if (!session || !assistant || !source.trim()) {
         console.warn("Artifact edits require a completed artifact source.");
         return;
@@ -3516,7 +3547,6 @@ export default function App() {
 
       const editId = createId("artifact-edit");
       const variantId = createId("artifact-edit-variant");
-      const parentId = assistant.activeArtifactEditId;
       const createdAt = Date.now();
       const references = selections.map(artifactSelectionToReference);
       const pendingEdit: ArtifactEdit = {
@@ -3635,6 +3665,7 @@ export default function App() {
           ),
           activeArtifactEditId: editId
         }));
+        artifactSelectionsRef.current = [];
         setArtifactSelectionClearVersion((version) => version + 1);
       } catch (error) {
         const message =
@@ -4032,21 +4063,7 @@ export default function App() {
           return message;
         }
 
-        const rawStream = (() => {
-          if (!editId) {
-            return message.artifactEditBaseRawStream;
-          }
-
-          const edit = message.artifactEdits?.find((item) => item.id === editId);
-          if (!edit || edit.status !== "complete") {
-            return undefined;
-          }
-          const variant =
-            edit.variants.find((item) => item.id === edit.activeVariantId) ??
-            edit.variants[0];
-          return variant?.status === "complete" ? variant.rawStream : undefined;
-        })();
-
+        const rawStream = getArtifactEditRawStream(message, editId);
         if (!rawStream) {
           return message;
         }
@@ -4057,6 +4074,8 @@ export default function App() {
           activeArtifactEditId: editId
         };
       });
+      artifactSelectionsRef.current = [];
+      setArtifactSelectionClearVersion((version) => version + 1);
     },
     [themeMode, updateAssistantMessage]
   );
