@@ -14,6 +14,8 @@ const CSP = [
   "form-action 'none'"
 ].join("; ");
 
+const MATHJAX_SCRIPT_SRC = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
+
 type IframeThemeTokens = {
   mode: PageThemeMode;
   colorScheme: "light" | "dark";
@@ -202,6 +204,13 @@ export function buildIframeDocument(
       cursor: progress !important;
       opacity: 0.62;
     }
+    body[data-streamui-actions-enabled="false"] *,
+    body[data-streamui-actions-enabled="false"] *::before,
+    body[data-streamui-actions-enabled="false"] *::after {
+      animation: none !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
     body[data-streamui-selection-mode="true"] {
       cursor: crosshair;
     }
@@ -264,7 +273,7 @@ export function buildIframeDocument(
       border: 3px solid rgba(255, 255, 255, 0.72);
       border-top-color: #2563eb;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.82);
+      background: transparent;
       box-shadow: 0 8px 22px rgba(24, 24, 27, 0.24);
       animation: streamui-selection-busy-spin 780ms linear infinite;
     }
@@ -388,6 +397,20 @@ export function buildIframeDocument(
           }, "*");
         } catch {}
       };
+      const MATHJAX_SCRIPT_SRC = "${MATHJAX_SCRIPT_SRC}";
+      window.MathJax = {
+        tex: {
+          inlineMath: [["\\\\(", "\\\\)"]],
+          displayMath: [["\\\\[", "\\\\]"], ["$$", "$$"]],
+          processEscapes: true
+        },
+        options: {
+          skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"]
+        },
+        startup: {
+          typeset: false
+        }
+      };
       const MAX_CAPABILITY_TEXT_CHARS = 1000000;
       const pendingHostCapabilities = new Map();
       let hostCapabilitySequence = 0;
@@ -406,6 +429,10 @@ export function buildIframeDocument(
         return request;
       };
       let scheduledMeasureFrame = 0;
+      let mathJaxScriptRequested = false;
+      let mathJaxTypesetFrame = 0;
+      let mathJaxTypesetting = false;
+      let mathJaxTypesetAgain = false;
       const scheduleMeasure = () => {
         if (scheduledMeasureFrame) {
           return;
@@ -417,6 +444,85 @@ export function buildIframeDocument(
           measure();
         });
       };
+      const bodyContainsMathDelimiters = () => {
+        const text = document.body ? document.body.textContent || "" : "";
+        return (
+          text.includes("\\\\(") ||
+          text.includes("\\\\[") ||
+          text.includes("$$")
+        );
+      };
+      const isPreviewComplete = () =>
+        document.body?.dataset.streamuiActionsEnabled !== "false";
+      const ensureMathJax = () => {
+        const mathJax = window.MathJax;
+        if (mathJax && typeof mathJax.typesetPromise === "function") {
+          return true;
+        }
+
+        if (mathJaxScriptRequested || !bodyContainsMathDelimiters()) {
+          return false;
+        }
+
+        mathJaxScriptRequested = true;
+        const script = document.createElement("script");
+        script.id = "streamui-mathjax";
+        script.src = MATHJAX_SCRIPT_SRC;
+        script.async = true;
+        script.onload = () => scheduleMathTypeset();
+        script.onerror = () => post("runtime", "MathJax could not be loaded.");
+        document.head.appendChild(script);
+        return false;
+      };
+      const scheduleMathTypeset = () => {
+        if (!isPreviewComplete() || !bodyContainsMathDelimiters()) {
+          return;
+        }
+
+        if (mathJaxTypesetFrame) {
+          return;
+        }
+
+        mathJaxTypesetFrame = requestAnimationFrame(() => {
+          mathJaxTypesetFrame = 0;
+          if (!bodyContainsMathDelimiters()) {
+            return;
+          }
+
+          if (!ensureMathJax()) {
+            return;
+          }
+
+          const mathJax = window.MathJax;
+          if (!mathJax || typeof mathJax.typesetPromise !== "function") {
+            return;
+          }
+
+          if (mathJaxTypesetting) {
+            mathJaxTypesetAgain = true;
+            return;
+          }
+
+          mathJaxTypesetting = true;
+          Promise.resolve(mathJax.typesetPromise([document.body]))
+            .catch((error) => {
+              const message =
+                error && (error.message || error.toString)
+                  ? error.message || error.toString()
+                  : "MathJax typesetting failed.";
+              post("runtime", message);
+            })
+            .finally(() => {
+              mathJaxTypesetting = false;
+              scheduleMeasure();
+              if (mathJaxTypesetAgain) {
+                mathJaxTypesetAgain = false;
+                scheduleMathTypeset();
+              }
+            });
+        });
+      };
+      window.streamuiTypesetMath = scheduleMathTypeset;
       window.addEventListener("message", (event) => {
         const data = event.data || {};
         if (data.source === "streamui-host" && data.kind === "measure") {
@@ -521,6 +627,7 @@ export function buildIframeDocument(
       let lastHeight = 0;
       let pendingShrinkHeight = 0;
       let pendingShrinkStartedAt = 0;
+      let pendingShrinkTimer = 0;
       const hasPositionedAncestor = (element, body) => {
         let parent = element.parentElement;
         while (parent && parent !== body && parent !== document.documentElement) {
@@ -592,6 +699,24 @@ export function buildIframeDocument(
           Math.ceil(maxBottom + paddingBottom + HEIGHT_SAFETY_PADDING)
         );
       };
+      const clearPendingShrinkTimer = () => {
+        if (pendingShrinkTimer) {
+          window.clearTimeout(pendingShrinkTimer);
+          pendingShrinkTimer = 0;
+        }
+      };
+      const schedulePendingShrinkMeasure = () => {
+        if (pendingShrinkTimer || !pendingShrinkStartedAt) {
+          return;
+        }
+
+        const elapsed = performance.now() - pendingShrinkStartedAt;
+        const delay = Math.max(0, SHRINK_SETTLE_MS - elapsed) + 20;
+        pendingShrinkTimer = window.setTimeout(() => {
+          pendingShrinkTimer = 0;
+          measure();
+        }, delay);
+      };
       const shouldPostHeight = (height) => {
         if (!lastHeight) {
           return true;
@@ -599,6 +724,7 @@ export function buildIframeDocument(
         if (height >= lastHeight || lastHeight - height <= SMALL_SHRINK_PX) {
           pendingShrinkHeight = 0;
           pendingShrinkStartedAt = 0;
+          clearPendingShrinkTimer();
           return Math.abs(height - lastHeight) > HEIGHT_EPSILON;
         }
 
@@ -609,10 +735,18 @@ export function buildIframeDocument(
         ) {
           pendingShrinkHeight = height;
           pendingShrinkStartedAt = now;
+          clearPendingShrinkTimer();
+          schedulePendingShrinkMeasure();
           return false;
         }
 
-        return now - pendingShrinkStartedAt >= SHRINK_SETTLE_MS;
+        if (now - pendingShrinkStartedAt < SHRINK_SETTLE_MS) {
+          schedulePendingShrinkMeasure();
+          return false;
+        }
+
+        clearPendingShrinkTimer();
+        return true;
       };
       const measure = () => {
         const height = measureContentHeight();
@@ -620,6 +754,7 @@ export function buildIframeDocument(
           lastHeight = height;
           pendingShrinkHeight = 0;
           pendingShrinkStartedAt = 0;
+          clearPendingShrinkTimer();
           post("resize", "resize", { height });
         }
       };
@@ -1702,6 +1837,7 @@ export function buildIframeDocument(
       };
       window.addEventListener("load", scheduleMeasure);
       window.addEventListener("resize", scheduleMeasure);
+      window.addEventListener("load", scheduleMathTypeset);
       window.addEventListener("load", scheduleSelectionUiRefresh);
       window.addEventListener("resize", scheduleSelectionUiRefresh);
       document.addEventListener("scroll", scheduleSelectionUiRefresh, true);
@@ -1719,12 +1855,16 @@ export function buildIframeDocument(
       resizeObserver.observe(document.documentElement);
       observeBody();
       window.addEventListener("load", observeBody);
-      new MutationObserver(scheduleMeasure).observe(document.documentElement, {
+      new MutationObserver(() => {
+        scheduleMathTypeset();
+        scheduleMeasure();
+      }).observe(document.documentElement, {
         attributes: true,
         childList: true,
         subtree: true,
         characterData: true
       });
+      scheduleMathTypeset();
       scheduleMeasure();
     })();
   </script>

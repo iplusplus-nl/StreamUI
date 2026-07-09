@@ -22,6 +22,18 @@ describe("sandboxDocument", () => {
     assert.match(document, /source: "streamui-runtime"/);
   });
 
+  it("includes lazy MathJax rendering for TeX formulas", () => {
+    const document = buildIframeDocument("<p>\\(x + 1\\)</p>");
+
+    assert.match(document, /MathJax/);
+    assert.match(document, /tex-chtml\.js/);
+    assert.match(document, /inlineMath/);
+    assert.match(document, /scheduleMathTypeset/);
+    assert.match(document, /isPreviewComplete/);
+    assert.match(document, /!isPreviewComplete\(\)/);
+    assert.match(document, /streamuiTypesetMath/);
+  });
+
   it("builds the same body html used by the live preview patcher", () => {
     const body = buildIframeBodyHtml("<p>Hello</p>");
     const document = buildIframeDocument("<p>Hello</p>");
@@ -50,6 +62,8 @@ describe("sandboxDocument", () => {
 
     assert.match(document, /data-streamui-actions-enabled="false"/);
     assert.match(document, /body\[data-streamui-actions-enabled="false"\]/);
+    assert.match(document, /animation: none !important/);
+    assert.match(document, /transition: none !important/);
     assert.match(document, /areHostActionsEnabled/);
   });
 

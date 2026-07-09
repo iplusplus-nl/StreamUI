@@ -228,6 +228,7 @@ export function PreviewFrame({
   const pendingShrinkRef = useRef<{ height: number; startedAt: number } | null>(
     null
   );
+  const pendingShrinkTimerRef = useRef<number | null>(null);
   const [height, setHeight] = useState(96);
   const [capabilityAction, setCapabilityAction] =
     useState<CapabilityAction | null>(null);
@@ -242,12 +243,44 @@ export function PreviewFrame({
   const applyMeasuredHeight = useCallback((value: number) => {
     const nextHeight = Math.max(MIN_PREVIEW_HEIGHT, Math.ceil(value));
     const now = performance.now();
+    const clearPendingShrinkTimer = () => {
+      if (pendingShrinkTimerRef.current !== null) {
+        window.clearTimeout(pendingShrinkTimerRef.current);
+        pendingShrinkTimerRef.current = null;
+      }
+    };
+    const schedulePendingShrink = (startedAt: number) => {
+      clearPendingShrinkTimer();
+      const elapsed = performance.now() - startedAt;
+      const delay = Math.max(0, SHRINK_SETTLE_MS - elapsed) + 20;
+      pendingShrinkTimerRef.current = window.setTimeout(() => {
+        pendingShrinkTimerRef.current = null;
+        setHeight((currentHeight) => {
+          const pending = pendingShrinkRef.current;
+          if (!pending) {
+            return currentHeight;
+          }
+
+          if (performance.now() - pending.startedAt < SHRINK_SETTLE_MS) {
+            schedulePendingShrink(pending.startedAt);
+            return currentHeight;
+          }
+
+          pendingShrinkRef.current = null;
+          return Math.abs(pending.height - currentHeight) > HEIGHT_EPSILON
+            ? pending.height
+            : currentHeight;
+        });
+      }, delay);
+    };
+
     setHeight((currentHeight) => {
       if (
         nextHeight >= currentHeight ||
         currentHeight - nextHeight <= SMALL_SHRINK_PX
       ) {
         pendingShrinkRef.current = null;
+        clearPendingShrinkTimer();
         return Math.abs(nextHeight - currentHeight) > HEIGHT_EPSILON
           ? nextHeight
           : currentHeight;
@@ -262,19 +295,32 @@ export function PreviewFrame({
           height: nextHeight,
           startedAt: now
         };
+        schedulePendingShrink(now);
         return currentHeight;
       }
 
       if (now - pending.startedAt < SHRINK_SETTLE_MS) {
+        schedulePendingShrink(pending.startedAt);
         return currentHeight;
       }
 
       pendingShrinkRef.current = null;
+      clearPendingShrinkTimer();
       return Math.abs(nextHeight - currentHeight) > HEIGHT_EPSILON
         ? nextHeight
         : currentHeight;
     });
   }, []);
+
+  useEffect(
+    () => () => {
+      if (pendingShrinkTimerRef.current !== null) {
+        window.clearTimeout(pendingShrinkTimerRef.current);
+        pendingShrinkTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   const requestFrameMeasure = useCallback(() => {
     window.requestAnimationFrame(() => {
