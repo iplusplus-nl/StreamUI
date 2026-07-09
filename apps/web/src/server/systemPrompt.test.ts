@@ -17,6 +17,13 @@ test("pushes generated artifacts through visual layout quality checks", () => {
   assert.match(SYSTEM_PROMPT, /no accidental duplicate primary subjects/i);
 });
 
+test("instructs formula output to use MathJax delimiters", () => {
+  assert.match(SYSTEM_PROMPT, /MathJax/i);
+  assert.match(SYSTEM_PROMPT, /\\\(/);
+  assert.match(SYSTEM_PROMPT, /\\\[/);
+  assert.match(SYSTEM_PROMPT, /TeX/i);
+});
+
 test("builds a per-turn UI complexity instruction", () => {
   const prompt = buildUiComplexityPrompt(88);
 

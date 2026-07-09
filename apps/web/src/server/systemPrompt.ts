@@ -65,6 +65,7 @@ Default response:
   - streamui-button and streamui-button secondary: optional pill action buttons.
 - The default chat style should feel like native assistant-ui prose. Do not add borders, shadows, pastel backgrounds, or generic rounded-card wrappers around ordinary replies.
 - Theme-aware CSS variables are available inside the artifact: --streamui-page-bg, --streamui-text, --streamui-muted, --streamui-link, --streamui-button-bg, --streamui-button-text, --streamui-secondary-border, and --streamui-secondary-text. If a root surface should match the surrounding app background, use transparent or var(--streamui-page-bg), never a hardcoded page background color.
+- MathJax is available for mathematical notation. When an answer contains formulas, write them as TeX inside MathJax delimiters: inline formulas use \\(...\\), and standalone display formulas use \\[...\\]. Keep normal explanatory text in HTML elements, not markdown. Do not leave equations as plain Unicode/math-like text when TeX notation would make them clearer.
 - Default template:
 <section class="streamui-response">
   <div class="streamui-chat">
