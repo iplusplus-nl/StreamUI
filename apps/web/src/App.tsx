@@ -89,6 +89,7 @@ import {
   filterDeletedSessionState,
   getSessionStreamingRunIds,
   hasPersistedMessages,
+  interruptStaleArtifactEditsInSessionState,
   initialMessages,
   isSessionEmpty,
   mergeSyncedSessionState,
@@ -96,6 +97,7 @@ import {
   normalizeStoredSessionState,
   serializeSessions,
   sortSessions,
+  STALE_ARTIFACT_EDIT_SWEEP_INTERVAL_MS,
   STREAM_INTERRUPTED_ERROR,
   summarizeSession,
   type ArtifactEdit,
@@ -158,10 +160,15 @@ type ArtifactEditResponse = {
 
 type SendStreamUiRequestOptions = {
   appendUserMessage?: boolean;
+  assistantMessageId?: string;
   assistantPatch?: Partial<ClientMessage>;
   persistUserMessage?: ClientMessage;
   userMessagePatch?: Partial<ClientMessage>;
   initialReasoning?: string;
+  decorateAssistantPatch?: (
+    patch: Partial<ClientMessage>,
+    phase: "streaming" | "complete" | "error" | "cancelled"
+  ) => Partial<ClientMessage>;
   requestHistory?:
     | ClientMessage[]
     | ((
@@ -212,22 +219,12 @@ type MessageBranchInfo = {
   nextVariantId?: string;
 };
 
-type ArtifactTailDiscardIntent = {
-  assistantId: string;
-  editId?: string;
-  discardCount: number;
-  kind: "select" | "reference";
-  messageId: string;
-  selection?: ArtifactSelectionPayload;
-  enableSelectionMode?: boolean;
-};
-
-type ArtifactEditVariantInfo = {
-  editId: string;
+type ArtifactVersionInfo = {
   activeIndex: number;
   total: number;
-  previousVariantId?: string;
-  nextVariantId?: string;
+  previousEditId?: string | null;
+  nextEditId?: string | null;
+  disabled?: boolean;
 };
 
 const LEGACY_SESSION_STORAGE_KEY = "streamui.sessions.v1";
@@ -965,25 +962,100 @@ function getArtifactEditRawStream(
   }
 
   const edit = message.artifactEdits?.find((item) => item.id === editId);
-  if (!edit || edit.status !== "complete") {
+  return edit ? getArtifactEditCompleteRawStream(edit) : undefined;
+}
+
+function getArtifactEditDisplayRawStream(
+  message: ClientMessage,
+  editId: string | undefined
+): string | undefined {
+  const rawStream = getArtifactEditRawStream(message, editId);
+  if (rawStream || !editId) {
+    return rawStream;
+  }
+
+  const edits = message.artifactEdits ?? [];
+  const edit = edits.find((item) => item.id === editId);
+  if (!edit || edit.status !== "error") {
     return undefined;
   }
 
-  const variant =
+  return getArtifactEditRawStream(
+    message,
+    getArtifactEditParentId(edits, edit)
+  );
+}
+
+function getArtifactEditActiveVariant(edit: ArtifactEdit) {
+  return (
     edit.variants.find((item) => item.id === edit.activeVariantId) ??
-    edit.variants[0];
+    edit.variants[0]
+  );
+}
+
+function getArtifactEditCompleteRawStream(
+  edit: ArtifactEdit
+): string | undefined {
+  if (edit.status !== "complete") {
+    return undefined;
+  }
+
+  const variant = getArtifactEditActiveVariant(edit);
   return variant?.status === "complete" ? variant.rawStream : undefined;
 }
 
 function hasUsableArtifactEditVariant(edit: ArtifactEdit): boolean {
-  if (edit.status !== "complete") {
-    return false;
+  return Boolean(getArtifactEditCompleteRawStream(edit));
+}
+
+function hasPendingArtifactEditVariant(edit: ArtifactEdit): boolean {
+  return (
+    edit.status === "pending" ||
+    edit.variants.some((variant) => variant.status === "pending")
+  );
+}
+
+function shouldShowArtifactEditPromptBubble(edit: ArtifactEdit): boolean {
+  return edit.promptBubble !== false;
+}
+
+function shouldKeepFailedArtifactEditVersion(edit: ArtifactEdit): boolean {
+  return edit.status === "error" && shouldShowArtifactEditPromptBubble(edit);
+}
+
+function getArtifactEditParentId(
+  edits: ArtifactEdit[],
+  edit: ArtifactEdit
+): string | undefined {
+  if (edit.parentId && edits.some((candidate) => candidate.id === edit.parentId)) {
+    return edit.parentId;
   }
 
-  const variant =
-    edit.variants.find((item) => item.id === edit.activeVariantId) ??
-    edit.variants[0];
-  return variant?.status === "complete" && Boolean(variant.rawStream);
+  const index = edits.findIndex((candidate) => candidate.id === edit.id);
+  return index > 0 ? edits[index - 1].id : undefined;
+}
+
+function getArtifactEditChain(
+  edits: ArtifactEdit[],
+  editId: string | undefined
+): ArtifactEdit[] {
+  if (!editId) {
+    return [];
+  }
+
+  const byId = new Map(edits.map((edit) => [edit.id, edit]));
+  const chain: ArtifactEdit[] = [];
+  const seen = new Set<string>();
+  let current = byId.get(editId);
+
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    chain.push(current);
+    const parentId = getArtifactEditParentId(edits, current);
+    current = parentId ? byId.get(parentId) : undefined;
+  }
+
+  return chain.reverse();
 }
 
 function getResolvedArtifactEditId(message: ClientMessage): string | undefined {
@@ -1016,99 +1088,57 @@ function getResolvedArtifactEditId(message: ClientMessage): string | undefined {
   return undefined;
 }
 
-function getArtifactEditKeepCount(
-  message: ClientMessage,
-  editId: string | undefined
-): number {
-  const edits = message.artifactEdits ?? [];
-  if (!editId) {
-    return 0;
-  }
-
-  const index = edits.findIndex((edit) => edit.id === editId);
-  return index >= 0 ? index + 1 : edits.length;
+function getActiveArtifactEditChain(message: ClientMessage): ArtifactEdit[] {
+  return getArtifactEditChain(
+    message.artifactEdits ?? [],
+    getResolvedArtifactEditId(message)
+  );
 }
 
-function getArtifactEditDiscardAnchorId(
-  message: ClientMessage,
-  editId: string | undefined
-): string | undefined {
-  if (!editId) {
-    return undefined;
-  }
-
+function getArtifactVersionInfo(
+  message: ClientMessage
+): ArtifactVersionInfo | undefined {
+  const activeEditId = getResolvedArtifactEditId(message) ?? null;
+  const hasOriginal = Boolean(
+    (message.artifactEditBaseRawStream ?? message.rawStream)?.trim()
+  );
   const edits = message.artifactEdits ?? [];
-  const index = edits.findIndex((edit) => edit.id === editId);
-  if (index < 0) {
-    return editId;
-  }
+  const versions: Array<{ editId: string | null }> = hasOriginal
+    ? [{ editId: null }]
+    : [];
 
-  if (hasUsableArtifactEditVariant(edits[index])) {
-    return editId;
-  }
-
-  for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
-    if (hasUsableArtifactEditVariant(edits[previousIndex])) {
-      return edits[previousIndex].id;
+  for (const edit of edits) {
+    if (
+      hasUsableArtifactEditVariant(edit) ||
+      hasPendingArtifactEditVariant(edit) ||
+      shouldKeepFailedArtifactEditVersion(edit) ||
+      edit.id === activeEditId
+    ) {
+      versions.push({ editId: edit.id });
     }
   }
 
-  return undefined;
-}
-
-function hasLaterArtifactEdits(message: ClientMessage): boolean {
-  const edits = message.artifactEdits ?? [];
-  const editId = getResolvedArtifactEditId(message);
-  const index = editId ? edits.findIndex((edit) => edit.id === editId) : -1;
-  return edits.slice(index + 1).some(hasUsableArtifactEditVariant);
-}
-
-function getLaterArtifactEditDiscardCount(message: ClientMessage): number {
-  const edits = message.artifactEdits ?? [];
-  const keepCount = getArtifactEditKeepCount(
-    message,
-    getResolvedArtifactEditId(message)
-  );
-
-  return edits.slice(keepCount).filter(hasUsableArtifactEditVariant).length;
-}
-
-function getArtifactEditVariantInfo(
-  message: ClientMessage
-): ArtifactEditVariantInfo | undefined {
-  const editId = getResolvedArtifactEditId(message);
-  if (!editId) {
+  if (versions.length <= 1) {
     return undefined;
   }
 
-  const edit = message.artifactEdits?.find((item) => item.id === editId);
-  if (!edit) {
-    return undefined;
-  }
-
-  const completeVariants = edit.variants.filter(
-    (variant) => variant.status === "complete" && Boolean(variant.rawStream)
+  const activeIndex = versions.findIndex(
+    (version) => version.editId === activeEditId
   );
-  if (!completeVariants.length) {
-    return undefined;
-  }
-
-  const activeVariantId = completeVariants.some(
-    (variant) => variant.id === edit.activeVariantId
-  )
-    ? edit.activeVariantId
-    : completeVariants[completeVariants.length - 1]?.id;
-  const activeIndex = Math.max(
-    0,
-    completeVariants.findIndex((variant) => variant.id === activeVariantId)
-  );
+  const resolvedActiveIndex = activeIndex >= 0 ? activeIndex : 0;
+  const isVersionSwitchDisabled =
+    message.status === "streaming" || edits.some(hasPendingArtifactEditVariant);
 
   return {
-    editId,
-    activeIndex,
-    total: completeVariants.length,
-    previousVariantId: completeVariants[activeIndex - 1]?.id,
-    nextVariantId: completeVariants[activeIndex + 1]?.id
+    activeIndex: resolvedActiveIndex,
+    total: versions.length,
+    previousEditId: isVersionSwitchDisabled
+      ? undefined
+      : versions[resolvedActiveIndex - 1]?.editId,
+    nextEditId: isVersionSwitchDisabled
+      ? undefined
+      : versions[resolvedActiveIndex + 1]?.editId,
+    disabled: isVersionSwitchDisabled
   };
 }
 
@@ -1397,13 +1427,7 @@ type StreamThreadProps = {
   onRegenerateAssistant(id: string): void;
   onEditUserMessage(id: string, content: string): void;
   onSelectBranch(groupId: string, variantId: string): void;
-  onSelectArtifactEditVariant(
-    assistantId: string,
-    editId: string,
-    variantId: string
-  ): void;
   onSelectArtifactEdit(assistantId: string, editId?: string): void;
-  onDiscardArtifactEditTail(assistantId: string, editId?: string): boolean;
   onEditArtifactEditPrompt(
     assistantId: string,
     editId: string,
@@ -1414,69 +1438,6 @@ type StreamThreadProps = {
   onReasoningEffortChange(reasoningEffort: ReasoningEffort): void;
   onUiComplexityChange(uiComplexity: number): void;
 };
-
-function ArtifactTailDiscardDialog({
-  intent,
-  onCancel,
-  onConfirm
-}: {
-  intent: ArtifactTailDiscardIntent;
-  onCancel(): void;
-  onConfirm(): void;
-}) {
-  const changeLabel = intent.discardCount === 1 ? "change" : "changes";
-  const actionLabel =
-    intent.kind === "reference"
-      ? "add this reference"
-      : "start selecting here";
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onCancel();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [onCancel]);
-
-  return (
-    <div
-      className="artifact-tail-discard-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="artifact-tail-discard-title"
-    >
-      <div className="artifact-tail-discard-dialog">
-        <div className="artifact-tail-discard-copy">
-          <h2 id="artifact-tail-discard-title">Continue from this version?</h2>
-          <p>
-            To {actionLabel}, ChatHTML will discard {intent.discardCount} later{" "}
-            {changeLabel}. This keeps the edit history linear.
-          </p>
-        </div>
-        <div className="artifact-tail-discard-actions">
-          <button
-            className="artifact-tail-discard-secondary"
-            type="button"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            className="artifact-tail-discard-primary"
-            type="button"
-            autoFocus
-            onClick={onConfirm}
-          >
-            Discard later {changeLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 const SESSION_OUTPUT_SCROLL_SETTLE_MS = 900;
 const SESSION_OUTPUT_SCROLL_RETRY_MS = [0, 80, 240, 520];
@@ -1600,9 +1561,7 @@ function StreamThread({
   onRegenerateAssistant,
   onEditUserMessage,
   onSelectBranch,
-  onSelectArtifactEditVariant,
   onSelectArtifactEdit,
-  onDiscardArtifactEditTail,
   onEditArtifactEditPrompt,
   onArtifactSelectionsChange,
   onModelChange,
@@ -1642,8 +1601,6 @@ function StreamThread({
   >(null);
   const [isReasoningActivityClosing, setIsReasoningActivityClosing] =
     useState(false);
-  const [artifactTailDiscardIntent, setArtifactTailDiscardIntent] =
-    useState<ArtifactTailDiscardIntent | null>(null);
   const activeReasoningMessage = activeReasoningMessageId
     ? messageById.get(activeReasoningMessageId)
     : undefined;
@@ -1690,13 +1647,16 @@ function StreamThread({
         continue;
       }
 
+      const activeEditId = getResolvedArtifactEditId(assistant);
       const timeline = {
         assistantId: assistant.id,
-        edits: assistant.artifactEdits,
-        activeEditId: getResolvedArtifactEditId(assistant),
+        edits: getActiveArtifactEditChain(assistant).filter(
+          shouldShowArtifactEditPromptBubble
+        ),
+        activeEditId,
         disabled:
           assistant.status === "streaming" ||
-          assistant.artifactEdits.some((edit) => edit.status === "pending")
+          assistant.artifactEdits.some(hasPendingArtifactEditVariant)
       };
 
       for (let userIndex = index - 1; userIndex >= 0; userIndex -= 1) {
@@ -1753,7 +1713,6 @@ function StreamThread({
     clearReasoningActivityCloseTimer();
     setActiveReasoningMessageId(null);
     setIsReasoningActivityClosing(false);
-    setArtifactTailDiscardIntent(null);
   }, [activeSessionId, clearReasoningActivityCloseTimer]);
 
   useEffect(() => {
@@ -1796,9 +1755,6 @@ function StreamThread({
       }
       return current;
     });
-    setArtifactTailDiscardIntent((current) =>
-      current && visibleMessageIds.has(current.messageId) ? current : null
-    );
   }, [clearReasoningActivityCloseTimer, messages, visibleMessageIds]);
 
   const addArtifactSelection = useCallback(
@@ -1823,75 +1779,15 @@ function StreamThread({
     []
   );
 
-  const requestArtifactTailDiscard = useCallback(
-    (
-      messageId: string,
-      kind: ArtifactTailDiscardIntent["kind"],
-      options: {
-        selection?: ArtifactSelectionPayload;
-        enableSelectionMode?: boolean;
-      } = {}
-    ): boolean => {
-      const assistant = messages.find(
-        (message) => message.id === messageId && message.role === "assistant"
-      );
-      if (!assistant || !hasLaterArtifactEdits(assistant)) {
-        return false;
-      }
-
-      if (assistant.artifactEdits?.some((edit) => edit.status === "pending")) {
-        console.warn(
-          "Wait for the current artifact edit to finish before editing this version."
-        );
-        focusComposerInput();
-        return true;
-      }
-
-      const discardCount = getLaterArtifactEditDiscardCount(assistant);
-      if (discardCount <= 0) {
-        return false;
-      }
-
-      setSelectionModeMessageId(null);
-      setArtifactTailDiscardIntent({
-        assistantId: assistant.id,
-        editId: getResolvedArtifactEditId(assistant),
-        discardCount,
-        kind,
-        messageId,
-        ...options
-      });
-      return true;
-    },
-    [messages]
-  );
-
   const handleArtifactSelection = useCallback(
     (messageId: string, selection: ArtifactSelectionPayload) => {
-      if (
-        requestArtifactTailDiscard(messageId, "reference", {
-          selection
-        })
-      ) {
-        return;
-      }
-
       addArtifactSelection(messageId, selection);
     },
-    [addArtifactSelection, requestArtifactTailDiscard]
+    [addArtifactSelection]
   );
 
   const handleArtifactSelectionModeChange = useCallback(
     (messageId: string, enabled: boolean) => {
-      if (
-        enabled &&
-        requestArtifactTailDiscard(messageId, "select", {
-          enableSelectionMode: true
-        })
-      ) {
-        return;
-      }
-
       setSelectionModeMessageId((current) =>
         enabled
           ? current === messageId
@@ -1902,34 +1798,8 @@ function StreamThread({
             : current
       );
     },
-    [requestArtifactTailDiscard]
+    []
   );
-
-  const handleConfirmArtifactTailDiscard = useCallback(() => {
-    const intent = artifactTailDiscardIntent;
-    if (!intent) {
-      return;
-    }
-
-    setArtifactTailDiscardIntent(null);
-    const didDiscard = onDiscardArtifactEditTail(intent.assistantId, intent.editId);
-    if (!didDiscard) {
-      return;
-    }
-
-    if (intent.kind === "reference" && intent.selection) {
-      addArtifactSelection(intent.messageId, intent.selection);
-      return;
-    }
-
-    if (intent.kind === "select" && intent.enableSelectionMode) {
-      setSelectionModeMessageId(intent.messageId);
-    }
-  }, [
-    addArtifactSelection,
-    artifactTailDiscardIntent,
-    onDiscardArtifactEditTail
-  ]);
 
   const handleRemoveArtifactSelection = useCallback((id: string) => {
     setArtifactSelections((current) =>
@@ -2151,8 +2021,8 @@ function StreamThread({
 
             if (clientMessage.role === "assistant") {
               const branchInfo = getBranchInfo(clientMessage.id);
-              const artifactEditVariantInfo =
-                getArtifactEditVariantInfo(clientMessage);
+              const artifactVersionInfo =
+                getArtifactVersionInfo(clientMessage);
               return (
                 <AssistantMessage
                   id={clientMessage.id}
@@ -2176,7 +2046,7 @@ function StreamThread({
                     selectionModeMessageId === clientMessage.id
                   }
                   branchInfo={branchInfo}
-                  artifactEditVariantInfo={artifactEditVariantInfo}
+                  artifactVersionInfo={artifactVersionInfo}
                   activeReasoningMessageId={activeReasoningMessageId ?? undefined}
                   onRuntimeError={onRuntimeError}
                   onArtifactAction={onArtifactAction}
@@ -2188,7 +2058,7 @@ function StreamThread({
                   onVisualRepair={onVisualRepairAssistant}
                   onRegenerate={onRegenerateAssistant}
                   onSelectBranch={onSelectBranch}
-                  onSelectArtifactEditVariant={onSelectArtifactEditVariant}
+                  onSelectArtifactEdit={onSelectArtifactEdit}
                 />
               );
             }
@@ -2204,8 +2074,6 @@ function StreamThread({
                   clientMessage.id
                 )}
                 onEdit={onEditUserMessage}
-                onSelectArtifactEdit={onSelectArtifactEdit}
-                onDiscardArtifactEditTail={onDiscardArtifactEditTail}
                 onEditArtifactEditPrompt={onEditArtifactEditPrompt}
               >
                 {clientMessage.content}
@@ -2236,13 +2104,6 @@ function StreamThread({
           message={activeReasoningMessage}
           isClosing={isReasoningActivityClosing}
           onClose={closeReasoningActivity}
-        />
-      ) : null}
-      {artifactTailDiscardIntent ? (
-        <ArtifactTailDiscardDialog
-          intent={artifactTailDiscardIntent}
-          onCancel={() => setArtifactTailDiscardIntent(null)}
-          onConfirm={handleConfirmArtifactTailDiscard}
         />
       ) : null}
     </ThreadPrimitive.Root>
@@ -2713,7 +2574,10 @@ export default function App() {
         const serverState = normalizeStoredSessionState(
           await response.json(),
           Date.now(),
-          { rebuildSnapshots: false }
+          {
+            rebuildSnapshots: false,
+            interruptPendingArtifactEdits: true
+          }
         );
         if (cancelled) {
           return;
@@ -2756,6 +2620,26 @@ export default function App() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
+  }, [sessionsLoaded, setSessionStateAndRef]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !sessionsLoaded) {
+      return undefined;
+    }
+
+    const sweepStaleArtifactEdits = () => {
+      setSessionStateAndRef((current) =>
+        interruptStaleArtifactEditsInSessionState(current)
+      );
+    };
+
+    sweepStaleArtifactEdits();
+    const intervalId = window.setInterval(
+      sweepStaleArtifactEdits,
+      STALE_ARTIFACT_EDIT_SWEEP_INTERVAL_MS
+    );
+
+    return () => window.clearInterval(intervalId);
   }, [sessionsLoaded, setSessionStateAndRef]);
 
   useEffect(() => {
@@ -3254,6 +3138,8 @@ export default function App() {
         },
         updatedAt: Date.now()
       }));
+      artifactSelectionsRef.current = [];
+      setArtifactSelectionClearVersion((version) => version + 1);
     },
     [updateActiveSession]
   );
@@ -3500,7 +3386,7 @@ export default function App() {
           : options.userMessagePatch?.fileIds,
         status: "complete"
       };
-      const assistantId = createId("assistant");
+      const assistantId = options.assistantMessageId?.trim() || createId("assistant");
       const generationRunId = createId("run");
       const assistantMessage: ClientMessage = {
         ...options.assistantPatch,
@@ -3514,6 +3400,16 @@ export default function App() {
         ...(options.initialReasoning
           ? { reasoning: options.initialReasoning }
           : {})
+      };
+      const decorateAssistantPatch = (
+        patch: Partial<ClientMessage>,
+        phase: "streaming" | "complete" | "error" | "cancelled"
+      ) => options.decorateAssistantPatch?.(patch, phase) ?? patch;
+      const updateAssistantForPhase = (
+        patch: Partial<ClientMessage>,
+        phase: "streaming" | "complete" | "error" | "cancelled" = "streaming"
+      ) => {
+        updateAssistant(assistantId, decorateAssistantPatch(patch, phase));
       };
       if (options.cancelBranchVariant) {
         branchRunCancelCleanupRef.current.set(generationRunId, {
@@ -3600,7 +3496,10 @@ export default function App() {
         raw = serverRaw || raw;
         reasoning = serverReasoning || reasoning;
         lastStreamSequence = Math.max(lastStreamSequence, serverSequence);
-        updateAssistant(assistantId, serverMessage);
+        updateAssistantForPhase(
+          serverMessage,
+          terminalStatus ?? "streaming"
+        );
 
         if (terminalStatus) {
           doneStatus = terminalStatus;
@@ -3627,7 +3526,10 @@ export default function App() {
           const serverState = normalizeStoredSessionState(
             await response.json(),
             Date.now(),
-            { rebuildSnapshots: false }
+            {
+              rebuildSnapshots: false,
+              interruptPendingArtifactEdits: true
+            }
           );
           const serverMessage = findSessionMessage(serverState, assistantId);
           if (serverMessage) {
@@ -3808,17 +3710,20 @@ export default function App() {
 
         if (doneStatus === "error") {
           const finalParts = extractStreamUiParts(raw);
-          updateAssistant(assistantId, {
-            content:
-              finalParts.chat ||
-              finalParts.fallbackText ||
-              "I could not complete that request.",
-            reasoning,
-            rawStream: raw,
-            streamSequence: lastStreamSequence,
-            error: sanitizeChatErrorMessage(doneError),
-            status: "error"
-          });
+          updateAssistantForPhase(
+            {
+              content:
+                finalParts.chat ||
+                finalParts.fallbackText ||
+                "I could not complete that request.",
+              reasoning,
+              rawStream: raw,
+              streamSequence: lastStreamSequence,
+              error: sanitizeChatErrorMessage(doneError),
+              status: "error"
+            },
+            "error"
+          );
           return;
         }
 
@@ -3835,20 +3740,24 @@ export default function App() {
           finalSnapshot = renderer.getSnapshot();
         }
 
-        updateAssistant(assistantId, {
-          content: finalParts.chat || finalParts.fallbackText,
-          reasoning,
-          ...(finalParts.sessionTitleComplete && finalParts.sessionTitle.trim()
-            ? { sessionTitle: finalParts.sessionTitle }
-            : {}),
-          rawStream: raw,
-          streamSequence: lastStreamSequence,
-          ...(finalSnapshot ? { snapshot: finalSnapshot } : {}),
-          ...(artifactContext ? { artifactContext } : {}),
-          hasStreamUi: finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,
-          streamUiComplete: finalParts.streamUiComplete,
-          status: "complete"
-        });
+        updateAssistantForPhase(
+          {
+            content: finalParts.chat || finalParts.fallbackText,
+            reasoning,
+            ...(finalParts.sessionTitleComplete && finalParts.sessionTitle.trim()
+              ? { sessionTitle: finalParts.sessionTitle }
+              : {}),
+            rawStream: raw,
+            streamSequence: lastStreamSequence,
+            ...(finalSnapshot ? { snapshot: finalSnapshot } : {}),
+            ...(artifactContext ? { artifactContext } : {}),
+            hasStreamUi:
+              finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,
+            streamUiComplete: finalParts.streamUiComplete,
+            status: "complete"
+          },
+          "complete"
+        );
         const artifactUpload = createArtifactFileUpload(
           assistantId,
           raw,
@@ -3877,9 +3786,9 @@ export default function App() {
           streamController.signal.aborted ||
           isAbortError(error)
         ) {
-          updateAssistant(
-            assistantId,
-            createCancelledAssistantPatch(raw, reasoning, lastStreamSequence)
+          updateAssistantForPhase(
+            createCancelledAssistantPatch(raw, reasoning, lastStreamSequence),
+            "cancelled"
           );
           return;
         }
@@ -3896,14 +3805,17 @@ export default function App() {
           });
           return;
         }
-        updateAssistant(assistantId, {
-          content: "I could not complete that request.",
-          error: message,
-          reasoning,
-          rawStream: raw,
-          streamSequence: lastStreamSequence,
-          status: "error"
-        });
+        updateAssistantForPhase(
+          {
+            content: "I could not complete that request.",
+            error: message,
+            reasoning,
+            rawStream: raw,
+            streamSequence: lastStreamSequence,
+            status: "error"
+          },
+          "error"
+        );
       } finally {
         if (typeof serverSyncIntervalId === "number") {
           window.clearInterval(serverSyncIntervalId);
@@ -4128,6 +4040,172 @@ export default function App() {
     [sendStreamUiRequest]
   );
 
+  const decorateGeneratedArtifactBatchPatch = useCallback(
+    (
+      assistantId: string,
+      editId: string,
+      variantId: string,
+      previousEditId: string | undefined
+    ) =>
+      (
+        patch: Partial<ClientMessage>,
+        phase: "streaming" | "complete" | "error" | "cancelled"
+      ): Partial<ClientMessage> => {
+        if (phase === "streaming") {
+          return patch;
+        }
+
+        const current = findSessionMessage(sessionStateRef.current, assistantId);
+        const currentEdits = current?.artifactEdits ?? [];
+        if (phase === "cancelled") {
+          const artifactEdits = currentEdits.filter((edit) => edit.id !== editId);
+          return {
+            ...patch,
+            artifactEdits: artifactEdits.length ? artifactEdits : undefined,
+            activeArtifactEditId: previousEditId
+          };
+        }
+
+        const rawStream = patch.rawStream ?? "";
+        const errorMessage =
+          typeof patch.error === "string" && patch.error.trim()
+            ? patch.error
+            : "The artifact regeneration failed.";
+        const nextStatus: "complete" | "error" =
+          phase === "complete" ? "complete" : "error";
+        const artifactEdits = currentEdits.map((edit) => {
+          if (edit.id !== editId) {
+            return edit;
+          }
+
+          return {
+            ...edit,
+            status: nextStatus,
+            error: phase === "complete" ? undefined : errorMessage,
+            activeVariantId: variantId,
+            variants: edit.variants.map((variant) =>
+              variant.id === variantId
+                ? {
+                    ...variant,
+                    status: nextStatus,
+                    rawStream: phase === "complete" ? rawStream : variant.rawStream,
+                    error: phase === "complete" ? undefined : errorMessage
+                  }
+                : variant
+            )
+          };
+        });
+
+        return {
+          ...patch,
+          artifactEdits,
+          activeArtifactEditId: editId
+        };
+      },
+    []
+  );
+
+  const startGeneratedArtifactBatch = useCallback(
+    ({
+      session,
+      visibleMessages,
+      assistantIndex,
+      userIndex,
+      nextUserContent,
+      attachments = [],
+      assistantPatch,
+      initialReasoning,
+      requestHistory
+    }: {
+      session: ChatSession;
+      visibleMessages: ClientMessage[];
+      assistantIndex: number;
+      userIndex: number;
+      nextUserContent: string;
+      attachments?: ImageAttachment[];
+      assistantPatch?: Partial<ClientMessage>;
+      initialReasoning?: string;
+      requestHistory?: SendStreamUiRequestOptions["requestHistory"];
+    }) => {
+      if (isSendingRef.current) {
+        return;
+      }
+
+      const assistant = visibleMessages[assistantIndex];
+      const user = visibleMessages[userIndex];
+      if (!assistant || assistant.role !== "assistant" || !user || user.role !== "user") {
+        return;
+      }
+
+      const source = getArtifactEditRawStream(
+        assistant,
+        getResolvedArtifactEditId(assistant)
+      );
+      const baseRawStream = assistant.artifactEditBaseRawStream ?? assistant.rawStream;
+      if (!source?.trim() && !baseRawStream?.trim()) {
+        return;
+      }
+
+      const previousEditId = getResolvedArtifactEditId(assistant);
+      const editId = createId("artifact-edit");
+      const variantId = createId("artifact-edit-variant");
+      const createdAt = Date.now();
+      const pendingEdit: ArtifactEdit = {
+        id: editId,
+        parentId: previousEditId,
+        createdAt,
+        prompt: nextUserContent.trim(),
+        references: [],
+        promptBubble: false,
+        activeVariantId: variantId,
+        variants: [
+          {
+            id: variantId,
+            createdAt,
+            status: "pending"
+          }
+        ],
+        status: "pending"
+      };
+      const nextArtifactEdits = [...(assistant.artifactEdits ?? []), pendingEdit];
+
+      void sendStreamUiRequest(nextUserContent, attachments, {
+        appendUserMessage: false,
+        assistantMessageId: assistant.id,
+        targetSessionId: session.id,
+        initialReasoning: initialReasoning ?? "Thinking",
+        assistantPatch: {
+          ...assistantPatch,
+          artifactEditBaseRawStream: baseRawStream,
+          artifactEdits: nextArtifactEdits,
+          activeArtifactEditId: editId
+        },
+        decorateAssistantPatch: decorateGeneratedArtifactBatchPatch(
+          assistant.id,
+          editId,
+          variantId,
+          previousEditId
+        ),
+        requestHistory:
+          requestHistory ??
+          ((_previousMessages, userMessage) => [
+            ...visibleMessages.slice(0, userIndex),
+            userMessage
+          ]),
+        insertMessages: (messages, _userMessage, assistantMessage) =>
+          messages.map((message) =>
+            message.id === assistant.id
+              ? {
+                  ...message,
+                  ...assistantMessage
+                }
+              : message
+          )
+      });
+    },
+    [decorateGeneratedArtifactBatchPatch, sendStreamUiRequest]
+  );
+
   const handleVisualRepairAssistant = useCallback(
     async (assistantId: string, snapshot: RenderSnapshot, width: number) => {
       if (isSendingRef.current || snapshot.status !== "complete") {
@@ -4216,18 +4294,17 @@ export default function App() {
           activeAssistant.repairOfMessageId || activeAssistant.id;
         const repairAttempt = (activeAssistant.repairAttempt ?? 0) + 1;
 
-        startBranchedTurn({
+        startGeneratedArtifactBatch({
           session,
           visibleMessages,
+          assistantIndex,
           userIndex,
-          assistantId,
           nextUserContent: buildVisualRepairPrompt({
             diagnostics,
             hasScreenshot: canUseScreenshot,
             width: exportWidth
           }),
           attachments,
-          appendUserMessage: false,
           assistantPatch: {
             repairOfMessageId,
             repairAttempt
@@ -4243,7 +4320,7 @@ export default function App() {
         console.warn("Could not start visual artifact repair.", error);
       }
     },
-    [apiSettings.model, startBranchedTurn, themeMode]
+    [apiSettings.model, startGeneratedArtifactBatch, themeMode]
   );
 
   const regenerateArtifactEditNode = useCallback(
@@ -4281,20 +4358,10 @@ export default function App() {
         return true;
       }
 
-      if (editIndex < edits.length - 1) {
-        console.warn(
-          "Discard later artifact changes before regenerating this version."
-        );
-        focusComposerInput();
-        return true;
-      }
-
       const edit = edits[editIndex];
       const isPromptEdit = nextPrompt !== undefined;
-      const previousEdit = edit;
-      const previousPrompt = edit.prompt;
       const prompt = (nextPrompt ?? edit.prompt).trim();
-      const sourceEditId = editIndex > 0 ? edits[editIndex - 1].id : undefined;
+      const sourceEditId = getArtifactEditParentId(edits, edit);
       const source = getArtifactEditRawStream(assistant, sourceEditId) ?? "";
       if (!prompt || !source.trim()) {
         console.warn("Artifact edit regeneration requires a completed source.");
@@ -4325,44 +4392,82 @@ export default function App() {
         return true;
       }
 
-      const variantId = createId("artifact-edit-variant");
+      const retryExistingFailedEdit =
+        edit.status === "error" && !hasUsableArtifactEditVariant(edit);
+      const variantId =
+        retryExistingFailedEdit && edit.activeVariantId
+          ? edit.activeVariantId
+          : createId("artifact-edit-variant");
+      const nextEditId = retryExistingFailedEdit
+        ? edit.id
+        : createId("artifact-edit");
       const createdAt = Date.now();
-      const previousVariantId = edit.activeVariantId;
+      const previousActiveEditId = getResolvedArtifactEditId(assistant);
       const controller = new AbortController();
       localArtifactEditAbortRef.current = controller;
+      const pendingEdit: ArtifactEdit = {
+        id: nextEditId,
+        parentId: sourceEditId,
+        createdAt,
+        prompt,
+        references: edit.references,
+        promptBubble: isPromptEdit ? undefined : false,
+        activeVariantId: variantId,
+        variants: [
+          {
+            id: variantId,
+            createdAt,
+            status: "pending"
+          }
+        ],
+        status: "pending"
+      };
+      const pendingArtifactEdits = retryExistingFailedEdit
+        ? (assistant.artifactEdits ?? []).map((item) => {
+            if (item.id !== edit.id) {
+              return item;
+            }
 
+            const hasVariant = item.variants.some(
+              (variant) => variant.id === variantId
+            );
+            const pendingVariant = {
+              id: variantId,
+              createdAt,
+              status: "pending" as const
+            };
+
+            return {
+              ...item,
+              prompt,
+              status: "pending" as const,
+              error: undefined,
+              activeVariantId: variantId,
+              variants: hasVariant
+                ? item.variants.map((variant) =>
+                    variant.id === variantId
+                      ? {
+                          ...variant,
+                          createdAt,
+                          status: "pending" as const,
+                          rawStream: undefined,
+                          summary: undefined,
+                          error: undefined,
+                          editCount: undefined
+                        }
+                      : variant
+                  )
+                : [...item.variants, pendingVariant]
+            };
+          })
+        : [...(assistant.artifactEdits ?? []), pendingEdit];
       updateAssistantMessage(assistantId, (message) => ({
         ...message,
+        ...buildCompletedAssistantPatchFromRawStream(source, themeMode),
         artifactEditBaseRawStream:
           message.artifactEditBaseRawStream ?? message.rawStream,
-        artifactEdits: (message.artifactEdits ?? []).map((item) =>
-          item.id === editId
-            ? {
-                ...item,
-                prompt,
-                status: "pending",
-                error: undefined,
-                activeVariantId: variantId,
-                variants: isPromptEdit
-                  ? [
-                      {
-                        id: variantId,
-                        createdAt,
-                        status: "pending" as const
-                      }
-                    ]
-                  : [
-                      ...item.variants,
-                      {
-                        id: variantId,
-                        createdAt,
-                        status: "pending" as const
-                      }
-                    ]
-              }
-            : item
-        ),
-        activeArtifactEditId: editId
+        artifactEdits: pendingArtifactEdits,
+        activeArtifactEditId: nextEditId
       }));
       setIsSending(true);
       isSendingRef.current = true;
@@ -4406,7 +4511,7 @@ export default function App() {
           artifactEditBaseRawStream:
             message.artifactEditBaseRawStream ?? assistant.artifactEditBaseRawStream ?? source,
           artifactEdits: (message.artifactEdits ?? []).map((item) =>
-            item.id === editId
+            item.id === nextEditId
               ? {
                   ...item,
                   status: "complete",
@@ -4427,49 +4532,47 @@ export default function App() {
                 }
               : item
           ),
-          activeArtifactEditId: editId
+          activeArtifactEditId: nextEditId
         }));
         artifactSelectionsRef.current = [];
         setArtifactSelectionClearVersion((version) => version + 1);
       } catch (error) {
         if (isAbortError(error)) {
-          updateAssistantMessage(assistantId, (message) => ({
-            ...message,
-            artifactEdits: (message.artifactEdits ?? []).map((item) => {
-              if (item.id !== editId) {
-                return item;
-              }
-
-              if (isPromptEdit) {
-                return previousEdit;
-              }
-
-              const remainingVariants = item.variants.filter(
-                (variant) => variant.id !== variantId
-              );
-              const fallbackVariant =
-                remainingVariants.find(
-                  (variant) =>
-                    variant.id === previousVariantId &&
-                    variant.status === "complete" &&
-                    Boolean(variant.rawStream)
-                ) ??
-                remainingVariants.find(
-                  (variant) =>
-                    variant.status === "complete" && Boolean(variant.rawStream)
-                );
-
+          updateAssistantMessage(assistantId, (message) => {
+            if (retryExistingFailedEdit) {
               return {
-                ...item,
-                prompt: previousPrompt,
-                status: fallbackVariant ? "complete" : "error",
-                error: undefined,
-                activeVariantId: fallbackVariant?.id,
-                variants: remainingVariants
+                ...message,
+                ...buildCompletedAssistantPatchFromRawStream(source, themeMode),
+                artifactEdits: (message.artifactEdits ?? []).map((item) =>
+                  item.id === edit.id ? edit : item
+                ),
+                activeArtifactEditId: previousActiveEditId
               };
-            }),
-            activeArtifactEditId: editId
-          }));
+            }
+
+            const artifactEdits = (message.artifactEdits ?? []).filter(
+              (item) => item.id !== nextEditId
+            );
+            const fallbackRawStream = getArtifactEditRawStream(
+              {
+                ...message,
+                artifactEdits
+              },
+              previousActiveEditId
+            );
+
+            return {
+              ...message,
+              ...(fallbackRawStream
+                ? buildCompletedAssistantPatchFromRawStream(
+                    fallbackRawStream,
+                    themeMode
+                  )
+                : {}),
+              artifactEdits: artifactEdits.length ? artifactEdits : undefined,
+              activeArtifactEditId: previousActiveEditId
+            };
+          });
           return true;
         }
 
@@ -4483,32 +4586,14 @@ export default function App() {
         updateAssistantMessage(assistantId, (message) => ({
           ...message,
           artifactEdits: (message.artifactEdits ?? []).map((item) => {
-            if (item.id !== editId) {
+            if (item.id !== nextEditId) {
               return item;
             }
 
-            if (isPromptEdit) {
-              return previousEdit;
-            }
-
-            const fallbackVariant =
-              item.variants.find(
-                (variant) =>
-                  variant.id === previousVariantId &&
-                  variant.status === "complete" &&
-                  Boolean(variant.rawStream)
-              ) ??
-              item.variants.find(
-                (variant) =>
-                  variant.status === "complete" && Boolean(variant.rawStream)
-              );
-
             return {
               ...item,
-              prompt: item.prompt,
-              status: fallbackVariant ? "complete" : "error",
-              error: fallbackVariant ? undefined : errorMessage,
-              activeVariantId: fallbackVariant?.id ?? previousVariantId,
+              status: "error",
+              error: errorMessage,
               variants: item.variants.map((variant) =>
                 variant.id === variantId
                   ? {
@@ -4520,7 +4605,7 @@ export default function App() {
               )
             };
           }),
-          activeArtifactEditId: editId
+          activeArtifactEditId: nextEditId
         }));
       } finally {
         if (localArtifactEditAbortRef.current === controller) {
@@ -4571,9 +4656,37 @@ export default function App() {
       }
 
       const activeAssistant = visibleMessages[assistantIndex];
+      const userIndex = (() => {
+        for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+          if (visibleMessages[index].role === "user") {
+            return index;
+          }
+        }
+        return -1;
+      })();
+      if (userIndex < 0) {
+        return;
+      }
+
       const activeArtifactEditId = getResolvedArtifactEditId(activeAssistant);
       if (activeArtifactEditId) {
         void regenerateArtifactEditNode(assistantId, activeArtifactEditId);
+        return;
+      }
+
+      if (activeAssistant.artifactEdits?.length || activeAssistant.artifactEditBaseRawStream) {
+        startGeneratedArtifactBatch({
+          session,
+          visibleMessages,
+          assistantIndex,
+          userIndex,
+          nextUserContent: visibleMessages[userIndex].content,
+          initialReasoning: "Thinking",
+          requestHistory: (_previousMessages, userMessage) => [
+            ...visibleMessages.slice(0, userIndex),
+            userMessage
+          ]
+        });
         return;
       }
 
@@ -4596,18 +4709,6 @@ export default function App() {
         return;
       }
 
-      const userIndex = (() => {
-        for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-          if (visibleMessages[index].role === "user") {
-            return index;
-          }
-        }
-        return -1;
-      })();
-      if (userIndex < 0) {
-        return;
-      }
-
       startBranchedTurn({
         session,
         visibleMessages,
@@ -4616,7 +4717,12 @@ export default function App() {
         nextUserContent: visibleMessages[userIndex].content
       });
     },
-    [handleVisualRepairAssistant, regenerateArtifactEditNode, startBranchedTurn]
+    [
+      handleVisualRepairAssistant,
+      regenerateArtifactEditNode,
+      startBranchedTurn,
+      startGeneratedArtifactBatch
+    ]
   );
 
   const handleEditUserMessage = useCallback(
@@ -4732,13 +4838,6 @@ export default function App() {
         console.warn("Artifact edits require a completed artifact source.");
         return;
       }
-      if (hasLaterArtifactEdits(assistant)) {
-        console.warn(
-          "Discard later artifact changes before editing this version."
-        );
-        focusComposerInput();
-        return;
-      }
 
       const previousEditId = getResolvedArtifactEditId(assistant);
       const source = getArtifactEditRawStream(assistant, previousEditId) ?? "";
@@ -4779,6 +4878,7 @@ export default function App() {
       localArtifactEditAbortRef.current = controller;
       const pendingEdit: ArtifactEdit = {
         id: editId,
+        parentId: previousEditId,
         createdAt,
         prompt: trimmed,
         references,
@@ -4795,6 +4895,7 @@ export default function App() {
 
       updateAssistantMessage(assistantId, (message) => ({
         ...message,
+        ...buildCompletedAssistantPatchFromRawStream(source, themeMode),
         artifactEditBaseRawStream:
           message.artifactEditBaseRawStream ?? message.rawStream,
         artifactEdits: [...(message.artifactEdits ?? []), pendingEdit],
@@ -4826,10 +4927,7 @@ export default function App() {
                 }
               : edit
           ),
-          activeArtifactEditId:
-            message.activeArtifactEditId === editId
-              ? previousEditId
-              : message.activeArtifactEditId
+          activeArtifactEditId: editId
         }));
       };
 
@@ -5051,7 +5149,10 @@ export default function App() {
               const serverState = normalizeStoredSessionState(
                 await response.json(),
                 Date.now(),
-                { rebuildSnapshots: false }
+                {
+                  rebuildSnapshots: false,
+                  interruptPendingArtifactEdits: true
+                }
               );
               const serverMessage = findSessionMessage(serverState, message.id);
               if (serverMessage) {
@@ -5320,95 +5421,6 @@ export default function App() {
     []
   );
 
-  const handleDiscardArtifactEditTail = useCallback(
-    (assistantId: string, editId?: string) => {
-      const currentMessage = findSessionMessage(
-        sessionStateRef.current,
-        assistantId
-      );
-      if (
-        !currentMessage ||
-        currentMessage.role !== "assistant" ||
-        !currentMessage.artifactEdits?.length
-      ) {
-        return false;
-      }
-
-      if (currentMessage.artifactEdits.some((edit) => edit.status === "pending")) {
-        console.warn("Wait for the current artifact edit to finish before discarding.");
-        return false;
-      }
-
-      const discardAnchorId = getArtifactEditDiscardAnchorId(
-        currentMessage,
-        editId
-      );
-      const keepCount = getArtifactEditKeepCount(
-        currentMessage,
-        discardAnchorId
-      );
-      const discardCount = currentMessage.artifactEdits.length - keepCount;
-      if (discardCount <= 0) {
-        return false;
-      }
-
-      const rawStream = getArtifactEditRawStream(
-        currentMessage,
-        discardAnchorId
-      );
-      if (!rawStream) {
-        return false;
-      }
-
-      updateAssistantMessage(assistantId, (message) => {
-        if (
-          message.role !== "assistant" ||
-          !message.artifactEdits?.length ||
-          message.artifactEdits.some((edit) => edit.status === "pending")
-        ) {
-          return message;
-        }
-
-        const nextDiscardAnchorId = getArtifactEditDiscardAnchorId(
-          message,
-          editId
-        );
-        const nextKeepCount = getArtifactEditKeepCount(
-          message,
-          nextDiscardAnchorId
-        );
-        if (nextKeepCount >= message.artifactEdits.length) {
-          return message;
-        }
-
-        const rawStream = getArtifactEditRawStream(
-          message,
-          nextDiscardAnchorId
-        );
-        if (!rawStream) {
-          return message;
-        }
-
-        const artifactEdits = message.artifactEdits.slice(0, nextKeepCount);
-        return {
-          ...message,
-          ...buildCompletedAssistantPatchFromRawStream(rawStream, themeMode),
-          artifactEditBaseRawStream: artifactEdits.length
-            ? message.artifactEditBaseRawStream
-            : undefined,
-          artifactEdits: artifactEdits.length ? artifactEdits : undefined,
-          activeArtifactEditId:
-            nextDiscardAnchorId && nextKeepCount > 0
-              ? nextDiscardAnchorId
-              : undefined
-        };
-      });
-      focusComposerInput();
-      return true;
-    },
-    [themeMode, updateAssistantMessage]
-  );
-
   const handleEditArtifactEditPrompt = useCallback(
     (assistantId: string, editId: string, prompt: string): boolean => {
       const trimmed = prompt.trim();
@@ -5433,18 +5445,10 @@ export default function App() {
         return false;
       }
 
-      const editIndex = currentMessage.artifactEdits.findIndex(
-        (edit) => edit.id === editId
+      const edit = currentMessage.artifactEdits.find(
+        (candidate) => candidate.id === editId
       );
-      const edit = currentMessage.artifactEdits[editIndex];
       if (!edit || edit.status !== "complete") {
-        return false;
-      }
-
-      if (editIndex < currentMessage.artifactEdits.length - 1) {
-        console.warn(
-          "Discard later artifact changes before editing this prompt."
-        );
         return false;
       }
 
@@ -5465,7 +5469,7 @@ export default function App() {
           return message;
         }
 
-        const rawStream = getArtifactEditRawStream(message, editId);
+        const rawStream = getArtifactEditDisplayRawStream(message, editId);
         if (!rawStream) {
           return message;
         }
@@ -5473,44 +5477,6 @@ export default function App() {
         return {
           ...message,
           ...buildCompletedAssistantPatchFromRawStream(rawStream, themeMode),
-          activeArtifactEditId: editId
-        };
-      });
-      artifactSelectionsRef.current = [];
-      setArtifactSelectionClearVersion((version) => version + 1);
-    },
-    [themeMode, updateAssistantMessage]
-  );
-
-  const handleSelectArtifactEditVariant = useCallback(
-    (assistantId: string, editId: string, variantId: string) => {
-      updateAssistantMessage(assistantId, (message) => {
-        if (message.role !== "assistant") {
-          return message;
-        }
-
-        const edit = message.artifactEdits?.find((item) => item.id === editId);
-        const variant = edit?.variants.find((item) => item.id === variantId);
-        if (!edit || variant?.status !== "complete" || !variant.rawStream) {
-          return message;
-        }
-
-        return {
-          ...message,
-          ...buildCompletedAssistantPatchFromRawStream(
-            variant.rawStream,
-            themeMode
-          ),
-          artifactEdits: (message.artifactEdits ?? []).map((item) =>
-            item.id === editId
-              ? {
-                  ...item,
-                  status: "complete",
-                  error: undefined,
-                  activeVariantId: variantId
-                }
-              : item
-          ),
           activeArtifactEditId: editId
         };
       });
@@ -5644,9 +5610,7 @@ export default function App() {
             onRegenerateAssistant={handleRegenerateAssistant}
             onEditUserMessage={handleEditUserMessage}
             onSelectBranch={handleSelectBranch}
-            onSelectArtifactEditVariant={handleSelectArtifactEditVariant}
             onSelectArtifactEdit={handleSelectArtifactEdit}
-            onDiscardArtifactEditTail={handleDiscardArtifactEditTail}
             onEditArtifactEditPrompt={handleEditArtifactEditPrompt}
             onArtifactSelectionsChange={handleArtifactSelectionsChange}
             onModelChange={handleModelChange}

@@ -49,12 +49,12 @@ type AssistantMessageProps = {
     previousVariantId?: string;
     nextVariantId?: string;
   };
-  artifactEditVariantInfo?: {
-    editId: string;
+  artifactVersionInfo?: {
     activeIndex: number;
     total: number;
-    previousVariantId?: string;
-    nextVariantId?: string;
+    previousEditId?: string | null;
+    nextEditId?: string | null;
+    disabled?: boolean;
   };
   activeReasoningMessageId?: string;
   onRuntimeError(id: string, error: RenderError): void;
@@ -65,11 +65,7 @@ type AssistantMessageProps = {
   onVisualRepair(id: string, snapshot: RenderSnapshot, width: number): void;
   onRegenerate(id: string): void;
   onSelectBranch(groupId: string, variantId: string): void;
-  onSelectArtifactEditVariant(
-    id: string,
-    editId: string,
-    variantId: string
-  ): void;
+  onSelectArtifactEdit(id: string, editId?: string): void;
 };
 
 function hasLikelyVisibleStreamUiContent(rawStream?: string): boolean {
@@ -109,7 +105,7 @@ export function AssistantMessage({
   artifactBusySelections = [],
   isArtifactSelectionModeActive = false,
   branchInfo,
-  artifactEditVariantInfo,
+  artifactVersionInfo,
   activeReasoningMessageId,
   onRuntimeError,
   onArtifactAction,
@@ -119,7 +115,7 @@ export function AssistantMessage({
   onVisualRepair,
   onRegenerate,
   onSelectBranch,
-  onSelectArtifactEditVariant
+  onSelectArtifactEdit
 }: AssistantMessageProps) {
   const resolvedSnapshot = useMemo(() => {
     const withRuntimeErrors = (
@@ -195,12 +191,12 @@ export function AssistantMessage({
           title={
             isArtifactSelectionModeActive
               ? "Stop selecting preview regions"
-              : "Select preview region"
+              : "Edit preview region"
           }
           aria-label={
             isArtifactSelectionModeActive
               ? "Stop selecting preview regions"
-              : "Select preview region"
+              : "Edit preview region"
           }
           aria-pressed={isArtifactSelectionModeActive}
           disabled={selectionDisabled}
@@ -209,7 +205,7 @@ export function AssistantMessage({
           }
         >
           <MousePointer2 size={15} strokeWidth={2.15} aria-hidden="true" />
-          <span>{isArtifactSelectionModeActive ? "Selecting" : "Select"}</span>
+          <span>{isArtifactSelectionModeActive ? "Selecting" : "Edit"}</span>
         </button>
       ) : null}
       <button
@@ -236,23 +232,23 @@ export function AssistantMessage({
           <Wand2 size={15} strokeWidth={2.15} aria-hidden="true" />
         </button>
       ) : null}
-      {artifactEditVariantInfo ? (
-        <div className="message-branch-controls" aria-label="Edit variants">
+      {artifactVersionInfo ? (
+        <div className="message-branch-controls" aria-label="Artifact versions">
           <button
             className="message-action-button"
             type="button"
-            title="Previous edit variant"
-            aria-label="Previous edit variant"
+            title="Previous artifact version"
+            aria-label="Previous artifact version"
             disabled={
-              !artifactEditVariantInfo.previousVariantId ||
+              artifactVersionInfo.previousEditId === undefined ||
+              artifactVersionInfo.disabled ||
               status === "streaming"
             }
             onClick={() => {
-              if (artifactEditVariantInfo.previousVariantId) {
-                onSelectArtifactEditVariant(
+              if (artifactVersionInfo.previousEditId !== undefined) {
+                onSelectArtifactEdit(
                   id,
-                  artifactEditVariantInfo.editId,
-                  artifactEditVariantInfo.previousVariantId
+                  artifactVersionInfo.previousEditId ?? undefined
                 );
               }
             }}
@@ -260,22 +256,23 @@ export function AssistantMessage({
             <ChevronLeft size={15} strokeWidth={2.2} aria-hidden="true" />
           </button>
           <span className="branch-count">
-            {artifactEditVariantInfo.activeIndex + 1}/{artifactEditVariantInfo.total}
+            {artifactVersionInfo.activeIndex + 1}/{artifactVersionInfo.total}
           </span>
           <button
             className="message-action-button"
             type="button"
-            title="Next edit variant"
-            aria-label="Next edit variant"
+            title="Next artifact version"
+            aria-label="Next artifact version"
             disabled={
-              !artifactEditVariantInfo.nextVariantId || status === "streaming"
+              artifactVersionInfo.nextEditId === undefined ||
+              artifactVersionInfo.disabled ||
+              status === "streaming"
             }
             onClick={() => {
-              if (artifactEditVariantInfo.nextVariantId) {
-                onSelectArtifactEditVariant(
+              if (artifactVersionInfo.nextEditId !== undefined) {
+                onSelectArtifactEdit(
                   id,
-                  artifactEditVariantInfo.editId,
-                  artifactEditVariantInfo.nextVariantId
+                  artifactVersionInfo.nextEditId ?? undefined
                 );
               }
             }}
@@ -346,6 +343,7 @@ export function AssistantMessage({
             themeMode={themeMode}
             actions={turnActions}
             selectionModeActive={isArtifactSelectionModeActive}
+            selectionDisabled={selectionDisabled}
             selections={artifactSelections}
             busySelections={artifactBusySelections}
             onRuntimeError={onRuntimeError}
