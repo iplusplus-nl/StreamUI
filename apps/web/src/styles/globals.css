@@ -1783,6 +1783,32 @@ button {
   background: rgba(37, 99, 235, 0.38);
 }
 
+.app-shell[data-theme="night"] .artifact-floating-edit-action {
+  color: #d4d4d8;
+  background: rgba(39, 39, 42, 0.88);
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.app-shell[data-theme="night"] .artifact-floating-edit-action:hover:not(:disabled) {
+  color: #ffffff;
+  background: #454545;
+}
+
+.app-shell[data-theme="night"] .artifact-floating-edit-action.is-active {
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.28);
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(147, 197, 253, 0.18);
+}
+
+.app-shell[data-theme="night"] .artifact-floating-edit-action.is-active:hover:not(:disabled) {
+  color: #ffffff;
+  background: rgba(37, 99, 235, 0.38);
+}
+
 .app-shell[data-theme="night"] .regenerate-action.is-error {
   color: #ffb4a8;
   background: rgba(180, 35, 24, 0.18);
@@ -1962,7 +1988,7 @@ button {
 }
 
 .app-shell[data-theme="night"] .artifact-edit-bubble.is-artifact-edit-active {
-  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.55);
+  box-shadow: none;
 }
 
 .app-shell[data-theme="night"] .artifact-edit-bubble.is-error {
@@ -2359,7 +2385,7 @@ button {
   max-width: 100%;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
+  cursor: text;
   font: inherit;
   line-height: inherit;
   text-align: left;
@@ -2373,6 +2399,7 @@ button {
 .artifact-edit-bubble p {
   min-width: 0;
   overflow: hidden;
+  cursor: text;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2481,7 +2508,7 @@ button {
 }
 
 .artifact-edit-bubble.is-artifact-edit-active {
-  box-shadow: inset 0 0 0 1px #93c5fd;
+  box-shadow: none;
   opacity: 1;
 }
 
@@ -3130,6 +3157,10 @@ button {
   align-items: stretch;
 }
 
+.assistant-artifact-block.has-floating-edit-action {
+  width: min(900px, calc(100% - 48px));
+}
+
 .assistant-canvas {
   display: grid;
   position: relative;
@@ -3137,6 +3168,71 @@ button {
   overflow: hidden;
   border-radius: 8px;
   background: transparent;
+}
+
+.assistant-preview-shell {
+  display: grid;
+  position: relative;
+  width: 100%;
+  align-items: start;
+}
+
+.assistant-preview-shell > .preview-frame {
+  grid-area: 1 / 1;
+}
+
+.artifact-floating-edit-action {
+  position: fixed;
+  z-index: 6;
+  width: 34px;
+  min-width: 0;
+  height: 34px;
+  flex-basis: 34px;
+  margin: 0;
+  padding: 0;
+  border-radius: 999px;
+  color: #52525b;
+  background: rgba(255, 255, 255, 0.9);
+  opacity: 0;
+  pointer-events: none;
+  box-shadow:
+    0 12px 30px rgba(24, 24, 27, 0.16),
+    0 0 0 1px rgba(24, 24, 27, 0.08);
+  transform: translateY(-4px) scale(0.96);
+  backdrop-filter: blur(12px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    background 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.artifact-floating-edit-action.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.artifact-floating-edit-action:hover:not(:disabled) {
+  color: #18181b;
+  background: #ffffff;
+  box-shadow:
+    0 14px 34px rgba(24, 24, 27, 0.18),
+    0 0 0 1px rgba(24, 24, 27, 0.12);
+}
+
+.artifact-floating-edit-action.is-active {
+  color: #1d4ed8;
+  background: #eff6ff;
+  box-shadow:
+    0 14px 34px rgba(24, 24, 27, 0.18),
+    0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+
+.artifact-floating-edit-action.is-active:hover:not(:disabled) {
+  color: #1e40af;
+  background: #dbeafe;
 }
 
 .assistant-artifact-actions {
@@ -3187,7 +3283,7 @@ button {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  display: grid;
+  display: none;
   width: 184px;
   gap: 2px;
   padding: 5px;
@@ -3208,6 +3304,7 @@ button {
 }
 
 .artifact-export-menu.is-open .artifact-export-popover {
+  display: grid;
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0) scale(1);
@@ -3601,10 +3698,10 @@ button {
 }
 
 .artifact-selection-chip {
-  display: grid;
-  width: min(360px, 100%);
+  display: inline-flex;
+  width: auto;
+  max-width: min(360px, 100%);
   min-height: 34px;
-  grid-template-columns: auto minmax(0, 1fr) 24px;
   align-items: center;
   gap: 7px;
   padding: 4px 4px 4px 8px;
@@ -3635,6 +3732,7 @@ button {
 
 .artifact-selection-copy {
   display: block;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   line-height: 1;
@@ -4509,6 +4607,10 @@ button {
     padding-top: 18px;
   }
 
+  .assistant-artifact-block.has-floating-edit-action {
+    width: min(900px, 100%);
+  }
+
   .thread-root.is-thinking-activity-open .message-list.has-messages {
     padding-right: 16px;
   }
@@ -4600,10 +4702,6 @@ button {
     justify-content: flex-end;
   }
 
-  .artifact-selection-chip {
-    width: 100%;
-  }
-
   .artifact-selection-clear {
     justify-self: start;
   }
@@ -4616,5 +4714,11 @@ button {
 
   .artifact-export-popover {
     width: min(184px, calc(100vw - 48px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .artifact-floating-edit-action {
+    transition: none;
   }
 }
