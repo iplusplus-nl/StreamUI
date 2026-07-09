@@ -176,10 +176,16 @@ export function AssistantMessage({
   const hasDisplayError = Boolean(
     error || runtimeErrors?.length || resolvedSnapshot?.errors.length
   );
-  const selectionDisabled =
-    status === "streaming" || resolvedSnapshot?.status !== "complete";
-  const repairDisabled =
-    status === "streaming" || resolvedSnapshot?.status !== "complete";
+  const rawStreamUiComplete = rawStream
+    ? extractStreamUiParts(rawStream).streamUiComplete
+    : false;
+  const artifactInteractionsReady =
+    status === "complete" &&
+    rawStreamUiComplete &&
+    resolvedSnapshot?.status === "complete" &&
+    artifactBusySelections.length === 0;
+  const selectionDisabled = !artifactInteractionsReady;
+  const repairDisabled = !artifactInteractionsReady;
   const turnActions = (
     <div className="assistant-turn-actions" aria-label="Response actions">
       {hasVisibleArtifact ? (
