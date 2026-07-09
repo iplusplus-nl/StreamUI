@@ -47,6 +47,7 @@ type BugReportImageInput = {
 
 type StoredBugReportImage = {
   id: string;
+  issueLabel: string;
   name: string;
   mimeType: string;
   size: number;
@@ -155,6 +156,12 @@ function createImageAccessToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
+function createIssueImageLabel(): string {
+  return Array.from(randomBytes(10), (byte) =>
+    String.fromCharCode(97 + (byte % 26))
+  ).join("");
+}
+
 function getTodayDateSegment(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -226,40 +233,27 @@ function normalizeBaseUrl(value: string): string | undefined {
   }
 }
 
-function getBugReportPublicBaseUrl(req: Request): string | undefined {
+function getBugReportIssueBaseUrl(): string | undefined {
   const configured = normalizeBaseUrl(
     envString(
-      "CHATHTML_BUG_REPORT_PUBLIC_BASE_URL",
-      "CHATHTML_PUBLIC_BASE_URL",
-      "PUBLIC_BASE_URL"
+      "CHATHTML_BUG_REPORT_ISSUE_BASE_URL",
+      "CHATHTML_BUG_REPORT_LOCAL_BASE_URL"
     )
   );
   if (configured) {
     return configured;
   }
 
-  const host =
-    req.get("x-forwarded-host")?.split(",")[0]?.trim() ||
-    req.get("host")?.trim();
-  if (!host) {
-    return undefined;
-  }
-  const forwardedProto = req.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  const isLocalHost =
-    host.startsWith("localhost") ||
-    host.startsWith("127.0.0.1") ||
-    host.startsWith("[::1]");
-  const protocol = forwardedProto || (isLocalHost ? req.protocol : "https");
-  return normalizeBaseUrl(`${protocol}://${host}`);
+  const port = envString("PORT") || "8787";
+  return `http://127.0.0.1:${port}`;
 }
 
 function buildBugReportImageUrl(
-  req: Request,
   dateSegment: string,
   report: StoredBugReport,
   image: StoredBugReportImage
 ): string | undefined {
-  const baseUrl = getBugReportPublicBaseUrl(req);
+  const baseUrl = getBugReportIssueBaseUrl();
   if (!baseUrl) {
     return undefined;
   }
@@ -275,22 +269,18 @@ function buildBugReportImageUrl(
 }
 
 function createBugReportIssueInput(
-  req: Request,
   dateSegment: string,
   report: StoredBugReport
 ): BugReportIssueInput {
   const images: BugReportIssueImage[] = [];
   for (const image of report.images) {
-    const url = buildBugReportImageUrl(req, dateSegment, report, image);
+    const url = buildBugReportImageUrl(dateSegment, report, image);
     if (!url) {
       continue;
     }
     images.push({
-      name: image.name,
-      url,
-      width: image.width,
-      height: image.height,
-      size: image.size
+      label: image.issueLabel,
+      url
     });
   }
 
@@ -326,7 +316,6 @@ async function writeGitHubIssueSyncRecord(
 }
 
 async function syncBugReportToGitHubIssue(
-  req: Request,
   reportDir: string,
   dateSegment: string,
   report: StoredBugReport
@@ -347,7 +336,7 @@ async function syncBugReportToGitHubIssue(
   try {
     const issue: CreatedGitHubIssue = await createGitHubIssueForBugReport(
       config,
-      createBugReportIssueInput(req, dateSegment, report)
+      createBugReportIssueInput(dateSegment, report)
     );
     const record: GitHubIssueSyncRecord = {
       ok: true,
@@ -394,6 +383,7 @@ function prepareBugReportImage(
       id:
         stringValue(input.id).trim().slice(0, 160) ||
         `image-${index + 1}`,
+      issueLabel: createIssueImageLabel(),
       name: name.slice(0, 180) || `bug-report-${index + 1}${extension}`,
       mimeType: parsed.mimeType,
       size: parsed.buffer.byteLength,
@@ -480,7 +470,6 @@ export async function handleCreateBugReport(
     );
 
     const github = await syncBugReportToGitHubIssue(
-      req,
       reportDir,
       dateSegment,
       report
@@ -517,6 +506,8 @@ function isStoredBugReportImage(value: unknown): value is StoredBugReportImage {
   }
   const image = value as Partial<StoredBugReportImage>;
   return (
+    (typeof image.issueLabel === "string" ||
+      typeof image.issueLabel === "undefined") &&
     typeof image.name === "string" &&
     typeof image.mimeType === "string" &&
     typeof image.fileName === "string" &&
@@ -530,7 +521,10 @@ function parseStoredBugReport(value: unknown): StoredBugReport | undefined {
   }
   const report = value as Partial<StoredBugReport>;
   const images = Array.isArray(report.images)
-    ? report.images.filter(isStoredBugReportImage)
+    ? report.images.filter(isStoredBugReportImage).map((image) => ({
+        ...image,
+        issueLabel: image.issueLabel || createIssueImageLabel()
+      }))
     : [];
   if (
     typeof report.id !== "string" ||
@@ -574,11 +568,39 @@ async function readStoredBugReport(
   return { reportDir, report: parsed };
 }
 
+function isLocalBugReportImageRequest(req: Request): boolean {
+  const allowPublic = envString("CHATHTML_BUG_REPORT_IMAGE_ALLOW_PUBLIC")
+    .toLowerCase()
+    .trim();
+  if (allowPublic === "true" || allowPublic === "1") {
+    return true;
+  }
+
+  const host = (req.get("host") ?? "").toLowerCase().trim();
+  if (!host) {
+    return false;
+  }
+
+  const normalizedHost = host.startsWith("[")
+    ? host.slice(1, host.indexOf("]"))
+    : host.split(":", 1)[0];
+  return (
+    normalizedHost === "localhost" ||
+    normalizedHost === "127.0.0.1" ||
+    normalizedHost === "::1"
+  );
+}
+
 export async function handleBugReportImageRequest(
   req: Request,
   res: Response
 ): Promise<void> {
   try {
+    if (!isLocalBugReportImageRequest(req)) {
+      res.status(404).json({ error: "Bug report image was not found." });
+      return;
+    }
+
     const dateSegment = stringValue(req.params.date);
     const reportId = stringValue(req.params.reportId);
     const fileName = stringValue(req.params.fileName);

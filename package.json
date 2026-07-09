@@ -15,6 +15,7 @@
     "build": "npm --workspace @chathtml/web run build",
     "preview": "npm --workspace @chathtml/web run preview",
     "test": "npm --workspace @chathtml/web run test",
+    "ai:fix-issue": "node scripts/codex-fix-issue.mjs",
     "wait:deploy-idle": "node scripts/wait-for-deploy-idle.mjs"
   }
 }

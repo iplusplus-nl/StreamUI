@@ -89,9 +89,11 @@ each report under `sessions/bug-reports/YYYY-MM-DD/<report-id>/` with
 issue sync is configured.
 
 When `GITHUB_REPOSITORY` and `GITHUB_ISSUES_TOKEN` are set, each submitted bug
-report creates a GitHub issue. Attached images are not uploaded to GitHub; the
-issue embeds ChatHTML image URLs with a per-report random access token. Use a
-private issue repo if reports or screenshots may contain sensitive data.
+report creates a GitHub issue. Attached images are not uploaded to GitHub and
+are not embedded as Markdown images. The issue shows random-letter links that
+point to the local ChatHTML server, so only automation running on the same
+server can fetch the image bytes. Use a private issue repo if report text may
+contain sensitive data.
 
 Useful `.env` controls:
 
@@ -101,7 +103,8 @@ GITHUB_ISSUES_TOKEN=
 GITHUB_BOT_TOKEN=
 GITHUB_ISSUE_LABELS=bug,user-report,ai-fix-candidate
 GITHUB_ISSUE_ASSIGNEES=
-CHATHTML_BUG_REPORT_PUBLIC_BASE_URL=https://chat.aietheia.com
+CHATHTML_BUG_REPORT_ISSUE_BASE_URL=http://127.0.0.1:8787
+CHATHTML_BUG_REPORT_IMAGE_ALLOW_PUBLIC=false
 CHATHTML_BUG_REPORT_DIR=
 ```
 
@@ -109,6 +112,29 @@ CHATHTML_BUG_REPORT_DIR=
 should prefer a narrower `GITHUB_ISSUES_TOKEN` for the website and reserve the
 bot token for a separate repair runner that can push branches and open pull
 requests.
+
+AI repair can be run manually or from a trusted server-side timer:
+
+```bash
+npm run ai:fix-issue -- --issue 123
+```
+
+Without `--issue`, the runner picks the oldest open issue with the
+`ai-fix-candidate` label that is not already in progress and does not already
+have an AI pull request open. It creates a branch, runs `codex exec`, runs the
+configured test/build commands, pushes the branch with `GITHUB_BOT_TOKEN`, and
+opens a pull request containing `Fixes #<issue>`. It never merges the PR.
+
+Runner controls:
+
+```bash
+CHATHTML_AI_REPAIR_BASE_BRANCH=main
+CHATHTML_AI_REPAIR_LABEL=ai-fix-candidate
+CHATHTML_AI_REPAIR_CODEX_BIN=codex
+CHATHTML_AI_REPAIR_CODEX_SANDBOX=workspace-write
+CHATHTML_AI_REPAIR_TEST_COMMAND=npm test
+CHATHTML_AI_REPAIR_BUILD_COMMAND=npm run build
+```
 
 ## Retrieval and External Resources
 

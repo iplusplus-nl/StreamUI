@@ -3,11 +3,8 @@ const GITHUB_API_BASE_URL = "https://api.github.com";
 const GITHUB_REQUEST_TIMEOUT_MS = 20_000;
 
 export type BugReportIssueImage = {
-  name: string;
+  label: string;
   url: string;
-  width?: number;
-  height?: number;
-  size?: number;
 };
 
 export type BugReportIssueInput = {
@@ -153,14 +150,8 @@ function formatImages(images: BugReportIssueImage[]): string {
   }
 
   return images
-    .map((image, index) => {
-      const alt = image.name || `Bug report image ${index + 1}`;
-      const dimensions =
-        image.width && image.height ? ` (${image.width}x${image.height})` : "";
-      const size = image.size ? `, ${Math.round(image.size / 1024)} KB` : "";
-      return `![${alt}](${image.url})\n\n[Open ${alt}](${image.url})${dimensions}${size}`;
-    })
-    .join("\n\n");
+    .map((image) => `- [${image.label}](${image.url})`)
+    .join("\n");
 }
 
 export function buildGitHubIssueBody(report: BugReportIssueInput): string {
@@ -183,10 +174,10 @@ export function buildGitHubIssueBody(report: BugReportIssueInput): string {
     markdownListItem("Submitted", report.submittedAt),
     markdownListItem("Session", report.sessionTitle || report.sessionId),
     markdownListItem("Session ID", report.sessionId ? `\`${report.sessionId}\`` : undefined),
+    "- **User ID:**",
     markdownListItem("Page URL", report.pageUrl),
     markdownListItem("User agent", report.userAgent),
     markdownListItem("Viewport", formatViewport(report.viewport)),
-    markdownListItem("Client ID", report.clientId ? `\`${report.clientId}\`` : undefined),
     markdownListItem("Remote address", report.remoteAddress),
     "",
     "## Automation",

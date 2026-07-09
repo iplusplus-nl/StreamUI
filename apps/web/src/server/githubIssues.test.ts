@@ -34,11 +34,8 @@ test("builds a GitHub issue title and body for a bug report", () => {
     text: "The preview crashes.\n```html\n<div>\n```",
     images: [
       {
-        name: "screenshot.png",
-        url: "https://chat.aietheia.com/api/bug-reports/2026-07-09/bug-test-123/images/01-screenshot.png?token=secret",
-        width: 1280,
-        height: 720,
-        size: 42_000
+        label: "abcdefghij",
+        url: "http://127.0.0.1:8787/api/bug-reports/2026-07-09/bug-test-123/images/01-screenshot.png?token=secret"
       }
     ]
   };
@@ -48,7 +45,10 @@ test("builds a GitHub issue title and body for a bug report", () => {
   const body = buildGitHubIssueBody(report);
   assert.match(body, /untrusted input/);
   assert.match(body, /````/);
-  assert.match(body, /!\[screenshot\.png\]\(https:\/\/chat\.aietheia\.com/);
+  assert.doesNotMatch(body, /!\[/);
+  assert.match(body, /\[abcdefghij\]\(http:\/\/127\.0\.0\.1:8787/);
   assert.match(body, /Report ID/);
+  assert.match(body, /Session ID/);
+  assert.match(body, /\*\*User ID:\*\*/);
   assert.match(body, /Fixes #<issue-number>/);
 });
