@@ -74,9 +74,7 @@ export function parseGitHubRepositorySlug(value: string): string | undefined {
 export function getGitHubIssueConfig(): GitHubIssueConfig | undefined {
   const token = envString(
     "CHATHTML_GITHUB_ISSUES_TOKEN",
-    "GITHUB_ISSUES_TOKEN",
-    "CHATHTML_GITHUB_BOT_TOKEN",
-    "GITHUB_BOT_TOKEN"
+    "GITHUB_ISSUES_TOKEN"
   );
   const repository = parseGitHubRepositorySlug(
     envString("CHATHTML_GITHUB_REPOSITORY", "GITHUB_REPOSITORY")
@@ -90,7 +88,7 @@ export function getGitHubIssueConfig(): GitHubIssueConfig | undefined {
   );
   const labels = configuredLabels.length
     ? configuredLabels
-    : ["bug", "user-report", "ai-fix-candidate"];
+    : ["bug", "user-report"];
 
   return {
     token,
@@ -182,23 +180,19 @@ export function buildGitHubIssueBody(report: BugReportIssueInput): string {
     "",
     "## Automation",
     "",
-    "A repair runner may create a pull request for this issue. Close this issue through a merged PR with `Fixes #<issue-number>`."
+    "Created from the ChatHTML in-app bug report flow."
   ].join("\n");
 }
 
 function labelColor(name: string): string {
   const known = new Map([
     ["bug", "d73a4a"],
-    ["user-report", "0e8a16"],
-    ["ai-fix-candidate", "5319e7"]
+    ["user-report", "0e8a16"]
   ]);
   return known.get(name.toLowerCase()) ?? "ededed";
 }
 
 function labelDescription(name: string): string {
-  if (name.toLowerCase() === "ai-fix-candidate") {
-    return "Issue can be considered by the automated repair runner.";
-  }
   if (name.toLowerCase() === "user-report") {
     return "Created from an in-app user bug report.";
   }

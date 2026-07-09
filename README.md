@@ -100,41 +100,15 @@ Useful `.env` controls:
 ```bash
 GITHUB_REPOSITORY=aietheia/ChatHTML
 GITHUB_ISSUES_TOKEN=
-GITHUB_BOT_TOKEN=
-GITHUB_ISSUE_LABELS=bug,user-report,ai-fix-candidate
+GITHUB_ISSUE_LABELS=bug,user-report
 GITHUB_ISSUE_ASSIGNEES=
 CHATHTML_BUG_REPORT_ISSUE_BASE_URL=http://127.0.0.1:8787
 CHATHTML_BUG_REPORT_IMAGE_ALLOW_PUBLIC=false
 CHATHTML_BUG_REPORT_DIR=
 ```
 
-`GITHUB_BOT_TOKEN` is accepted as a fallback for issue creation, but production
-should prefer a narrower `GITHUB_ISSUES_TOKEN` for the website and reserve the
-bot token for a separate repair runner that can push branches and open pull
-requests.
-
-AI repair can be run manually or from a trusted server-side timer:
-
-```bash
-npm run ai:fix-issue -- --issue 123
-```
-
-Without `--issue`, the runner picks the oldest open issue with the
-`ai-fix-candidate` label that is not already in progress and does not already
-have an AI pull request open. It creates a branch, runs `codex exec`, runs the
-configured test/build commands, pushes the branch with `GITHUB_BOT_TOKEN`, and
-opens a pull request containing `Fixes #<issue>`. It never merges the PR.
-
-Runner controls:
-
-```bash
-CHATHTML_AI_REPAIR_BASE_BRANCH=main
-CHATHTML_AI_REPAIR_LABEL=ai-fix-candidate
-CHATHTML_AI_REPAIR_CODEX_BIN=codex
-CHATHTML_AI_REPAIR_CODEX_SANDBOX=workspace-write
-CHATHTML_AI_REPAIR_TEST_COMMAND=npm test
-CHATHTML_AI_REPAIR_BUILD_COMMAND=npm run build
-```
+Use a token with only the repository permissions needed to create issues and
+apply labels.
 
 ## Retrieval and External Resources
 

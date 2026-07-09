@@ -50,5 +50,5 @@ test("builds a GitHub issue title and body for a bug report", () => {
   assert.match(body, /Report ID/);
   assert.match(body, /Session ID/);
   assert.match(body, /\*\*User ID:\*\*/);
-  assert.match(body, /Fixes #<issue-number>/);
+  assert.match(body, /Created from the ChatHTML in-app bug report flow/);
 });
