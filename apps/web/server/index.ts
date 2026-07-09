@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleModelsRequest } from "./models.js";
+import { handleCreateBugReport } from "./bugReports.js";
 import {
   getOpenRouterActivitySnapshot,
   handleArtifactEdit,
@@ -75,7 +76,7 @@ function authorizeDeployAdmin(req: Request, res: Response): boolean {
 }
 
 app.disable("x-powered-by");
-app.use(express.json({ limit: "24mb" }));
+app.use(express.json({ limit: "40mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -129,6 +130,7 @@ app.get("/api/chat/runs/:runId/events", handleChatRunEvents);
 app.post("/api/chat/runs/:runId/cancel", handleCancelChatRun);
 app.post("/api/artifact-edits", handleArtifactEdit);
 app.post("/api/models", handleModelsRequest);
+app.post("/api/bug-reports", handleCreateBugReport);
 app.post("/api/retrieve", handleRetrievalRequest);
 app.get("/api/export-resource", handleExportResourceRequest);
 app.get("/api/settings", handleGetRuntimeSettings);

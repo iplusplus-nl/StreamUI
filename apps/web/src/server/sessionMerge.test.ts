@@ -177,6 +177,33 @@ describe("server session merge", () => {
     assert.equal(merged.activeSessionId, "saved");
   });
 
+  it("preserves newer bug report drafts when a stale client saves", () => {
+    const current = {
+      sessions: [
+        {
+          ...session("active", 50, [userMessage("u1", "hello")]),
+          bugReportDraft: {
+            text: "The edit button disappears.",
+            images: [],
+            updatedAt: 55
+          }
+        }
+      ],
+      activeSessionId: "active"
+    };
+    const incoming = {
+      sessions: [session("active", 40, [userMessage("u1", "hello")])],
+      activeSessionId: "active"
+    };
+
+    const merged = mergeClientSaveState(current, incoming);
+
+    assert.equal(
+      merged.sessions[0].bugReportDraft?.text,
+      "The edit button disappears."
+    );
+  });
+
   it("allows a missing resumed run to be marked interrupted", () => {
     const current = {
       sessions: [

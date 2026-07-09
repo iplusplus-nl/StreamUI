@@ -298,6 +298,49 @@ describe("sessionModel", () => {
     assert.equal(state.activeSessionId, "saved");
   });
 
+  it("keeps sessions that only have a bug report draft", () => {
+    const state = normalizeStoredSessionState(
+      {
+        activeSessionId: "bug-draft",
+        sessions: [
+          {
+            id: "bug-draft",
+            title: "Bug draft",
+            createdAt: 3,
+            updatedAt: 30,
+            messages: [],
+            files: [],
+            bugReportDraft: {
+              text: "The preview flickers after local edit.",
+              images: [],
+              updatedAt: 31
+            }
+          },
+          {
+            id: "empty-old",
+            title: "New Session",
+            createdAt: 2,
+            updatedAt: 20,
+            messages: [],
+            files: []
+          }
+        ]
+      },
+      100
+    );
+
+    assert.deepEqual(
+      state.sessions.map((session) => session.id),
+      ["bug-draft"]
+    );
+    assert.equal(state.activeSessionId, "bug-draft");
+    assert.equal(isSessionEmpty(state.sessions[0]), false);
+    assert.equal(
+      serializeSessions(state.sessions)[0].bugReportDraft?.text,
+      "The preview flickers after local edit."
+    );
+  });
+
   it("keeps one empty session when no persisted history exists", () => {
     const state = normalizeStoredSessionState(
       {

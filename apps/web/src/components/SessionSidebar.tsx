@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { createPortal } from "react-dom";
 import {
+  Bug,
   Check,
   CreditCard,
   Download,
@@ -113,6 +114,7 @@ type SessionSidebarProps = {
   onAuthUserChange?(user: AuthUser): void;
   onLoginRequest?(): void;
   onLogout?(): void;
+  onBugReportOpen(): void;
 };
 
 function getSearchEnvironmentKeyNames(provider: SearchProvider): string[] {
@@ -212,7 +214,8 @@ export function SessionSidebar({
   onDisplaySettingsChange,
   onAuthUserChange,
   onLoginRequest,
-  onLogout
+  onLogout,
+  onBugReportOpen
 }: SessionSidebarProps) {
   const [isCompactSidebar, setIsCompactSidebar] = useState(
     getInitialSidebarCollapsed
@@ -623,6 +626,15 @@ export function SessionSidebar({
           <div className="collapsed-sidebar-spacer" />
           <div className="collapsed-sidebar-bottom">
             <button
+              className="collapsed-sidebar-button"
+              type="button"
+              aria-label="Bug Report"
+              title="Bug Report"
+              onClick={onBugReportOpen}
+            >
+              <Bug size={21} strokeWidth={2} aria-hidden="true" />
+            </button>
+            <button
               className={`collapsed-sidebar-button api-settings-button ${
                 apiSettingsComplete ? "is-configured" : "needs-setup"
               }`}
@@ -726,6 +738,15 @@ export function SessionSidebar({
               </div>
             ))}
           </nav>
+
+          <button
+            className="sidebar-bug-report-button"
+            type="button"
+            onClick={onBugReportOpen}
+          >
+            <Bug size={17} strokeWidth={2.1} aria-hidden="true" />
+            <span>Bug Report</span>
+          </button>
 
           <div className="sidebar-footer">
             {cloudEnabled && authUser ? (

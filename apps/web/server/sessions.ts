@@ -62,6 +62,25 @@ export type StoredSessionFile = {
   summary?: string;
 };
 
+type StoredBugReportImage = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+  width?: number;
+  height?: number;
+  captured?: boolean;
+  createdAt: number;
+};
+
+type StoredBugReportDraft = {
+  text: string;
+  images: StoredBugReportImage[];
+  updatedAt: number;
+  screenshotCapturedAt?: number;
+};
+
 type StoredSession = {
   id: string;
   title: string;
@@ -71,6 +90,7 @@ type StoredSession = {
   branchSelections?: Record<string, string>;
   messages: StoredMessage[];
   files?: StoredSessionFile[];
+  bugReportDraft?: StoredBugReportDraft;
 };
 
 type StoredSessionState = {
@@ -125,6 +145,15 @@ const LEGACY_SESSION_CLIENT_ID_HEADER = "x-streamui-client-id";
 const STREAM_INTERRUPTED_ERROR =
   "The stream was interrupted before it completed.";
 const MAX_DELETED_SESSION_TOMBSTONES = 5000;
+const MAX_BUG_REPORT_IMAGES = 8;
+const MAX_BUG_REPORT_TEXT_LENGTH = 12_000;
+const MAX_BUG_REPORT_IMAGE_DATA_URL_CHARS = 20_000_000;
+const BUG_REPORT_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif"
+]);
 
 let saveQueue = Promise.resolve();
 let database: SqliteDatabase | null = null;
@@ -245,6 +274,92 @@ function normalizeBranchSelections(input: unknown): Record<string, string> | und
   }
 
   return Object.keys(selections).length ? selections : undefined;
+}
+
+function normalizeBugReportImage(input: unknown): StoredBugReportImage | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const image = input as Partial<StoredBugReportImage>;
+  const id = stringValue(image.id).trim();
+  const name = stringValue(image.name).trim();
+  const mimeType = stringValue(image.mimeType).trim().toLowerCase();
+  const dataUrl = stringValue(image.dataUrl).trim();
+
+  if (
+    !id ||
+    !name ||
+    !BUG_REPORT_IMAGE_MIME_TYPES.has(mimeType) ||
+    !dataUrl.startsWith(`data:${mimeType};base64,`) ||
+    dataUrl.length > MAX_BUG_REPORT_IMAGE_DATA_URL_CHARS
+  ) {
+    return null;
+  }
+
+  return {
+    id: id.slice(0, 160),
+    name: name.slice(0, 180),
+    mimeType,
+    size:
+      typeof image.size === "number" && Number.isFinite(image.size)
+        ? Math.max(0, Math.round(image.size))
+        : 0,
+    dataUrl,
+    width:
+      typeof image.width === "number" && Number.isFinite(image.width)
+        ? Math.max(1, Math.round(image.width))
+        : undefined,
+    height:
+      typeof image.height === "number" && Number.isFinite(image.height)
+        ? Math.max(1, Math.round(image.height))
+        : undefined,
+    captured: image.captured ? true : undefined,
+    createdAt: finiteTimestamp(image.createdAt, now())
+  };
+}
+
+function normalizeBugReportDraft(
+  input: unknown
+): StoredBugReportDraft | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+
+  const draft = input as Partial<StoredBugReportDraft>;
+  const seen = new Set<string>();
+  const images: StoredBugReportImage[] = [];
+  if (Array.isArray(draft.images)) {
+    for (const item of draft.images) {
+      const image = normalizeBugReportImage(item);
+      if (!image || seen.has(image.id)) {
+        continue;
+      }
+      seen.add(image.id);
+      images.push(image);
+      if (images.length >= MAX_BUG_REPORT_IMAGES) {
+        break;
+      }
+    }
+  }
+
+  const text = stringValue(draft.text).slice(0, MAX_BUG_REPORT_TEXT_LENGTH);
+  const screenshotCapturedAt =
+    typeof draft.screenshotCapturedAt === "number" &&
+    Number.isFinite(draft.screenshotCapturedAt)
+      ? draft.screenshotCapturedAt
+      : undefined;
+
+  if (!text.trim() && images.length === 0 && !screenshotCapturedAt) {
+    return undefined;
+  }
+
+  return {
+    text,
+    images,
+    updatedAt: finiteTimestamp(draft.updatedAt, now()),
+    screenshotCapturedAt
+  };
 }
 
 function normalizeDeletedSessionIdList(input: unknown): string[] {
@@ -446,7 +561,8 @@ function normalizeSession(input: unknown): StoredSession | null {
     model: stringValue(session.model).trim().slice(0, 180) || undefined,
     branchSelections: normalizeBranchSelections(session.branchSelections),
     messages,
-    files: normalizeSessionFiles(session.files)
+    files: normalizeSessionFiles(session.files),
+    bugReportDraft: normalizeBugReportDraft(session.bugReportDraft)
   };
 }
 
@@ -455,7 +571,12 @@ function hasCommittedSessionFiles(session: StoredSession): boolean {
 }
 
 function isStoredSessionEmpty(session: StoredSession): boolean {
-  return session.messages.length === 0 && !hasCommittedSessionFiles(session);
+  return (
+    session.messages.length === 0 &&
+    !hasCommittedSessionFiles(session) &&
+    !session.bugReportDraft?.text.trim() &&
+    !(session.bugReportDraft?.images.length)
+  );
 }
 
 function compactEmptyStoredSessions(
@@ -928,6 +1049,22 @@ function mergeMessagesForClientSave(
   });
 }
 
+function mergeBugReportDraftForClientSave(
+  current: StoredBugReportDraft | undefined,
+  incoming: StoredBugReportDraft | undefined,
+  incomingIsOlder: boolean
+): StoredBugReportDraft | undefined {
+  if (
+    incomingIsOlder &&
+    current &&
+    (!incoming || current.updatedAt > incoming.updatedAt)
+  ) {
+    return current;
+  }
+
+  return incoming;
+}
+
 export function mergeClientSaveState(
   current: StoredSessionState,
   incoming: StoredSessionState,
@@ -953,8 +1090,7 @@ export function mergeClientSaveState(
     currentSessions.map((session) => [session.id, session])
   );
   const incomingIds = new Set(incomingSessions.map((session) => session.id));
-  const sessions = incomingSessions
-    .map((session) => {
+  const sessions = incomingSessions.map((session) => {
     const currentSession = currentById.get(session.id);
     if (!currentSession) {
       return session;
@@ -972,9 +1108,14 @@ export function mergeClientSaveState(
       }),
       files: hasActiveRun
         ? mergeSessionFiles(currentSession.files, session.files)
-        : session.files
+        : session.files,
+      bugReportDraft: mergeBugReportDraftForClientSave(
+        currentSession.bugReportDraft,
+        session.bugReportDraft,
+        incomingIsOlder
+      )
     };
-    });
+  });
 
   for (const session of currentSessions) {
     if (!incomingIds.has(session.id) && !isStoredSessionEmpty(session)) {
