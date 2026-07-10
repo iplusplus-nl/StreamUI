@@ -8,8 +8,7 @@ import {
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
-  type AppendMessage,
-  type ThreadMessageLike
+  type AppendMessage
 } from "@assistant-ui/react";
 import { ChatShell } from "./components/ChatShell";
 import { BugReportDialog } from "./components/BugReportDialog";
@@ -20,10 +19,9 @@ import {
 } from "./components/SessionSidebar";
 import { AuthOverlay } from "./components/AuthOverlay";
 import {
-  StreamImageAttachmentAdapter,
-  completeAttachmentToImage,
-  imageAttachmentToCompleteAttachment
+  StreamImageAttachmentAdapter
 } from "./core/assistantAttachments";
+import { blobToDataUrl } from "./core/blob";
 import {
   hasSavedApiSettings,
   loadApiSettings,
@@ -94,7 +92,6 @@ import {
   STREAM_INTERRUPTED_ERROR,
   summarizeSession,
   type ArtifactEdit,
-  type ArtifactEditReference,
   type BugReportDraft,
   type BugReportImage,
   type ChatSession,
@@ -117,6 +114,11 @@ import {
 } from "./features/chat/chatErrors";
 import { createChatStreamLineHandler } from "./features/chat/chatStreamEvents";
 import { reconcileChatRunState } from "./features/chat/chatRunReconcile";
+import {
+  convertMessage,
+  getAppendMessageImages,
+  getAppendMessageText
+} from "./features/chat/assistantRuntimeAdapter";
 import { StreamThread } from "./features/chat/ui/StreamThread";
 import { submitBugReport } from "./features/bug-reports/bugReportApi";
 import {
@@ -131,8 +133,7 @@ import {
 import {
   deleteSessionFile,
   requestSessions,
-  uploadSessionFile,
-  type SessionFileUploadInput
+  uploadSessionFile
 } from "./features/sessions/sessionApi";
 import {
   loadSessionClientId
@@ -145,6 +146,11 @@ import {
 import { useSessionSync } from "./features/sessions/useSessionSync";
 import { useSessionSave } from "./features/sessions/useSessionSave";
 import { useSessionIndex } from "./features/sessions/useSessionIndex";
+import {
+  commitUploadedImageFile,
+  createArtifactFileUpload,
+  imageAttachmentToFileUpload
+} from "./features/sessions/sessionFileModel";
 import {
   getArtifactEditActiveVariant,
   getArtifactEditCompleteRawStream,
@@ -160,6 +166,13 @@ import {
   failArtifactEditVariant,
   removeArtifactEdit
 } from "./features/artifacts/artifactEditTransitions";
+import {
+  artifactSelectionToReference,
+  buildArtifactActionMessage,
+  buildCompletedAssistantPatchFromRawStream
+} from "./features/artifacts/artifactMessageProjection";
+import { hasRenderError } from "./features/artifacts/renderErrors";
+import { buildVisualRepairPrompt } from "./features/artifacts/visualRepair";
 import type {
   ImageAttachment,
   UploadedSessionFile
@@ -167,7 +180,6 @@ import type {
 import { extractStreamUiParts } from "./runtime/streamui/protocol";
 import { createStreamingRenderer } from "./runtime/streamui/streamingRenderer";
 import type {
-  PageThemeMode,
   RenderError,
   RenderSnapshot,
   StreamUiAction,
@@ -259,141 +271,6 @@ function coerceApiSettingsForRuntime(
   });
 }
 
-function imageAttachmentToFileUpload(
-  attachment: ImageAttachment,
-  sourceMessageId?: string,
-  draft = false
-): SessionFileUploadInput {
-  return {
-    kind: "image",
-    name: attachment.name,
-    mimeType: attachment.mimeType,
-    sourceMessageId,
-    dataUrl: attachment.dataUrl,
-    width: attachment.width,
-    height: attachment.height,
-    summary: `Uploaded image ${attachment.name}`,
-    draft
-  };
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-
-      reject(new Error("Could not encode the rendered screenshot."));
-    });
-    reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("Could not read the rendered screenshot."));
-    });
-    reader.readAsDataURL(blob);
-  });
-}
-
-const MAX_VISUAL_REPAIR_DIAGNOSTICS_CHARS = 7_000;
-
-function clipVisualRepairDiagnostics(value: string): string {
-  if (value.length <= MAX_VISUAL_REPAIR_DIAGNOSTICS_CHARS) {
-    return value;
-  }
-
-  return `${value
-    .slice(0, MAX_VISUAL_REPAIR_DIAGNOSTICS_CHARS - 120)
-    .trimEnd()}\n\n[Diagnostics truncated; prioritize fixing layout, scale, overlap, clipping, and blur.]`;
-}
-
-function buildVisualRepairPrompt({
-  diagnostics,
-  hasScreenshot,
-  width
-}: {
-  diagnostics?: string;
-  hasScreenshot: boolean;
-  width: number;
-}): string {
-  const lines = [
-    hasScreenshot
-      ? "Repair the previous ChatHTML artifact using the attached rendering screenshot."
-      : "Repair the previous ChatHTML artifact using the textual render diagnostics below. The selected model cannot inspect image inputs, so infer visual failures from the artifact source, visible text, render errors, and layout intent.",
-    hasScreenshot
-      ? `The screenshot shows the actual rendered output at about ${Math.round(width)}px wide.`
-      : `The diagnostics describe the rendered artifact at about ${Math.round(width)}px wide.`,
-    "Inspect the screenshot or diagnostics for visual failures such as overlapping labels, clustered or unreadable content, clipped elements, bad scaling, excessive blur, tiny text, or poor use of space.",
-    "Use the previous artifact source and the original user intent from the conversation as context.",
-    "Generate a complete corrected ChatHTML artifact. Preserve the user's intent, but change the visual mapping if needed; do not keep realistic proportions when they make the result unreadable.",
-    "Prefer readable compressed/log scales, callouts, legends, exploded views, or separated annotation lanes when exact spatial scale would collapse details.",
-    "Do not explain the repair process outside the artifact."
-  ];
-
-  if (diagnostics) {
-    lines.push(
-      "",
-      "Render diagnostics and artifact source:",
-      clipVisualRepairDiagnostics(diagnostics)
-    );
-  }
-
-  return lines.join("\n");
-}
-
-function createArtifactFileUpload(
-  messageId: string,
-  rawStream: string,
-  snapshot: RenderSnapshot | undefined,
-  summary: string | undefined
-): SessionFileUploadInput | null {
-  const source = rawStream || snapshot?.raw || snapshot?.completedHtml || "";
-  if (!source.trim()) {
-    return null;
-  }
-
-  return {
-    kind: "artifact",
-    name: `${messageId}.chathtml.html`,
-    mimeType: "text/html",
-    sourceMessageId: messageId,
-    text: source,
-    summary: summary || "ChatHTML artifact raw source"
-  };
-}
-
-function commitUploadedImageFile(
-  attachment: ImageAttachment,
-  sourceMessageId: string
-): SessionFile | null {
-  if (!attachment.sessionFile) {
-    return null;
-  }
-
-  const { draft: _draft, ...file } = attachment.sessionFile;
-  const shouldKeepInlineDataUrl = !file.storageKey && !file.embedUrl;
-  return {
-    ...file,
-    kind: "image",
-    sourceMessageId,
-    ...(shouldKeepInlineDataUrl ? { dataUrl: attachment.dataUrl } : {}),
-    width: file.width ?? attachment.width,
-    height: file.height ?? attachment.height
-  };
-}
-
-function renderErrorKey(error: Pick<RenderError, "kind" | "message">): string {
-  return `${error.kind}:${error.message}`;
-}
-
-function hasRenderError(
-  errors: RenderError[] | undefined,
-  error: RenderError
-): boolean {
-  const key = renderErrorKey(error);
-  return Boolean(errors?.some((item) => renderErrorKey(item) === key));
-}
-
 function loadThemeMode(): ThemeMode {
   if (typeof window === "undefined") {
     return "night";
@@ -423,125 +300,6 @@ function getCanvasContext() {
     initialCanvasHeight,
     devicePixelRatio: window.devicePixelRatio || 1
   };
-}
-
-function toAssistantStatus(message: ClientMessage): ThreadMessageLike["status"] {
-  if (message.role !== "assistant") {
-    return undefined;
-  }
-
-  if (message.status === "streaming") {
-    return { type: "running" };
-  }
-
-  if (message.status === "error") {
-    return {
-      type: "incomplete",
-      reason: "error",
-      error: message.error ?? "The chat request failed."
-    };
-  }
-
-  return { type: "complete", reason: "stop" };
-}
-
-function convertMessage(message: ClientMessage): ThreadMessageLike {
-  return {
-    id: message.id,
-    role: message.role,
-    content: message.content
-      ? [{ type: "text", text: message.content }]
-      : [],
-    status: toAssistantStatus(message),
-    attachments:
-      message.role === "user"
-        ? message.attachments?.map(imageAttachmentToCompleteAttachment)
-        : undefined
-  };
-}
-
-function getAppendMessageText(message: AppendMessage): string {
-  return message.content
-    .map((part) => (part.type === "text" ? part.text : ""))
-    .join("")
-    .trim();
-}
-
-function artifactSelectionToReference(
-  selection: ArtifactSelection
-): ArtifactEditReference {
-  return {
-    kind: selection.kind,
-    key: selection.key,
-    selector: selection.selector,
-    label: selection.label,
-    preview: selection.preview,
-    tagName: selection.tagName,
-    text: selection.text,
-    html: selection.html
-  };
-}
-
-function buildCompletedAssistantPatchFromRawStream(
-  rawStream: string,
-  themeMode: PageThemeMode
-): Partial<ClientMessage> {
-  const parts = extractStreamUiParts(rawStream);
-  const hasVisibleStreamUi =
-    parts.hasStreamUi && parts.streamui.trim().length > 0;
-  let snapshot: RenderSnapshot | undefined;
-
-  if (hasVisibleStreamUi) {
-    const renderer = createStreamingRenderer(themeMode);
-    renderer.replace(parts.streamui);
-    renderer.complete();
-    snapshot = renderer.getSnapshot();
-  }
-
-  return {
-    content: parts.chat || parts.fallbackText,
-    rawStream,
-    ...(snapshot ? { snapshot } : {}),
-    ...(hasVisibleStreamUi ? { artifactContext: buildArtifactContext(rawStream) } : {}),
-    hasStreamUi: hasVisibleStreamUi,
-    streamUiComplete: parts.streamUiComplete,
-    runtimeErrors: undefined,
-    status: "complete",
-    error: undefined
-  };
-}
-
-function buildArtifactActionMessage(action: StreamUiAction): string {
-  return action.type === "prompt" ? action.prompt.trim().slice(0, 2000) : "";
-}
-
-function isImageAttachment(
-  attachment: ImageAttachment | null
-): attachment is ImageAttachment {
-  return attachment !== null;
-}
-
-function getAppendMessageImages(message: AppendMessage): ImageAttachment[] {
-  const fromAttachments =
-    message.attachments
-      ?.map(completeAttachmentToImage)
-      .filter(isImageAttachment) ?? [];
-  const fromInlineParts = message.content
-    .map((part): ImageAttachment | null => {
-      if (part.type !== "image") {
-        return null;
-      }
-      return {
-        id: createId("inline-image"),
-        name: part.filename ?? "image",
-        mimeType: "image/png",
-        size: Math.floor(((part.image.split(",")[1] ?? "").length * 3) / 4),
-        dataUrl: part.image
-      };
-    })
-    .filter(isImageAttachment);
-
-  return [...fromAttachments, ...fromInlineParts];
 }
 
 export default function App() {

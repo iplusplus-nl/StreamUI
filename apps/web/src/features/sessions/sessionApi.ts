@@ -1,20 +1,10 @@
 import type { SessionFile } from "../../domain/chat/sessionModel";
 import { clientRequestHeaders } from "../../api/client";
+import type { SessionFileUploadInput } from "./sessionFileContracts";
+
+export type { SessionFileUploadInput } from "./sessionFileContracts";
 
 type FetchLike = typeof fetch;
-
-export type SessionFileUploadInput = {
-  kind: SessionFile["kind"];
-  name: string;
-  mimeType: string;
-  dataUrl?: string;
-  text?: string;
-  width?: number;
-  height?: number;
-  sourceMessageId?: string;
-  summary?: string;
-  draft?: boolean;
-};
 
 export type SessionPageExitTransport = {
   fetch: FetchLike;
