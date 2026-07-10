@@ -120,7 +120,7 @@ describe("session sync policy", () => {
     );
   });
 
-  it("blocks polling for active runs, recent cancellations, and the active transient draft", () => {
+  it("blocks polling for active runs, cancellations, attachments, and the active transient draft", () => {
     const populated = state("saved", [session("saved", 1, "Saved")]);
     const empty = state("draft", [session("draft", 1)]);
 
@@ -132,6 +132,13 @@ describe("session sync policy", () => {
       shouldRequestSessionSync({
         state: populated,
         hasRecentCancellations: true
+      }),
+      false
+    );
+    assert.equal(
+      shouldRequestSessionSync({
+        state: populated,
+        hasAttachmentDrafts: true
       }),
       false
     );

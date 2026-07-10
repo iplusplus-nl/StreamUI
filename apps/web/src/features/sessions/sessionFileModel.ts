@@ -3,6 +3,27 @@ import type { SessionFile } from "../../domain/chat/sessionModel";
 import type { RenderSnapshot } from "../../runtime/streamui/types";
 import type { SessionFileUploadInput } from "./sessionFileContracts";
 
+export function getAttachmentSessionError(
+  attachments: ImageAttachment[],
+  targetSessionId: string
+): string | null {
+  if (attachments.some((attachment) => !attachment.sessionFile)) {
+    return "Image upload is still in progress. Please wait before sending.";
+  }
+
+  if (
+    attachments.some(
+      (attachment) =>
+        attachment.ownerSessionId &&
+        attachment.ownerSessionId !== targetSessionId
+    )
+  ) {
+    return "An attached image belongs to another session. Remove it and attach it again.";
+  }
+
+  return null;
+}
+
 export function imageAttachmentToFileUpload(
   attachment: ImageAttachment,
   sourceMessageId?: string,

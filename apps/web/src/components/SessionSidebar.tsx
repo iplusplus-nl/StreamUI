@@ -100,6 +100,7 @@ type SessionSidebarProps = {
   sessions: SessionListItem[];
   activeSessionId: string;
   isSending: boolean;
+  isSessionSelectionBlocked: boolean;
   themeMode: ThemeMode;
   apiSettings: ApiSettings;
   searchSettings: SearchSettings;
@@ -216,6 +217,7 @@ export function SessionSidebar({
   sessions,
   activeSessionId,
   isSending,
+  isSessionSelectionBlocked,
   themeMode,
   apiSettings,
   searchSettings,
@@ -738,6 +740,7 @@ export function SessionSidebar({
                 <button
                   className="session-select-button"
                   type="button"
+                  disabled={isSessionSelectionBlocked}
                   aria-current={
                     session.id === activeSessionId ? "page" : undefined
                   }

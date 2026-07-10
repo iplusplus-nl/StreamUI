@@ -50,15 +50,17 @@ export type ShouldRequestSessionSyncInput = {
   transientEmptySessionId?: string | null;
   hasActiveRuns?: boolean;
   hasRecentCancellations?: boolean;
+  hasAttachmentDrafts?: boolean;
 };
 
 export function shouldRequestSessionSync({
   state,
   transientEmptySessionId,
   hasActiveRuns = false,
-  hasRecentCancellations = false
+  hasRecentCancellations = false,
+  hasAttachmentDrafts = false
 }: ShouldRequestSessionSyncInput): boolean {
-  if (hasActiveRuns || hasRecentCancellations) {
+  if (hasActiveRuns || hasRecentCancellations || hasAttachmentDrafts) {
     return false;
   }
 

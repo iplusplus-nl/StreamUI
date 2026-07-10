@@ -13,6 +13,7 @@ import {
 
 export type SessionActionsDependencies = {
   isNewOrDeleteBlocked(): boolean;
+  isSelectionBlocked(): boolean;
   getState(): SessionState;
   replaceState(state: SessionState): void;
   getTransientEmptySessionId(): string | null;
@@ -26,7 +27,7 @@ export type SessionActionsController = {
   updateActiveSession(updater: SessionUpdater): boolean;
   updateSessionById(sessionId: string, updater: SessionUpdater): boolean;
   createNewSession(): "blocked" | "created" | "reused";
-  selectSession(sessionId: string): "selected" | "not-found";
+  selectSession(sessionId: string): "blocked" | "selected" | "not-found";
   deleteSession(
     sessionId: string
   ): "blocked" | "deleted" | "tombstoned-only";
@@ -73,6 +74,10 @@ export function createSessionActionsController(
     },
 
     selectSession(sessionId) {
+      if (dependencies.isSelectionBlocked()) {
+        return "blocked";
+      }
+
       const result = selectSessionInState(
         dependencies.getState(),
         sessionId

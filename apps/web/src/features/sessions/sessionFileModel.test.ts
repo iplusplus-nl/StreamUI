@@ -5,6 +5,7 @@ import type { RenderSnapshot } from "../../runtime/streamui/types";
 import {
   commitUploadedImageFile,
   createArtifactFileUpload,
+  getAttachmentSessionError,
   imageAttachmentToFileUpload
 } from "./sessionFileModel";
 
@@ -33,6 +34,52 @@ function snapshot(overrides: Partial<RenderSnapshot> = {}): RenderSnapshot {
 }
 
 describe("session file model", () => {
+  it("validates upload completion and attachment session ownership", () => {
+    assert.equal(getAttachmentSessionError([], "session-1"), null);
+    assert.equal(
+      getAttachmentSessionError(
+        [
+          image({
+            sessionFile: {
+              id: "file-1",
+              kind: "image",
+              name: "diagram.png",
+              mimeType: "image/png",
+              size: 12,
+              createdAt: 1
+            },
+            ownerSessionId: "session-1"
+          })
+        ],
+        "session-1"
+      ),
+      null
+    );
+    assert.equal(
+      getAttachmentSessionError([image()], "session-1"),
+      "Image upload is still in progress. Please wait before sending."
+    );
+    assert.equal(
+      getAttachmentSessionError(
+        [
+          image({
+            sessionFile: {
+              id: "file-1",
+              kind: "image",
+              name: "diagram.png",
+              mimeType: "image/png",
+              size: 12,
+              createdAt: 1
+            },
+            ownerSessionId: "session-other"
+          })
+        ],
+        "session-1"
+      ),
+      "An attached image belongs to another session. Remove it and attach it again."
+    );
+  });
+
   it("maps image attachments to draft upload inputs", () => {
     assert.deepEqual(
       imageAttachmentToFileUpload(image(), "message-1", true),

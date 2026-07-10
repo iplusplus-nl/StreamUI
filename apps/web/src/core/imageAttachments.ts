@@ -27,6 +27,7 @@ export type ImageAttachment = {
   width?: number;
   height?: number;
   sessionFile?: UploadedSessionFile;
+  ownerSessionId?: string;
 };
 
 export const SUPPORTED_IMAGE_MIME_TYPES = [

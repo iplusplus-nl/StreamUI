@@ -33,6 +33,7 @@ function harness(
   let current = initial;
   let transientId: string | null = null;
   let blocked = false;
+  let selectionBlocked = false;
   const deletedIds = new Set<string>();
   const events: string[] = [];
   const savedSnapshots: Array<{
@@ -43,6 +44,7 @@ function harness(
 
   const dependencies: SessionActionsDependencies = {
     isNewOrDeleteBlocked: () => blocked,
+    isSelectionBlocked: () => selectionBlocked,
     getState: () => current,
     replaceState: (next) => {
       current = next;
@@ -90,6 +92,12 @@ function harness(
     },
     set blocked(value: boolean) {
       blocked = value;
+    },
+    get selectionBlocked() {
+      return selectionBlocked;
+    },
+    set selectionBlocked(value: boolean) {
+      selectionBlocked = value;
     },
     deletedIds,
     events,
@@ -160,6 +168,20 @@ describe("session actions controller", () => {
     assert.equal(test.actions.selectSession(second.id), "selected");
     assert.equal(test.state.activeSessionId, second.id);
     assert.equal(test.transientId, null);
+  });
+
+  it("blocks selection independently while composer attachments are present", () => {
+    const first = session("first", 1);
+    const second = session("second", 2);
+    const initial = { activeSessionId: first.id, sessions: [second, first] };
+    const test = harness(initial);
+    test.selectionBlocked = true;
+    test.transientId = first.id;
+
+    assert.equal(test.actions.selectSession(second.id), "blocked");
+    assert.equal(test.state, initial);
+    assert.equal(test.transientId, first.id);
+    assert.deepEqual(test.events, []);
   });
 
   it("reuses an active empty session without calling the factory", () => {

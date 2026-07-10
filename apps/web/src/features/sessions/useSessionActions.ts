@@ -15,6 +15,7 @@ type ValueRef<T> = { current: T };
 export type UseSessionActionsInput = {
   sessionStateRef: ValueRef<SessionState>;
   isNewOrDeleteBlockedRef: ValueRef<boolean>;
+  isSelectionBlockedRef: ValueRef<boolean>;
   transientEmptySessionIdRef: ValueRef<string | null>;
   deletedSessionIdsRef: ValueRef<Set<string>>;
   replaceState(state: SessionState): void;
@@ -28,6 +29,7 @@ export type UseSessionActionsInput = {
 export function useSessionActions({
   sessionStateRef,
   isNewOrDeleteBlockedRef,
+  isSelectionBlockedRef,
   transientEmptySessionIdRef,
   deletedSessionIdsRef,
   replaceState,
@@ -41,6 +43,7 @@ export function useSessionActions({
     () =>
       createSessionActionsController({
         isNewOrDeleteBlocked: () => isNewOrDeleteBlockedRef.current,
+        isSelectionBlocked: () => isSelectionBlockedRef.current,
         getState: () => sessionStateRef.current,
         replaceState,
         getTransientEmptySessionId: () =>
@@ -70,6 +73,7 @@ export function useSessionActions({
       defaultUiComplexity,
       deletedSessionIdsRef,
       isNewOrDeleteBlockedRef,
+      isSelectionBlockedRef,
       replaceState,
       saveNow,
       sessionStateRef,

@@ -21,6 +21,7 @@ export type UseSessionSyncInput = {
   transientEmptySessionIdRef: ValueRef<string | null>;
   runConnectionsRef: ValueRef<SizeLike>;
   cancelledRunIdsRef: ValueRef<SizeLike>;
+  attachmentDraftsRef: ValueRef<boolean>;
   updateState: SessionStateUpdater;
   setSessionsLoaded(loaded: boolean): void;
   setSessionsHydrated(hydrated: boolean): void;
@@ -38,6 +39,7 @@ export function useSessionSync({
   transientEmptySessionIdRef,
   runConnectionsRef,
   cancelledRunIdsRef,
+  attachmentDraftsRef,
   updateState,
   setSessionsLoaded,
   setSessionsHydrated,
@@ -61,7 +63,8 @@ export function useSessionSync({
         updateState,
         onApplied: markSessionsHydrated,
         getDeletedSessionIds: () => deletedSessionIdsRef.current,
-        getTransientEmptySessionId: () => transientEmptySessionIdRef.current
+        getTransientEmptySessionId: () => transientEmptySessionIdRef.current,
+        hasAttachmentDrafts: () => attachmentDraftsRef.current
       },
       dependencies
     )
@@ -82,6 +85,7 @@ export function useSessionSync({
     };
   }, [
     deletedSessionIdsRef,
+    attachmentDraftsRef,
     dependencies,
     sessionClientIdRef,
     markSessionsHydrated,
@@ -110,7 +114,8 @@ export function useSessionSync({
             transientEmptySessionIdRef.current,
           hasActiveRuns: () => runConnectionsRef.current.size > 0,
           hasRecentCancellations: () =>
-            cancelledRunIdsRef.current.size > 0
+            cancelledRunIdsRef.current.size > 0,
+          hasAttachmentDrafts: () => attachmentDraftsRef.current
         },
         dependencies
       ).catch((error) => {
@@ -129,6 +134,7 @@ export function useSessionSync({
     };
   }, [
     cancelledRunIdsRef,
+    attachmentDraftsRef,
     deletedSessionIdsRef,
     dependencies,
     intervalMs,

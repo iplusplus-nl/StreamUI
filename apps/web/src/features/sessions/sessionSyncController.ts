@@ -47,6 +47,7 @@ export type InitialSessionLoadInput = {
   onApplied?(): void;
   getDeletedSessionIds(): Iterable<string>;
   getTransientEmptySessionId(): string | null;
+  hasAttachmentDrafts?(): boolean;
 };
 
 export async function runInitialSessionLoad(
@@ -62,6 +63,9 @@ export async function runInitialSessionLoad(
   const payload = await response.json();
   if (input.isCancelled()) {
     return "cancelled";
+  }
+  if (input.hasAttachmentDrafts?.()) {
+    return "skipped";
   }
 
   const serverState = dependencies.normalizeServerState(
@@ -93,6 +97,7 @@ export type PollSessionStateInput = {
   getTransientEmptySessionId(): string | null;
   hasActiveRuns(): boolean;
   hasRecentCancellations(): boolean;
+  hasAttachmentDrafts?(): boolean;
 };
 
 export async function runSessionPoll(
@@ -105,7 +110,8 @@ export async function runSessionPoll(
       state: currentState,
       transientEmptySessionId: input.getTransientEmptySessionId(),
       hasActiveRuns: input.hasActiveRuns(),
-      hasRecentCancellations: input.hasRecentCancellations()
+      hasRecentCancellations: input.hasRecentCancellations(),
+      hasAttachmentDrafts: input.hasAttachmentDrafts?.() ?? false
     })
   ) {
     return "skipped";
@@ -123,6 +129,9 @@ export async function runSessionPoll(
   );
   if (input.isCancelled()) {
     return "cancelled";
+  }
+  if (input.hasAttachmentDrafts?.()) {
+    return "skipped";
   }
 
   input.updateState((current) =>

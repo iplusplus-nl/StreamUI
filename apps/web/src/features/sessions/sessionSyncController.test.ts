@@ -192,6 +192,44 @@ describe("session sync controller", () => {
     assert.equal(hydrationSignals, 0);
   });
 
+  it("skips a pending initial result when an attachment draft appears", async () => {
+    const pending = deferred<Response>();
+    let hasAttachmentDrafts = false;
+    let normalized = false;
+    let updated = false;
+    let hydrationSignals = 0;
+    const loading = runInitialSessionLoad(
+      {
+        clientId: "client-1",
+        isCancelled: () => false,
+        updateState: () => {
+          updated = true;
+        },
+        onApplied: () => {
+          hydrationSignals += 1;
+        },
+        getDeletedSessionIds: () => [],
+        getTransientEmptySessionId: () => null,
+        hasAttachmentDrafts: () => hasAttachmentDrafts
+      },
+      dependencies({
+        requestSessions: async () => pending.promise,
+        normalizeServerState: () => {
+          normalized = true;
+          return state("server", [session("server", 1, "Server")]);
+        }
+      })
+    );
+
+    hasAttachmentDrafts = true;
+    pending.resolve(responseFor(state("server", [session("server", 1)])));
+
+    assert.equal(await loading, "skipped");
+    assert.equal(normalized, false);
+    assert.equal(updated, false);
+    assert.equal(hydrationSignals, 0);
+  });
+
   it("surfaces initial and polling HTTP failures with their original messages", async () => {
     let hydrationSignals = 0;
     const common = {
@@ -245,6 +283,7 @@ describe("session sync controller", () => {
         transientId?: string | null;
         activeRuns?: boolean;
         cancellations?: boolean;
+        attachments?: boolean;
       }
     ) =>
       runSessionPoll(
@@ -259,15 +298,53 @@ describe("session sync controller", () => {
           getDeletedSessionIds: () => [],
           getTransientEmptySessionId: () => options.transientId ?? null,
           hasActiveRuns: () => options.activeRuns ?? false,
-          hasRecentCancellations: () => options.cancellations ?? false
+          hasRecentCancellations: () => options.cancellations ?? false,
+          hasAttachmentDrafts: () => options.attachments ?? false
         },
         syncDependencies
       );
 
     assert.equal(await run(populated, { activeRuns: true }), "skipped");
     assert.equal(await run(populated, { cancellations: true }), "skipped");
+    assert.equal(await run(populated, { attachments: true }), "skipped");
     assert.equal(await run(emptyDraft, { transientId: "draft" }), "skipped");
     assert.equal(requestCount, 0);
+    assert.equal(hydrationSignals, 0);
+  });
+
+  it("does not apply an in-flight poll after an attachment draft appears", async () => {
+    const pending = deferred<Response>();
+    const current = state("local", [session("local", 1, "Local")]);
+    let hasAttachmentDrafts = false;
+    let updates = 0;
+    let hydrationSignals = 0;
+    const polling = runSessionPoll(
+      {
+        clientId: "client-1",
+        isCancelled: () => false,
+        getState: () => current,
+        updateState: () => {
+          updates += 1;
+        },
+        onApplied: () => {
+          hydrationSignals += 1;
+        },
+        getDeletedSessionIds: () => [],
+        getTransientEmptySessionId: () => null,
+        hasActiveRuns: () => false,
+        hasRecentCancellations: () => false,
+        hasAttachmentDrafts: () => hasAttachmentDrafts
+      },
+      dependencies({ requestSessions: async () => pending.promise })
+    );
+
+    hasAttachmentDrafts = true;
+    pending.resolve(
+      responseFor(state("server", [session("server", 2, "Server")]))
+    );
+
+    assert.equal(await polling, "skipped");
+    assert.equal(updates, 0);
     assert.equal(hydrationSignals, 0);
   });
 

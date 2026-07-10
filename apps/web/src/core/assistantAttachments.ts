@@ -79,25 +79,31 @@ function canvasToImageDataUrl(
   return dataUrl.startsWith(`data:${mimeType};`) ? dataUrl : "";
 }
 
-type StreamAttachmentMetadata = {
+export type StreamAttachmentMetadata = {
   streamuiImage?: ImageAttachment;
   streamuiFile?: UploadedSessionFile;
+  streamuiSessionId?: string;
 };
 
 type StreamPendingAttachment = PendingAttachment & StreamAttachmentMetadata;
 type StreamCompleteAttachment = CompleteAttachment & StreamAttachmentMetadata;
 
-type StreamImageAttachmentAdapterOptions = {
+export type StreamImageAttachmentAdapterOptions = {
   getSessionId(): string;
   uploadImage(
     sessionId: string,
     attachment: ImageAttachment
   ): Promise<UploadedSessionFile>;
   deleteFile?(sessionId: string, fileId: string): Promise<void>;
-  onUploadStart?(attachmentId: string): void;
+  onUploadStart?(attachmentId: string, sessionId: string): void;
   onUploadComplete?(attachmentId: string): void;
   onUploadError?(attachmentId: string): void;
-  onRemove?(attachmentId: string): void;
+  onRemoveStart?(attachmentId: string): void;
+  onRemoveComplete?(attachmentId: string): void;
+  onSend?(attachmentId: string): void;
+  prepareImage?(file: File): Promise<ImageAttachment>;
+  createPendingId?(): string;
+  warn?(message: string, error: unknown): void;
 };
 
 async function prepareImageAttachment(file: File): Promise<ImageAttachment> {
@@ -220,7 +226,14 @@ export function completeAttachmentToImage(
 ): ImageAttachment | null {
   const streamAttachment = attachment as StreamCompleteAttachment;
   if (streamAttachment.streamuiImage) {
-    return streamAttachment.streamuiImage;
+    return streamAttachment.streamuiSessionId &&
+      streamAttachment.streamuiImage.ownerSessionId !==
+        streamAttachment.streamuiSessionId
+      ? {
+          ...streamAttachment.streamuiImage,
+          ownerSessionId: streamAttachment.streamuiSessionId
+        }
+      : streamAttachment.streamuiImage;
   }
 
   const imagePart = attachment.content.find((part) => part.type === "image");
@@ -234,7 +247,10 @@ export function completeAttachmentToImage(
     mimeType: attachment.contentType ?? "image/png",
     size: estimateDataUrlBytes(imagePart.image),
     dataUrl: imagePart.image,
-    sessionFile: streamAttachment.streamuiFile
+    sessionFile: streamAttachment.streamuiFile,
+    ...(streamAttachment.streamuiSessionId
+      ? { ownerSessionId: streamAttachment.streamuiSessionId }
+      : {})
   };
 }
 
@@ -255,14 +271,91 @@ export function imageAttachmentToCompleteAttachment(
       }
     ],
     streamuiImage: attachment,
-    streamuiFile: attachment.sessionFile
+    streamuiFile: attachment.sessionFile,
+    ...(attachment.ownerSessionId
+      ? { streamuiSessionId: attachment.ownerSessionId }
+      : {})
   } as StreamCompleteAttachment;
+}
+
+type PendingUploadLifecycle = {
+  ownerSessionId?: string;
+  cancelled: boolean;
+  removalStarted: boolean;
+  removalFinished: boolean;
+  removalPromise: Promise<void>;
+  resolveRemoval(): void;
+};
+
+function createPendingUploadLifecycle(
+  ownerSessionId: string | undefined
+): PendingUploadLifecycle {
+  let resolveRemoval!: () => void;
+  const removalPromise = new Promise<void>((resolve) => {
+    resolveRemoval = resolve;
+  });
+  return {
+    ownerSessionId,
+    cancelled: false,
+    removalStarted: false,
+    removalFinished: false,
+    removalPromise,
+    resolveRemoval
+  };
 }
 
 export class StreamImageAttachmentAdapter implements AttachmentAdapter {
   accept = SUPPORTED_IMAGE_MIME_TYPES.join(",");
+  private readonly pendingUploads = new Map<string, PendingUploadLifecycle>();
 
   constructor(private readonly options?: StreamImageAttachmentAdapterOptions) {}
+
+  private warn(message: string, error: unknown): void {
+    const warn = this.options?.warn;
+    if (warn) {
+      warn(message, error);
+      return;
+    }
+    console.warn(message, error);
+  }
+
+  private finishPendingRemoval(
+    attachmentId: string,
+    lifecycle: PendingUploadLifecycle
+  ): void {
+    if (this.pendingUploads.get(attachmentId) === lifecycle) {
+      this.pendingUploads.delete(attachmentId);
+    }
+    if (!lifecycle.removalStarted || lifecycle.removalFinished) {
+      return;
+    }
+
+    lifecycle.removalFinished = true;
+    this.options?.onRemoveComplete?.(attachmentId);
+    lifecycle.resolveRemoval();
+  }
+
+  private async deleteDraftFile(
+    ownerSessionId: string | undefined,
+    fileId: string
+  ): Promise<void> {
+    if (!this.options?.deleteFile) {
+      return;
+    }
+    if (!ownerSessionId) {
+      this.warn(
+        "Could not delete draft image upload.",
+        new Error("Could not determine the attachment session.")
+      );
+      return;
+    }
+
+    try {
+      await this.options.deleteFile(ownerSessionId, fileId);
+    } catch (error) {
+      this.warn("Could not delete draft image upload.", error);
+    }
+  }
 
   async *add({
     file
@@ -281,22 +374,44 @@ export class StreamImageAttachmentAdapter implements AttachmentAdapter {
       throw new Error(`${file.name} is larger than 8 MB.`);
     }
 
-    const id = createId("pending-image");
-    this.options?.onUploadStart?.(id);
+    const id = this.options?.createPendingId?.() ?? createId("pending-image");
+    const ownerSessionId = this.options?.getSessionId();
+    if (this.options && !ownerSessionId) {
+      throw new Error("Could not determine the attachment session.");
+    }
+    const lifecycle = createPendingUploadLifecycle(ownerSessionId);
+    this.pendingUploads.set(id, lifecycle);
+    this.options?.onUploadStart?.(id, ownerSessionId ?? "");
     yield {
       id,
       type: "image",
       name: file.name,
       contentType: file.type,
       file,
-      status: { type: "running", reason: "uploading", progress: 0 }
-    };
+      status: { type: "running", reason: "uploading", progress: 0 },
+      streamuiSessionId: ownerSessionId
+    } as StreamPendingAttachment;
 
     try {
-      const prepared = await prepareImageAttachment(file);
+      const prepared = await (
+        this.options?.prepareImage ?? prepareImageAttachment
+      )(file);
+      if (lifecycle.cancelled) {
+        this.finishPendingRemoval(id, lifecycle);
+        return;
+      }
+
       const uploaded = this.options
-        ? await this.options.uploadImage(this.options.getSessionId(), prepared)
+        ? await this.options.uploadImage(ownerSessionId ?? "", prepared)
         : undefined;
+      if (lifecycle.cancelled) {
+        if (uploaded) {
+          await this.deleteDraftFile(ownerSessionId, uploaded.id);
+        }
+        this.finishPendingRemoval(id, lifecycle);
+        return;
+      }
+
       const image = uploaded
         ? {
             ...prepared,
@@ -306,10 +421,12 @@ export class StreamImageAttachmentAdapter implements AttachmentAdapter {
             size: uploaded.size,
             width: uploaded.width ?? prepared.width,
             height: uploaded.height ?? prepared.height,
-            sessionFile: uploaded
+            sessionFile: uploaded,
+            ownerSessionId
           }
-        : prepared;
+        : { ...prepared, ownerSessionId };
 
+      this.pendingUploads.delete(id);
       this.options?.onUploadComplete?.(id);
       yield {
         id,
@@ -326,9 +443,15 @@ export class StreamImageAttachmentAdapter implements AttachmentAdapter {
           }
         ],
         streamuiImage: image,
-        streamuiFile: image.sessionFile
+        streamuiFile: image.sessionFile,
+        streamuiSessionId: ownerSessionId
       } as StreamPendingAttachment;
     } catch (error) {
+      if (lifecycle.cancelled) {
+        this.finishPendingRemoval(id, lifecycle);
+        return;
+      }
+      this.pendingUploads.delete(id);
       this.options?.onUploadError?.(id);
       throw error;
     }
@@ -336,13 +459,28 @@ export class StreamImageAttachmentAdapter implements AttachmentAdapter {
 
   async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
     const streamAttachment = attachment as StreamPendingAttachment;
-    if (streamAttachment.streamuiImage) {
-      return imageAttachmentToCompleteAttachment(streamAttachment.streamuiImage);
+    const ownerSessionId =
+      streamAttachment.streamuiSessionId ??
+      streamAttachment.streamuiImage?.ownerSessionId ??
+      this.options?.getSessionId();
+    if (this.options && !ownerSessionId) {
+      throw new Error("Could not determine the attachment session.");
     }
 
-    const prepared = await prepareImageAttachment(attachment.file);
+    if (streamAttachment.streamuiImage) {
+      const image = ownerSessionId
+        ? { ...streamAttachment.streamuiImage, ownerSessionId }
+        : streamAttachment.streamuiImage;
+      const complete = imageAttachmentToCompleteAttachment(image);
+      this.options?.onSend?.(attachment.id);
+      return complete;
+    }
+
+    const prepared = await (
+      this.options?.prepareImage ?? prepareImageAttachment
+    )(attachment.file);
     const uploaded = this.options
-      ? await this.options.uploadImage(this.options.getSessionId(), prepared)
+      ? await this.options.uploadImage(ownerSessionId ?? "", prepared)
       : undefined;
     const image = uploaded
       ? {
@@ -353,26 +491,42 @@ export class StreamImageAttachmentAdapter implements AttachmentAdapter {
           size: uploaded.size,
           width: uploaded.width ?? prepared.width,
           height: uploaded.height ?? prepared.height,
-          sessionFile: uploaded
+          sessionFile: uploaded,
+          ownerSessionId
         }
-      : prepared;
+      : { ...prepared, ownerSessionId };
 
-    return imageAttachmentToCompleteAttachment(image);
+    const complete = imageAttachmentToCompleteAttachment(image);
+    this.options?.onSend?.(attachment.id);
+    return complete;
   }
 
   async remove(attachment: PendingAttachment | CompleteAttachment): Promise<void> {
     const streamAttachment = attachment as StreamAttachmentMetadata;
     const fileId = streamAttachment.streamuiFile?.id;
-    this.options?.onRemove?.(attachment.id);
-
-    if (!fileId || !this.options?.deleteFile) {
+    const ownerSessionId =
+      streamAttachment.streamuiSessionId ??
+      streamAttachment.streamuiImage?.ownerSessionId ??
+      this.options?.getSessionId();
+    const lifecycle = this.pendingUploads.get(attachment.id);
+    if (lifecycle) {
+      lifecycle.cancelled = true;
+      if (!lifecycle.removalStarted) {
+        lifecycle.removalStarted = true;
+        this.options?.onRemoveStart?.(attachment.id);
+      }
+      await lifecycle.removalPromise;
       return;
     }
 
+    this.options?.onRemoveStart?.(attachment.id);
     try {
-      await this.options.deleteFile(this.options.getSessionId(), fileId);
-    } catch (error) {
-      console.warn("Could not delete draft image upload.", error);
+      if (!fileId) {
+        return;
+      }
+      await this.deleteDraftFile(ownerSessionId, fileId);
+    } finally {
+      this.options?.onRemoveComplete?.(attachment.id);
     }
   }
 }

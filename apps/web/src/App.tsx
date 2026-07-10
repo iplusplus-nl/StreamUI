@@ -18,7 +18,6 @@ import {
   type ThemeMode
 } from "./components/SessionSidebar";
 import { AuthOverlay } from "./components/AuthOverlay";
-import { StreamImageAttachmentAdapter } from "./core/assistantAttachments";
 import { blobToDataUrl } from "./core/blob";
 import {
   getSelectableModelOptions,
@@ -82,6 +81,7 @@ import { createPendingRequestSlot } from "./features/chat/pendingRequestSlot";
 import {
   closeAuthAndDiscard,
   openManualAuth,
+  pinManagedRequestToSession,
   queueManagedAuthRequest,
   replayManagedAuthRequest
 } from "./features/chat/managedAuthContinuation";
@@ -97,7 +97,6 @@ import {
   isMessageVisibleInSession
 } from "./features/chat/branching";
 import {
-  deleteSessionFile,
   requestSessions,
   uploadSessionFile
 } from "./features/sessions/sessionApi";
@@ -113,9 +112,12 @@ import { useSessionSync } from "./features/sessions/useSessionSync";
 import { useSessionSave } from "./features/sessions/useSessionSave";
 import { useSessionIndex } from "./features/sessions/useSessionIndex";
 import { useSessionActions } from "./features/sessions/useSessionActions";
+import { useSessionAttachmentController } from "./features/sessions/useSessionAttachmentController";
+import { upsertSessionFilesInState } from "./features/sessions/sessionStateMutations";
 import {
   commitUploadedImageFile,
   createArtifactFileUpload,
+  getAttachmentSessionError,
   imageAttachmentToFileUpload
 } from "./features/sessions/sessionFileModel";
 import {
@@ -290,13 +292,6 @@ export default function App() {
     null
   );
   const [isSending, setIsSending] = useState(false);
-  const [attachmentUploadGate, setAttachmentUploadGate] = useState<{
-    inFlight: number;
-    errorIds: string[];
-  }>({
-    inFlight: 0,
-    errorIds: []
-  });
   const activeSession =
     sessionState.sessions.find(
       (session) => session.id === sessionState.activeSessionId
@@ -337,6 +332,8 @@ export default function App() {
   const messagesRef = useRef(sessionMessages);
   const activeSessionIdRef = useRef(sessionState.activeSessionId);
   const isSendingRef = useRef(isSending);
+  const sessionNewOrDeleteBlockedRef = useRef(isSending);
+  const sessionSelectionBlockedRef = useRef(false);
   const artifactSelectionsRef = useRef<ArtifactSelection[]>([]);
   const sessionsLoadedRef = useRef(sessionsLoaded);
   const sessionsHydratedRef = useRef(sessionsHydrated);
@@ -354,52 +351,17 @@ export default function App() {
   const pendingArtifactActionRef = useRef<PendingArtifactAction | null>(null);
   const [artifactSelectionClearVersion, setArtifactSelectionClearVersion] =
     useState(0);
-  const attachmentAdapter = useMemo(
-    () =>
-      new StreamImageAttachmentAdapter({
-        getSessionId: () => activeSessionIdRef.current,
-        uploadImage: async (sessionId, attachment) => {
-          const file = await uploadSessionFile(
-            sessionId,
-            imageAttachmentToFileUpload(attachment, undefined, true),
-            sessionClientIdRef.current
-          );
-          if (file.kind !== "image") {
-            throw new Error("Image upload returned a non-image file.");
-          }
-          return file as UploadedSessionFile;
-        },
-        deleteFile: (sessionId, fileId) =>
-          deleteSessionFile(sessionId, fileId, sessionClientIdRef.current),
-        onUploadStart: (id) => {
-          setAttachmentUploadGate((current) => ({
-            inFlight: current.inFlight + 1,
-            errorIds: current.errorIds.filter((errorId) => errorId !== id)
-          }));
-        },
-        onUploadComplete: (id) => {
-          setAttachmentUploadGate((current) => ({
-            inFlight: Math.max(0, current.inFlight - 1),
-            errorIds: current.errorIds.filter((errorId) => errorId !== id)
-          }));
-        },
-        onUploadError: (id) => {
-          setAttachmentUploadGate((current) => ({
-            inFlight: Math.max(0, current.inFlight - 1),
-            errorIds: current.errorIds.includes(id)
-              ? current.errorIds
-              : [...current.errorIds, id]
-          }));
-        },
-        onRemove: (id) => {
-          setAttachmentUploadGate((current) => ({
-            ...current,
-            errorIds: current.errorIds.filter((errorId) => errorId !== id)
-          }));
-        }
-      }),
-    []
-  );
+  const {
+    adapter: attachmentAdapter,
+    isSendBlocked: isAttachmentSendBlocked,
+    hasComposerDrafts: hasComposerAttachmentDrafts
+  } = useSessionAttachmentController({
+    activeSessionIdRef,
+    sessionClientIdRef
+  });
+  sessionNewOrDeleteBlockedRef.current =
+    isSending || hasComposerAttachmentDrafts;
+  sessionSelectionBlockedRef.current = hasComposerAttachmentDrafts;
   const setSessionStateAndRef = useCallback(
     (updater: SessionState | ((current: SessionState) => SessionState)) => {
       const current = sessionStateRef.current;
@@ -488,6 +450,7 @@ export default function App() {
     transientEmptySessionIdRef,
     runConnectionsRef,
     cancelledRunIdsRef,
+    attachmentDraftsRef: sessionSelectionBlockedRef,
     updateState: setSessionStateAndRef,
     setSessionsLoaded,
     setSessionsHydrated
@@ -531,7 +494,8 @@ export default function App() {
     deleteSession: handleDeleteSession
   } = useSessionActions({
     sessionStateRef,
-    isNewOrDeleteBlockedRef: isSendingRef,
+    isNewOrDeleteBlockedRef: sessionNewOrDeleteBlockedRef,
+    isSelectionBlockedRef: sessionSelectionBlockedRef,
     transientEmptySessionIdRef,
     deletedSessionIdsRef,
     replaceState: setSessionStateAndRef,
@@ -713,27 +677,9 @@ export default function App() {
 
   const upsertSessionFiles = useCallback(
     (sessionId: string, files: SessionFile[]) => {
-      if (!files.length) {
-        return;
-      }
-
-      setSessionStateAndRef((current) => {
-        let didUpdate = false;
-        const sessions = current.sessions.map((session) => {
-          if (session.id !== sessionId) {
-            return session;
-          }
-
-          didUpdate = true;
-          return {
-            ...session,
-            updatedAt: Date.now(),
-            files: mergeSessionFiles([...session.files, ...files])
-          };
-        });
-
-        return didUpdate ? { ...current, sessions: sortSessions(sessions) } : current;
-      });
+      setSessionStateAndRef((current) =>
+        upsertSessionFilesInState(current, sessionId, files)
+      );
     },
     [setSessionStateAndRef]
   );
@@ -1097,13 +1043,18 @@ export default function App() {
       const appendUserMessage = options.appendUserMessage ?? true;
       const requestedSessionId = options.targetSessionId?.trim();
       const requestSessionId = requestedSessionId || activeSessionIdRef.current;
-      if (transientEmptySessionIdRef.current === requestSessionId) {
-        transientEmptySessionIdRef.current = null;
-      }
       const requestSessionForModel = sessionStateRef.current.sessions.find(
         (session) => session.id === requestSessionId
       );
       if (!requestSessionForModel) {
+        return;
+      }
+      const attachmentSessionError = getAttachmentSessionError(
+        attachments,
+        requestSessionId
+      );
+      if (attachmentSessionError) {
+        console.warn(attachmentSessionError);
         return;
       }
       const requestModel = (
@@ -1130,7 +1081,10 @@ export default function App() {
       ) {
         queueManagedAuthRequest(
           pendingManagedRequestSlot,
-          { text, attachments, options },
+          pinManagedRequestToSession(
+            { text, attachments, options },
+            requestSessionId
+          ),
           openAuthOverlay
         );
         return;
@@ -1140,7 +1094,12 @@ export default function App() {
       const uploadedFiles = attachments
         .map((attachment) => commitUploadedImageFile(attachment, userMessageId))
         .filter((file): file is SessionFile => file !== null);
-      const hasUnuploadedAttachments = uploadedFiles.length !== attachments.length;
+      if (uploadedFiles.length !== attachments.length) {
+        console.warn(
+          "Image upload is still in progress. Please wait before sending."
+        );
+        return;
+      }
       const userMessage: ClientMessage = {
         ...options.userMessagePatch,
         id: userMessageId,
@@ -1193,6 +1152,9 @@ export default function App() {
         updateAssistant(assistantId, { snapshot });
       });
 
+      if (transientEmptySessionIdRef.current === requestSessionId) {
+        transientEmptySessionIdRef.current = null;
+      }
       updateSessionById(requestSessionId, (session) => {
         const nextMessages = options.insertMessages
           ? options.insertMessages(session.messages, userMessage, assistantMessage)
@@ -1360,10 +1322,6 @@ export default function App() {
       });
 
       try {
-        if (hasUnuploadedAttachments) {
-          throw new Error("Image upload is still in progress. Please wait before sending.");
-        }
-
         const requestHistory =
           typeof options.requestHistory === "function"
             ? options.requestHistory(previousMessages, userMessage, assistantMessage)
@@ -1992,7 +1950,8 @@ export default function App() {
             size: uploadedFile.size,
             width: uploadedFile.width,
             height: uploadedFile.height,
-            sessionFile: uploadedFile as UploadedSessionFile
+            sessionFile: uploadedFile as UploadedSessionFile,
+            ownerSessionId: session.id
           });
         }
         const repairOfMessageId =
@@ -2471,6 +2430,12 @@ export default function App() {
       if (!trimmed || isSendingRef.current || !selections.length) {
         return;
       }
+      if (attachments.length > 0) {
+        console.warn(
+          "Local artifact edits do not support attachments yet. Remove the attachment and try again."
+        );
+        return;
+      }
 
       const selectedMessageIds = Array.from(
         new Set(selections.map((selection) => selection.messageId))
@@ -2571,12 +2536,6 @@ export default function App() {
       };
 
       try {
-        if (attachments.length > 0) {
-          throw new Error(
-            "Local artifact edits do not support attachments yet. Remove the attachment and try again."
-          );
-        }
-
         const result = await requestArtifactEdit(
           {
             source,
@@ -3035,8 +2994,7 @@ export default function App() {
   const handleNewMessage = useCallback(
     async (message: AppendMessage) => {
       if (
-        attachmentUploadGate.inFlight > 0 ||
-        attachmentUploadGate.errorIds.length > 0
+        isAttachmentSendBlocked
       ) {
         return;
       }
@@ -3052,8 +3010,7 @@ export default function App() {
       await sendStreamUiRequest(text, attachments);
     },
     [
-      attachmentUploadGate.errorIds.length,
-      attachmentUploadGate.inFlight,
+      isAttachmentSendBlocked,
       runArtifactSourceEdit,
       sendStreamUiRequest
     ]
@@ -3064,8 +3021,7 @@ export default function App() {
     isRunning: isActiveSessionSending,
     isSendDisabled:
       isSending ||
-      attachmentUploadGate.inFlight > 0 ||
-      attachmentUploadGate.errorIds.length > 0,
+      isAttachmentSendBlocked,
     convertMessage,
     onNew: handleNewMessage,
     onCancel: handleCancelRun,
@@ -3102,7 +3058,8 @@ export default function App() {
             <SessionSidebar
               sessions={sidebarSessionItems}
               activeSessionId={sidebarActiveSessionId}
-              isSending={isSending}
+              isSending={isSending || hasComposerAttachmentDrafts}
+              isSessionSelectionBlocked={hasComposerAttachmentDrafts}
               themeMode={themeMode}
               apiSettings={apiSettings}
               searchSettings={searchSettings}

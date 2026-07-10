@@ -3,12 +3,35 @@ import { describe, it } from "node:test";
 import {
   closeAuthAndDiscard,
   openManualAuth,
+  pinManagedRequestToSession,
   queueManagedAuthRequest,
   replayManagedAuthRequest
 } from "./managedAuthContinuation";
 import { createPendingRequestSlot } from "./pendingRequestSlot";
 
 describe("managed auth continuation", () => {
+  it("pins a queued request to its original session without mutating it", () => {
+    const request = {
+      text: "hello",
+      attachments: [{ id: "image-1" }],
+      options: {
+        targetSessionId: "stale-session",
+        appendUserMessage: false
+      }
+    };
+
+    const pinned = pinManagedRequestToSession(request, "session-owner");
+
+    assert.notEqual(pinned, request);
+    assert.notEqual(pinned.options, request.options);
+    assert.equal(pinned.attachments, request.attachments);
+    assert.deepEqual(pinned.options, {
+      targetSessionId: "session-owner",
+      appendUserMessage: false
+    });
+    assert.equal(request.options.targetSessionId, "stale-session");
+  });
+
   it("queues managed chat before opening authentication", () => {
     const slot = createPendingRequestSlot<{ id: string }>();
     const request = { id: "request-1" };
