@@ -4,11 +4,21 @@ export type ArtifactSelectionController = {
   getSelections(): ArtifactSelection[];
   changeSelections(selections: ArtifactSelection[]): void;
   clearSelections(): void;
+  clearSelectionsForMessage(messageId: string): void;
 };
 
 export type ArtifactSelectionControllerPorts = {
-  onSelectionsCleared(): void;
+  onSelectionsCleared(messageId?: string): void;
 };
+
+export function isArtifactSelectionTargetActive(
+  activeSessionId: string,
+  targetSessionId: string
+): boolean {
+  return Boolean(
+    activeSessionId.trim() && activeSessionId === targetSessionId
+  );
+}
 
 export function createArtifactSelectionController(
   ports: ArtifactSelectionControllerPorts
@@ -27,6 +37,13 @@ export function createArtifactSelectionController(
     clearSelections() {
       selections = [];
       ports.onSelectionsCleared();
+    },
+
+    clearSelectionsForMessage(messageId) {
+      selections = selections.filter(
+        (selection) => selection.messageId !== messageId
+      );
+      ports.onSelectionsCleared(messageId);
     }
   };
 }

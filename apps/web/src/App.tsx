@@ -28,7 +28,6 @@ import {
 } from "./core/apiSettings";
 import { serializeSearchSettings } from "./core/searchSettings";
 import { buildArtifactContext } from "./core/artifactContext";
-import type { ArtifactSelection } from "./core/artifactSelection";
 import {
   getSnapshotDiagnostics,
   renderSnapshotToPngBlob
@@ -66,6 +65,7 @@ import {
 } from "./features/chat/chatErrors";
 import { createChatStreamLineHandler } from "./features/chat/chatStreamEvents";
 import { reconcileChatRunState } from "./features/chat/chatRunReconcile";
+import { createGenerationActivityCoordinator } from "./features/chat/generationActivityCoordinator";
 import {
   convertMessage,
   getAppendMessageImages,
@@ -108,6 +108,7 @@ import { useSessionActions } from "./features/sessions/useSessionActions";
 import { useSessionAttachmentController } from "./features/sessions/useSessionAttachmentController";
 import {
   updateMessageByIdInState,
+  updateMessageInSessionByIdInState,
   upsertSessionFilesInState
 } from "./features/sessions/sessionStateMutations";
 import {
@@ -122,24 +123,20 @@ import {
   getArtifactEditRawStream,
   getResolvedArtifactEditId
 } from "./features/artifacts/artifactEditModel";
-import { requestArtifactEdit } from "./features/artifacts/artifactEditApi";
 import {
-  artifactSelectionToReference,
   buildCompletedAssistantPatchFromRawStream
 } from "./features/artifacts/artifactMessageProjection";
 import { hasRenderError } from "./features/artifacts/renderErrors";
 import { buildVisualRepairPrompt } from "./features/artifacts/visualRepair";
 import { useArtifactSelections } from "./features/artifacts/useArtifactSelections";
+import { isArtifactSelectionTargetActive } from "./features/artifacts/artifactSelectionController";
 import { useArtifactActions } from "./features/artifacts/useArtifactActions";
-import {
-  applyPendingArtifactEditOperation,
-  cancelArtifactEditOperation,
-  completeArtifactEditOperation,
-  failArtifactEditOperation,
-  prepareArtifactEditRegeneration,
-  prepareArtifactSourceEdit,
-  selectArtifactEditVersion
-} from "./features/artifacts/artifactEditOperationModel";
+import { selectArtifactEditVersion } from "./features/artifacts/artifactEditOperationModel";
+import { useArtifactEditController } from "./features/artifacts/useArtifactEditController";
+import type {
+  ArtifactEditMutationOutcome,
+  ArtifactEditTarget
+} from "./features/artifacts/artifactEditController";
 import { coerceApiSettingsForRuntime } from "./features/settings/appSettingsPolicy";
 import { useAppSettings } from "./features/settings/useAppSettings";
 import { useCloudAuthController } from "./features/auth/useCloudAuthController";
@@ -315,7 +312,14 @@ export default function App() {
   const branchRunCancelCleanupRef = useRef<
     Map<string, BranchRunCancelCleanup>
   >(new Map());
-  const localArtifactEditAbortRef = useRef<AbortController | null>(null);
+  const [generationActivity] = useState(() =>
+    createGenerationActivityCoordinator({
+      onBusyChange: (busy) => {
+        isSendingRef.current = busy;
+        setIsSending(busy);
+      }
+    })
+  );
   const [pendingManagedRequestSlot] = useState(
     () => createPendingRequestSlot<PendingManagedRequest>(),
   );
@@ -323,7 +327,9 @@ export default function App() {
     getSelections: getArtifactSelections,
     changeSelections: handleArtifactSelectionsChange,
     clearSelections: clearArtifactSelections,
-    selectionClearVersion: artifactSelectionClearVersion
+    clearSelectionsForMessage: clearArtifactSelectionsForMessage,
+    selectionClearVersion: artifactSelectionClearVersion,
+    selectionClearMessageId: artifactSelectionClearMessageId
   } = useArtifactSelections();
   const {
     adapter: attachmentAdapter,
@@ -379,13 +385,12 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      localArtifactEditAbortRef.current?.abort();
-      localArtifactEditAbortRef.current = null;
       runConnectionsRef.current.forEach((controller) => controller.abort());
       runConnectionsRef.current.clear();
       branchRunCancelCleanupRef.current.clear();
+      generationActivity.reset();
     };
-  }, []);
+  }, [generationActivity]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -528,6 +533,70 @@ export default function App() {
     },
     [setSessionStateAndRef]
   );
+
+  const mutateArtifactEditMessage = useCallback(
+    (
+      target: ArtifactEditTarget,
+      updater: (message: ClientMessage) => ClientMessage
+    ): ArtifactEditMutationOutcome => {
+      let found = false;
+      let changed = false;
+      setSessionStateAndRef((current) =>
+        updateMessageInSessionByIdInState(
+          current,
+          target.sessionId,
+          target.assistantId,
+          (message) => {
+            found = true;
+            const next = updater(message);
+            changed = next !== message;
+            return next;
+          }
+        )
+      );
+      return !found ? "missing" : changed ? "applied" : "unchanged";
+    },
+    [setSessionStateAndRef]
+  );
+
+  const clearArtifactSelectionsForTarget = useCallback(
+    (target: ArtifactEditTarget) => {
+      if (
+        !isArtifactSelectionTargetActive(
+          activeSessionIdRef.current,
+          target.sessionId
+        )
+      ) {
+        return;
+      }
+      clearArtifactSelectionsForMessage(target.assistantId);
+    },
+    [clearArtifactSelectionsForMessage]
+  );
+
+  const {
+    runSourceEdit: runArtifactSourceEdit,
+    regenerate: regenerateArtifactEditNode,
+    editPrompt: handleEditArtifactEditPrompt,
+    cancelActive: cancelActiveArtifactEdit,
+    isRunning: isLocalArtifactEditRunning
+  } = useArtifactEditController({
+    sessionStateRef,
+    activeSessionIdRef,
+    sessionClientIdRef,
+    apiSettings,
+    runtimeSettings,
+    cloudEnabled,
+    authenticated: Boolean(authenticatedUser),
+    themeMode,
+    isBusy: generationActivity.isBusy,
+    mutateMessage: mutateArtifactEditMessage,
+    tryAcquireBusy: generationActivity.tryAcquireLocal,
+    clearSelections: clearArtifactSelectionsForTarget,
+    openAuthentication: openAuthOverlay,
+    saveNow: saveCurrentSessionStateNow,
+    refreshAuthentication: refreshAuthSummary
+  });
 
   const updateAssistant = useCallback(
     (id: string, patch: Partial<ClientMessage>) => {
@@ -723,8 +792,8 @@ export default function App() {
       (session) => session.id === activeSessionIdRef.current
     );
     const runIds = getSessionStreamingRunIds(activeSession);
-    const localArtifactEditController = localArtifactEditAbortRef.current;
-    if (!runIds.length && !localArtifactEditController) {
+    const cancelledLocalArtifactEdit = cancelActiveArtifactEdit();
+    if (!runIds.length && !cancelledLocalArtifactEdit) {
       return;
     }
 
@@ -736,7 +805,6 @@ export default function App() {
     );
 
     runIds.forEach((runId) => cancelledRunIdsRef.current.add(runId));
-    localArtifactEditController?.abort();
 
     const cancelRequests = runIds.map((runId) =>
       cancelChatRun(runId, sessionClientIdRef.current).catch((error) => {
@@ -748,6 +816,7 @@ export default function App() {
       const controller = runConnectionsRef.current.get(runId);
       controller?.abort();
       runConnectionsRef.current.delete(runId);
+      generationActivity.finishChatRun(runId);
     });
     if (branchCleanupRunIds.length) {
       removeCancelledBranchRunVariants(branchCleanupRunIds);
@@ -755,17 +824,16 @@ export default function App() {
     if (patchCancelledRunIds.length) {
       markRunsCancelled(patchCancelledRunIds);
     }
-    const nextIsSending =
-      runConnectionsRef.current.size > 0 ||
-      Boolean(localArtifactEditAbortRef.current);
-    setIsSending(nextIsSending);
-    isSendingRef.current = nextIsSending;
-
     await Promise.allSettled(cancelRequests);
     window.setTimeout(() => {
       runIds.forEach((runId) => cancelledRunIdsRef.current.delete(runId));
     }, SESSION_SYNC_INTERVAL_MS);
-  }, [markRunsCancelled, removeCancelledBranchRunVariants]);
+  }, [
+    cancelActiveArtifactEdit,
+    generationActivity,
+    markRunsCancelled,
+    removeCancelledBranchRunVariants
+  ]);
 
   const handleSelectBranch = useCallback(
     (groupId: string, variantId: string) => {
@@ -840,7 +908,10 @@ export default function App() {
       options: SendStreamUiRequestOptions = {}
     ) => {
       const trimmed = text.trim();
-      if ((!trimmed && attachments.length === 0) || isSendingRef.current) {
+      if (
+        (!trimmed && attachments.length === 0) ||
+        generationActivity.isBusy()
+      ) {
         return;
       }
 
@@ -939,52 +1010,114 @@ export default function App() {
       ) => {
         updateAssistant(assistantId, decorateAssistantPatch(patch, phase));
       };
-      if (options.cancelBranchVariant) {
-        branchRunCancelCleanupRef.current.set(generationRunId, {
-          sessionId: requestSessionId,
-          groupId: options.cancelBranchVariant.groupId,
-          variantId: options.cancelBranchVariant.variantId,
-          fallbackVariantId: options.cancelBranchVariant.fallbackVariantId
+      const chatActivityLease =
+        generationActivity.tryAcquireChatRun(generationRunId);
+      if (!chatActivityLease) {
+        return;
+      }
+
+      let setupRenderer: StreamingRenderer | null = null;
+      let setupStreamController: AbortController | null = null;
+      let setupUnsubscribeSnapshot: (() => void) | null = null;
+      const cleanupChatActivity = (rollbackBranch = false) => {
+        try {
+          setupUnsubscribeSnapshot?.();
+        } catch (error) {
+          console.warn("Could not unsubscribe ChatHTML renderer.", error);
+        }
+        if (
+          setupRenderer &&
+          renderersRef.current.get(assistantId) === setupRenderer
+        ) {
+          renderersRef.current.delete(assistantId);
+        }
+        if (
+          setupStreamController &&
+          runConnectionsRef.current.get(generationRunId) ===
+            setupStreamController
+        ) {
+          runConnectionsRef.current.delete(generationRunId);
+        }
+        try {
+          if (
+            rollbackBranch &&
+            branchRunCancelCleanupRef.current.has(generationRunId)
+          ) {
+            removeCancelledBranchRunVariants([generationRunId]);
+          } else {
+            branchRunCancelCleanupRef.current.delete(generationRunId);
+          }
+        } finally {
+          chatActivityLease.release();
+        }
+      };
+
+      try {
+        if (options.cancelBranchVariant) {
+          branchRunCancelCleanupRef.current.set(generationRunId, {
+            sessionId: requestSessionId,
+            groupId: options.cancelBranchVariant.groupId,
+            variantId: options.cancelBranchVariant.variantId,
+            fallbackVariantId: options.cancelBranchVariant.fallbackVariantId
+          });
+        }
+        setupRenderer = createStreamingRenderer(themeMode);
+        renderersRef.current.set(assistantId, setupRenderer);
+        setupStreamController = new AbortController();
+        runConnectionsRef.current.set(
+          generationRunId,
+          setupStreamController
+        );
+
+        setupUnsubscribeSnapshot = setupRenderer.onSnapshot((snapshot) => {
+          updateAssistant(assistantId, { snapshot });
         });
+
+        if (transientEmptySessionIdRef.current === requestSessionId) {
+          transientEmptySessionIdRef.current = null;
+        }
+        updateSessionById(requestSessionId, (session) => {
+          const nextMessages = options.insertMessages
+            ? options.insertMessages(
+                session.messages,
+                userMessage,
+                assistantMessage
+              )
+            : appendUserMessage
+              ? [...session.messages, userMessage, assistantMessage]
+              : [...session.messages, assistantMessage];
+          const branchSelections = options.branchSelection
+            ? {
+                ...(session.branchSelections ?? {}),
+                [options.branchSelection.groupId]:
+                  options.branchSelection.variantId
+              }
+            : session.branchSelections;
+
+          return {
+            ...session,
+            title: summarizeSession(nextMessages),
+            updatedAt: Date.now(),
+            model: requestModel || session.model,
+            reasoningEffort: requestReasoningEffort,
+            uiComplexity: requestUiComplexity,
+            branchSelections,
+            messages: nextMessages,
+            files: mergeSessionFiles([...session.files, ...uploadedFiles])
+          };
+        });
+      } catch (error) {
+        cleanupChatActivity(true);
+        console.warn("Could not initialize ChatHTML run.", error);
+        return;
       }
-      const renderer = createStreamingRenderer(themeMode);
-      renderersRef.current.set(assistantId, renderer);
-      const streamController = new AbortController();
-      runConnectionsRef.current.set(generationRunId, streamController);
 
-      const unsubscribeSnapshot = renderer.onSnapshot((snapshot) => {
-        updateAssistant(assistantId, { snapshot });
-      });
-
-      if (transientEmptySessionIdRef.current === requestSessionId) {
-        transientEmptySessionIdRef.current = null;
+      const renderer = setupRenderer;
+      const streamController = setupStreamController;
+      if (!renderer || !streamController || !setupUnsubscribeSnapshot) {
+        cleanupChatActivity(true);
+        return;
       }
-      updateSessionById(requestSessionId, (session) => {
-        const nextMessages = options.insertMessages
-          ? options.insertMessages(session.messages, userMessage, assistantMessage)
-          : appendUserMessage
-            ? [...session.messages, userMessage, assistantMessage]
-            : [...session.messages, assistantMessage];
-        const branchSelections = options.branchSelection
-          ? {
-              ...(session.branchSelections ?? {}),
-              [options.branchSelection.groupId]: options.branchSelection.variantId
-            }
-          : session.branchSelections;
-
-        return {
-          ...session,
-          title: summarizeSession(nextMessages),
-          updatedAt: Date.now(),
-          model: requestModel || session.model,
-          reasoningEffort: requestReasoningEffort,
-          uiComplexity: requestUiComplexity,
-          branchSelections,
-          messages: nextMessages,
-          files: mergeSessionFiles([...session.files, ...uploadedFiles])
-        };
-      });
-      setIsSending(true);
 
       let raw = "";
       let reasoning = options.initialReasoning ?? "";
@@ -1096,34 +1229,51 @@ export default function App() {
         });
       };
 
-      const handleStreamEvent = createChatStreamLineHandler({
-        runId: generationRunId,
-        getLastSequence: () => lastStreamSequence,
-        onSequence: (streamSequence) => {
-          lastStreamSequence = streamSequence;
-        },
-        onDone: (status, error, streamSequence) => {
-          doneStatus = status;
-          doneError = error;
-          if (typeof streamSequence === "number") {
-            updateAssistant(assistantId, { streamSequence });
-          }
-        },
-        onMemory: (event, streamSequence) => {
-          handleMemoryStreamEvent(event);
-          if (typeof streamSequence === "number") {
-            updateAssistant(assistantId, { streamSequence });
-          }
-        },
-        onReasoning: (text, streamSequence) => {
-          reasoning += text;
-          updateAssistant(assistantId, {
-            reasoning,
-            ...(typeof streamSequence === "number" ? { streamSequence } : {})
-          });
-        },
-        onContent: handleContentChunk
-      });
+      let handleStreamEvent: ReturnType<typeof createChatStreamLineHandler>;
+      try {
+        handleStreamEvent = createChatStreamLineHandler({
+          runId: generationRunId,
+          getLastSequence: () => lastStreamSequence,
+          onSequence: (streamSequence) => {
+            lastStreamSequence = streamSequence;
+          },
+          onDone: (status, error, streamSequence) => {
+            doneStatus = status;
+            doneError = error;
+            if (typeof streamSequence === "number") {
+              updateAssistant(assistantId, { streamSequence });
+            }
+          },
+          onMemory: (event, streamSequence) => {
+            handleMemoryStreamEvent(event);
+            if (typeof streamSequence === "number") {
+              updateAssistant(assistantId, { streamSequence });
+            }
+          },
+          onReasoning: (text, streamSequence) => {
+            reasoning += text;
+            updateAssistant(assistantId, {
+              reasoning,
+              ...(typeof streamSequence === "number"
+                ? { streamSequence }
+                : {})
+            });
+          },
+          onContent: handleContentChunk
+        });
+      } catch (error) {
+        cleanupChatActivity(true);
+        updateAssistantForPhase(
+          {
+            content: "I could not complete that request.",
+            error: "The chat request could not be initialized.",
+            status: "error"
+          },
+          "error"
+        );
+        console.warn("Could not initialize ChatHTML stream handler.", error);
+        return;
+      }
 
       try {
         const requestHistory =
@@ -1285,11 +1435,7 @@ export default function App() {
         if (typeof serverSyncIntervalId === "number") {
           window.clearInterval(serverSyncIntervalId);
         }
-        unsubscribeSnapshot();
-        renderersRef.current.delete(assistantId);
-        runConnectionsRef.current.delete(generationRunId);
-        branchRunCancelCleanupRef.current.delete(generationRunId);
-        setIsSending(runConnectionsRef.current.size > 0);
+        cleanupChatActivity();
         if (requestApiSettings.apiKeySource === "managed") {
           void refreshAuthSummary().catch((error) => {
             console.warn("Could not refresh ChatHTML Cloud account.", error);
@@ -1301,10 +1447,12 @@ export default function App() {
       apiSettings,
       authenticatedUser,
       cloudEnabled,
+      generationActivity,
       handleMemoryStreamEvent,
       openAuthOverlay,
       pendingManagedRequestSlot,
       refreshAuthSummary,
+      removeCancelledBranchRunVariants,
       runtimeSettings,
       searchSettings,
       themeMode,
@@ -1342,7 +1490,7 @@ export default function App() {
       requestHistory?: SendStreamUiRequestOptions["requestHistory"];
       preserveFollowingMessages?: boolean;
     }) => {
-      if (isSendingRef.current) {
+      if (generationActivity.isBusy()) {
         return;
       }
 
@@ -1504,7 +1652,7 @@ export default function App() {
         }
       });
     },
-    [sendStreamUiRequest]
+    [generationActivity, sendStreamUiRequest]
   );
 
   const decorateGeneratedArtifactBatchPatch = useCallback(
@@ -1594,7 +1742,7 @@ export default function App() {
       initialReasoning?: string;
       requestHistory?: SendStreamUiRequestOptions["requestHistory"];
     }) => {
-      if (isSendingRef.current) {
+      if (generationActivity.isBusy()) {
         return;
       }
 
@@ -1670,12 +1818,16 @@ export default function App() {
           )
       });
     },
-    [decorateGeneratedArtifactBatchPatch, sendStreamUiRequest]
+    [
+      decorateGeneratedArtifactBatchPatch,
+      generationActivity,
+      sendStreamUiRequest
+    ]
   );
 
   const handleVisualRepairAssistant = useCallback(
     async (assistantId: string, snapshot: RenderSnapshot, width: number) => {
-      if (isSendingRef.current || snapshot.status !== "complete") {
+      if (generationActivity.isBusy() || snapshot.status !== "complete") {
         return;
       }
 
@@ -1788,168 +1940,11 @@ export default function App() {
         console.warn("Could not start visual artifact repair.", error);
       }
     },
-    [apiSettings.model, startGeneratedArtifactBatch, themeMode]
-  );
-
-  const regenerateArtifactEditNode = useCallback(
-    async (
-      assistantId: string,
-      editId: string,
-      nextPrompt?: string
-    ): Promise<boolean> => {
-      if (isSendingRef.current) {
-        return true;
-      }
-
-      const session =
-        sessionStateRef.current.sessions.find((candidate) =>
-          candidate.messages.some((message) => message.id === assistantId)
-        ) ??
-        sessionStateRef.current.sessions.find(
-          (candidate) => candidate.id === activeSessionIdRef.current
-        ) ??
-        sessionStateRef.current.sessions[0];
-      const assistant = session?.messages.find(
-        (message) => message.id === assistantId && message.role === "assistant"
-      );
-      if (!session || !assistant) {
-        return false;
-      }
-
-      const prepared = prepareArtifactEditRegeneration(
-        assistant,
-        editId,
-        nextPrompt,
-        {
-          createEditId: () => createId("artifact-edit"),
-          createVariantId: () => createId("artifact-edit-variant"),
-          createOperationId: () => createId("artifact-edit-operation"),
-          now: Date.now
-        }
-      );
-      if (prepared.status === "missing") {
-        return false;
-      }
-      if (prepared.status === "pending") {
-        return true;
-      }
-      if (prepared.status === "invalid") {
-        console.warn("Artifact edit regeneration requires a completed source.");
-        return true;
-      }
-      const operation = prepared.operation;
-
-      const requestModel = (session.model || apiSettings.model).trim();
-      const requestReasoningEffort =
-        session.reasoningEffort ?? apiSettings.reasoningEffort;
-      const requestUiComplexity = normalizeUiComplexity(
-        session.uiComplexity ?? apiSettings.uiComplexity
-      );
-      const requestApiSettings = coerceApiSettingsForRuntime(
-        normalizeApiSettings({
-          ...apiSettings,
-          model: requestModel,
-          reasoningEffort: requestReasoningEffort,
-          uiComplexity: requestUiComplexity
-        }),
-        runtimeSettings
-      );
-      if (
-        requestApiSettings.apiKeySource === "managed" &&
-        cloudEnabled &&
-        !authenticatedUser
-      ) {
-        openAuthOverlay();
-        return true;
-      }
-
-      const controller = new AbortController();
-      localArtifactEditAbortRef.current = controller;
-      updateAssistantMessage(assistantId, (message) =>
-        applyPendingArtifactEditOperation(message, operation, themeMode)
-      );
-      setIsSending(true);
-      isSendingRef.current = true;
-
-      try {
-        const result = await requestArtifactEdit(
-          {
-            source: operation.source,
-            prompt: operation.prompt,
-            references: operation.references,
-            apiSettings: serializeApiSettings(requestApiSettings)
-          },
-          sessionClientIdRef.current,
-          controller.signal
-        );
-        const editCount = result.edits?.length;
-
-        let didComplete = false;
-        updateAssistantMessage(assistantId, (message) => {
-          const next = completeArtifactEditOperation(
-            message,
-            operation,
-            {
-              rawStream: result.rawStream,
-              summary: result.summary,
-              editCount
-            },
-            themeMode
-          );
-          didComplete ||= next !== message;
-          return next;
-        });
-        if (didComplete) {
-          clearArtifactSelections();
-        }
-      } catch (error) {
-        if (isAbortError(error)) {
-          updateAssistantMessage(assistantId, (message) =>
-            cancelArtifactEditOperation(message, operation, themeMode)
-          );
-          return true;
-        }
-
-        const errorMessage =
-          error instanceof Error
-            ? sanitizeChatErrorMessage(
-                error.message,
-                "The artifact edit regeneration failed."
-              )
-            : "The artifact edit regeneration failed.";
-        updateAssistantMessage(assistantId, (message) =>
-          failArtifactEditOperation(message, operation, errorMessage)
-        );
-      } finally {
-        if (localArtifactEditAbortRef.current === controller) {
-          localArtifactEditAbortRef.current = null;
-        }
-        const nextIsSending =
-          runConnectionsRef.current.size > 0 ||
-          Boolean(localArtifactEditAbortRef.current);
-        setIsSending(nextIsSending);
-        isSendingRef.current = nextIsSending;
-        saveCurrentSessionStateNow();
-        if (requestApiSettings.apiKeySource === "managed") {
-          void refreshAuthSummary().catch((error) => {
-            console.warn("Could not refresh ChatHTML Cloud account.", error);
-          });
-        }
-      }
-
-      return true;
-    },
     [
-      apiSettings,
-      authenticatedUser,
-      clearArtifactSelections,
-      cloudEnabled,
-      openAuthOverlay,
-      refreshAuthSummary,
-      runtimeSettings,
-      saveCurrentSessionStateNow,
-      themeMode,
-      updateAssistantMessage
+      apiSettings.model,
+      generationActivity,
+      startGeneratedArtifactBatch,
+      themeMode
     ]
   );
 
@@ -2088,172 +2083,6 @@ export default function App() {
     sendActionMessage: sendArtifactActionMessage
   });
 
-  const runArtifactSourceEdit = useCallback(
-    async (
-      prompt: string,
-      selections: ArtifactSelection[],
-      attachments: ImageAttachment[] = []
-    ) => {
-      const trimmed = prompt.trim();
-      if (!trimmed || isSendingRef.current || !selections.length) {
-        return;
-      }
-      if (attachments.length > 0) {
-        console.warn(
-          "Local artifact edits do not support attachments yet. Remove the attachment and try again."
-        );
-        return;
-      }
-
-      const selectedMessageIds = Array.from(
-        new Set(selections.map((selection) => selection.messageId))
-      );
-      const assistantId = selectedMessageIds[0];
-      if (!assistantId || selectedMessageIds.length !== 1) {
-        console.warn("Artifact edits require references from a single artifact.");
-        return;
-      }
-
-      const session =
-        sessionStateRef.current.sessions.find((candidate) =>
-          candidate.messages.some((message) => message.id === assistantId)
-        ) ??
-        sessionStateRef.current.sessions.find(
-          (candidate) => candidate.id === activeSessionIdRef.current
-        ) ??
-        sessionStateRef.current.sessions[0];
-      const assistant = session?.messages.find(
-        (message) => message.id === assistantId && message.role === "assistant"
-      );
-      if (!session || !assistant) {
-        console.warn("Artifact edits require a completed artifact source.");
-        return;
-      }
-
-      const previousEditId = getResolvedArtifactEditId(assistant);
-      const source = getArtifactEditRawStream(assistant, previousEditId) ?? "";
-      if (!source.trim()) {
-        console.warn("Artifact edits require a completed artifact source.");
-        return;
-      }
-
-      const requestModel = (session.model || apiSettings.model).trim();
-      const requestReasoningEffort =
-        session.reasoningEffort ?? apiSettings.reasoningEffort;
-      const requestUiComplexity = normalizeUiComplexity(
-        session.uiComplexity ?? apiSettings.uiComplexity
-      );
-      const requestApiSettings = coerceApiSettingsForRuntime(
-        normalizeApiSettings({
-          ...apiSettings,
-          model: requestModel,
-          reasoningEffort: requestReasoningEffort,
-          uiComplexity: requestUiComplexity
-        }),
-        runtimeSettings
-      );
-      if (
-        requestApiSettings.apiKeySource === "managed" &&
-        cloudEnabled &&
-        !authenticatedUser
-      ) {
-        openAuthOverlay();
-        return;
-      }
-
-      const references = selections.map(artifactSelectionToReference);
-      const operation = prepareArtifactSourceEdit(assistant, {
-        prompt: trimmed,
-        references,
-        editId: createId("artifact-edit"),
-        variantId: createId("artifact-edit-variant"),
-        operationId: createId("artifact-edit-operation"),
-        createdAt: Date.now()
-      });
-      if (!operation) {
-        console.warn("Artifact edits require a completed artifact source.");
-        return;
-      }
-      const controller = new AbortController();
-      localArtifactEditAbortRef.current = controller;
-      updateAssistantMessage(assistantId, (message) =>
-        applyPendingArtifactEditOperation(message, operation, themeMode)
-      );
-      clearArtifactSelections();
-      setIsSending(true);
-      isSendingRef.current = true;
-
-      try {
-        const result = await requestArtifactEdit(
-          {
-            source: operation.source,
-            prompt: operation.prompt,
-            references: operation.references,
-            apiSettings: serializeApiSettings(requestApiSettings)
-          },
-          sessionClientIdRef.current,
-          controller.signal
-        );
-        const editCount = result.edits?.length;
-
-        updateAssistantMessage(assistantId, (message) =>
-          completeArtifactEditOperation(
-            message,
-            operation,
-            {
-              rawStream: result.rawStream,
-              summary: result.summary,
-              editCount
-            },
-            themeMode
-          )
-        );
-      } catch (error) {
-        if (isAbortError(error)) {
-          updateAssistantMessage(assistantId, (message) =>
-            cancelArtifactEditOperation(message, operation, themeMode)
-          );
-          return;
-        }
-
-        const message =
-          error instanceof Error
-            ? sanitizeChatErrorMessage(error.message, "The artifact edit failed.")
-            : "The artifact edit failed.";
-        updateAssistantMessage(assistantId, (current) =>
-          failArtifactEditOperation(current, operation, message)
-        );
-      } finally {
-        if (localArtifactEditAbortRef.current === controller) {
-          localArtifactEditAbortRef.current = null;
-        }
-        const nextIsSending =
-          runConnectionsRef.current.size > 0 ||
-          Boolean(localArtifactEditAbortRef.current);
-        setIsSending(nextIsSending);
-        isSendingRef.current = nextIsSending;
-        saveCurrentSessionStateNow();
-        if (requestApiSettings.apiKeySource === "managed") {
-          void refreshAuthSummary().catch((error) => {
-            console.warn("Could not refresh ChatHTML Cloud account.", error);
-          });
-        }
-      }
-    },
-    [
-      apiSettings,
-      authenticatedUser,
-      clearArtifactSelections,
-      cloudEnabled,
-      openAuthOverlay,
-      refreshAuthSummary,
-      runtimeSettings,
-      saveCurrentSessionStateNow,
-      themeMode,
-      updateAssistantMessage
-    ]
-  );
-
   useEffect(() => {
     if (!sessionsLoaded) {
       return;
@@ -2271,16 +2100,59 @@ export default function App() {
           continue;
         }
 
+        const chatActivityLease =
+          generationActivity.registerRestoredChatRun(generationRunId);
+        if (!chatActivityLease) {
+          continue;
+        }
         const controller = new AbortController();
         runConnectionsRef.current.set(generationRunId, controller);
-        setIsSending(true);
 
         void (async () => {
-          const renderer = createStreamingRenderer(themeMode);
-          renderersRef.current.set(message.id, renderer);
-          const unsubscribeSnapshot = renderer.onSnapshot((snapshot) => {
-            updateAssistant(message.id, { snapshot });
-          });
+          let setupRenderer: StreamingRenderer | null = null;
+          let setupUnsubscribeSnapshot: (() => void) | null = null;
+          const cleanupRestoredChatActivity = () => {
+            try {
+              setupUnsubscribeSnapshot?.();
+            } catch (error) {
+              console.warn("Could not unsubscribe ChatHTML renderer.", error);
+            }
+            if (
+              setupRenderer &&
+              renderersRef.current.get(message.id) === setupRenderer
+            ) {
+              renderersRef.current.delete(message.id);
+            }
+            if (
+              runConnectionsRef.current.get(generationRunId) === controller
+            ) {
+              runConnectionsRef.current.delete(generationRunId);
+            }
+            chatActivityLease.release();
+          };
+
+          try {
+            setupRenderer = createStreamingRenderer(themeMode);
+            renderersRef.current.set(message.id, setupRenderer);
+            setupUnsubscribeSnapshot = setupRenderer.onSnapshot((snapshot) => {
+              updateAssistant(message.id, { snapshot });
+            });
+          } catch (error) {
+            cleanupRestoredChatActivity();
+            updateAssistant(message.id, {
+              content: "I could not complete that request.",
+              status: "error",
+              error: STREAM_INTERRUPTED_ERROR
+            });
+            console.warn("Could not restore ChatHTML renderer.", error);
+            return;
+          }
+
+          const renderer = setupRenderer;
+          if (!renderer || !setupUnsubscribeSnapshot) {
+            cleanupRestoredChatActivity();
+            return;
+          }
           let raw = message.rawStream ?? "";
           let reasoning = message.reasoning ?? "";
           let lastStreamSequence = message.streamSequence ?? 0;
@@ -2392,36 +2264,50 @@ export default function App() {
             });
           };
 
-          const handleStreamEvent = createChatStreamLineHandler({
-            runId: generationRunId,
-            getLastSequence: () => lastStreamSequence,
-            onSequence: (streamSequence) => {
-              lastStreamSequence = streamSequence;
-            },
-            onDone: (status, error, streamSequence) => {
-              doneStatus = status;
-              doneError = error;
-              if (typeof streamSequence === "number") {
-                updateAssistant(message.id, { streamSequence });
-              }
-            },
-            onMemory: (event, streamSequence) => {
-              handleMemoryStreamEvent(event);
-              if (typeof streamSequence === "number") {
-                updateAssistant(message.id, { streamSequence });
-              }
-            },
-            onReasoning: (text, streamSequence) => {
-              reasoning += text;
-              updateAssistant(message.id, {
-                reasoning,
-                ...(typeof streamSequence === "number"
-                  ? { streamSequence }
-                  : {})
-              });
-            },
-            onContent: handleContentChunk
-          });
+          let handleStreamEvent: ReturnType<
+            typeof createChatStreamLineHandler
+          >;
+          try {
+            handleStreamEvent = createChatStreamLineHandler({
+              runId: generationRunId,
+              getLastSequence: () => lastStreamSequence,
+              onSequence: (streamSequence) => {
+                lastStreamSequence = streamSequence;
+              },
+              onDone: (status, error, streamSequence) => {
+                doneStatus = status;
+                doneError = error;
+                if (typeof streamSequence === "number") {
+                  updateAssistant(message.id, { streamSequence });
+                }
+              },
+              onMemory: (event, streamSequence) => {
+                handleMemoryStreamEvent(event);
+                if (typeof streamSequence === "number") {
+                  updateAssistant(message.id, { streamSequence });
+                }
+              },
+              onReasoning: (text, streamSequence) => {
+                reasoning += text;
+                updateAssistant(message.id, {
+                  reasoning,
+                  ...(typeof streamSequence === "number"
+                    ? { streamSequence }
+                    : {})
+                });
+              },
+              onContent: handleContentChunk
+            });
+          } catch (error) {
+            cleanupRestoredChatActivity();
+            updateAssistant(message.id, {
+              content: "I could not complete that request.",
+              status: "error",
+              error: STREAM_INTERRUPTED_ERROR
+            });
+            console.warn("Could not restore ChatHTML stream handler.", error);
+            return;
+          }
 
           try {
             startServerReconcile();
@@ -2523,15 +2409,13 @@ export default function App() {
             if (typeof serverSyncIntervalId === "number") {
               window.clearInterval(serverSyncIntervalId);
             }
-            unsubscribeSnapshot();
-            renderersRef.current.delete(message.id);
-            runConnectionsRef.current.delete(generationRunId);
-            setIsSending(runConnectionsRef.current.size > 0);
+            cleanupRestoredChatActivity();
           }
         })();
       }
     }
   }, [
+    generationActivity,
     handleMemoryStreamEvent,
     sessionState.sessions,
     sessionsLoaded,
@@ -2564,47 +2448,6 @@ export default function App() {
     sendStreamUiRequest,
     sessionsLoaded
   ]);
-
-  const handleEditArtifactEditPrompt = useCallback(
-    (assistantId: string, editId: string, prompt: string): boolean => {
-      const trimmed = prompt.trim();
-      if (!trimmed || isSendingRef.current) {
-        return false;
-      }
-
-      const currentMessage = findSessionMessage(
-        sessionStateRef.current,
-        assistantId
-      );
-      if (
-        !currentMessage ||
-        currentMessage.role !== "assistant" ||
-        !currentMessage.artifactEdits?.length
-      ) {
-        return false;
-      }
-
-      if (currentMessage.artifactEdits.some((edit) => edit.status === "pending")) {
-        console.warn("Wait for the current artifact edit to finish before editing.");
-        return false;
-      }
-
-      const edit = currentMessage.artifactEdits.find(
-        (candidate) => candidate.id === editId
-      );
-      if (!edit || edit.status !== "complete") {
-        return false;
-      }
-
-      if (trimmed === edit.prompt.trim()) {
-        return true;
-      }
-
-      void regenerateArtifactEditNode(assistantId, editId, trimmed);
-      return true;
-    },
-    [regenerateArtifactEditNode]
-  );
 
   const handleSelectArtifactEdit = useCallback(
     (assistantId: string, editId?: string) => {
@@ -2649,7 +2492,7 @@ export default function App() {
 
   const runtime = useExternalStoreRuntime({
     messages,
-    isRunning: isActiveSessionSending,
+    isRunning: isActiveSessionSending || isLocalArtifactEditRunning,
     isSendDisabled:
       isSending ||
       isAttachmentSendBlocked,
@@ -2728,6 +2571,7 @@ export default function App() {
             reasoningEffort={activeSessionReasoningEffort}
             uiComplexity={activeSessionUiComplexity}
             artifactSelectionClearVersion={artifactSelectionClearVersion}
+            artifactSelectionClearMessageId={artifactSelectionClearMessageId}
             onRuntimeError={handleRuntimeError}
             onArtifactAction={handleArtifactAction}
             onVisualRepairAssistant={handleVisualRepairAssistant}

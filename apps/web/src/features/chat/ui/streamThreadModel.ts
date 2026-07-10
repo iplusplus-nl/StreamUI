@@ -106,6 +106,16 @@ export function retainVisibleArtifactSelections(
   return next.length === current.length ? current : next;
 }
 
+export function removeArtifactSelectionsForMessage(
+  current: ArtifactSelection[],
+  messageId: string
+): ArtifactSelection[] {
+  const next = current.filter(
+    (selection) => selection.messageId !== messageId
+  );
+  return next.length === current.length ? current : next;
+}
+
 export function retainCapturableArtifactSelections(
   current: ArtifactSelection[],
   artifactEditingEnabled: boolean

@@ -11,6 +11,7 @@ import {
 import {
   addArtifactSelection,
   groupArtifactSelectionsByMessageId,
+  removeArtifactSelectionsForMessage,
   resolveSelectionModeMessageId,
   retainCapturableArtifactSelections,
   retainVisibleArtifactSelections,
@@ -23,6 +24,7 @@ type UseArtifactSelectionControllerInput = {
   visibleMessageIds: ReadonlySet<string>;
   artifactEditingEnabled: boolean;
   clearVersion: number;
+  clearMessageId?: string;
   onChange(selections: ArtifactSelection[]): void;
 };
 
@@ -39,6 +41,7 @@ export function useArtifactSelectionController({
   visibleMessageIds,
   artifactEditingEnabled,
   clearVersion,
+  clearMessageId,
   onChange
 }: UseArtifactSelectionControllerInput) {
   const [selections, setSelections] = useState<ArtifactSelection[]>([]);
@@ -84,9 +87,19 @@ export function useArtifactSelectionController({
       return;
     }
 
+    if (clearMessageId) {
+      setSelections((current) =>
+        removeArtifactSelectionsForMessage(current, clearMessageId)
+      );
+      setSelectionModeMessageId((current) =>
+        current === clearMessageId ? null : current
+      );
+      return;
+    }
+
     setSelections([]);
     setSelectionModeMessageId(null);
-  }, [clearVersion]);
+  }, [clearMessageId, clearVersion]);
 
   useEffect(() => {
     if (!selectionModeMessageId) {

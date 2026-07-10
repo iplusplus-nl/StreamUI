@@ -79,3 +79,47 @@ export function updateMessageByIdInState(
       }
     : state;
 }
+
+export function updateMessageInSessionByIdInState(
+  state: SessionState,
+  sessionId: string,
+  messageId: string,
+  updater: (message: ClientMessage) => ClientMessage,
+  now = Date.now()
+): SessionState {
+  const sessionIndex = state.sessions.findIndex(
+    (session) => session.id === sessionId
+  );
+  if (sessionIndex < 0) {
+    return state;
+  }
+
+  const session = state.sessions[sessionIndex];
+  const messageIndex = session.messages.findIndex(
+    (message) => message.id === messageId
+  );
+  if (messageIndex < 0) {
+    return state;
+  }
+
+  const message = session.messages[messageIndex];
+  const nextMessage = updater(message);
+  if (nextMessage === message) {
+    return state;
+  }
+
+  const messages = [...session.messages];
+  messages[messageIndex] = nextMessage;
+  const sessions = [...state.sessions];
+  sessions[sessionIndex] = {
+    ...session,
+    title: summarizeSession(messages),
+    updatedAt: now,
+    messages
+  };
+
+  return {
+    ...state,
+    sessions: sortSessions(sessions)
+  };
+}

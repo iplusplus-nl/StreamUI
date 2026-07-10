@@ -6,15 +6,22 @@ import {
 
 export type ArtifactSelections = ArtifactSelectionController & {
   selectionClearVersion: number;
+  selectionClearMessageId?: string;
 };
 
 export function useArtifactSelections(): ArtifactSelections {
-  const [selectionClearVersion, setSelectionClearVersion] = useState(0);
+  const [selectionClearRequest, setSelectionClearRequest] = useState<{
+    version: number;
+    messageId?: string;
+  }>({ version: 0 });
   const controller = useMemo(
     () =>
       createArtifactSelectionController({
-        onSelectionsCleared: () => {
-          setSelectionClearVersion((version) => version + 1);
+        onSelectionsCleared: (messageId) => {
+          setSelectionClearRequest((current) => ({
+            version: current.version + 1,
+            messageId
+          }));
         }
       }),
     []
@@ -22,6 +29,7 @@ export function useArtifactSelections(): ArtifactSelections {
 
   return {
     ...controller,
-    selectionClearVersion
+    selectionClearVersion: selectionClearRequest.version,
+    selectionClearMessageId: selectionClearRequest.messageId
   };
 }

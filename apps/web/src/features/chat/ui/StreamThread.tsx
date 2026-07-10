@@ -47,6 +47,7 @@ export type StreamThreadProps = {
   reasoningEffort: ReasoningEffort;
   uiComplexity: number;
   artifactSelectionClearVersion: number;
+  artifactSelectionClearMessageId?: string;
   onRuntimeError(id: string, error: RenderError): void;
   onArtifactAction(id: string, action: StreamUiAction): void;
   onVisualRepairAssistant(id: string, snapshot: RenderSnapshot, width: number): void;
@@ -121,6 +122,7 @@ export function StreamThread({
   reasoningEffort,
   uiComplexity,
   artifactSelectionClearVersion,
+  artifactSelectionClearMessageId,
   onRuntimeError,
   onArtifactAction,
   onVisualRepairAssistant,
@@ -218,6 +220,7 @@ export function StreamThread({
     visibleMessageIds,
     artifactEditingEnabled,
     clearVersion: artifactSelectionClearVersion,
+    clearMessageId: artifactSelectionClearMessageId,
     onChange: onArtifactSelectionsChange
   });
 

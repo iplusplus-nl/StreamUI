@@ -14,6 +14,7 @@ import {
   buildArtifactEditTimelineByUserId,
   canShowReasoningActivity,
   groupArtifactSelectionsByMessageId,
+  removeArtifactSelectionsForMessage,
   resolveSelectionModeMessageId,
   retainCapturableArtifactSelections,
   retainVisibleArtifactSelections,
@@ -194,6 +195,21 @@ describe("stream thread model", () => {
 
       assert.deepEqual(grouped.get("assistant-1"), [first, third]);
       assert.deepEqual(grouped.get("assistant-2"), [second]);
+    });
+
+    it("removes only a targeted message's selections", () => {
+      const first = selection("selection-1", "assistant-1");
+      const second = selection("selection-2", "assistant-2");
+      const current = [first, second];
+
+      assert.deepEqual(
+        removeArtifactSelectionsForMessage(current, "assistant-1"),
+        [second]
+      );
+      assert.equal(
+        removeArtifactSelectionsForMessage(current, "missing"),
+        current
+      );
     });
 
     it("keeps only the target message and replaces a duplicate key at the end", () => {

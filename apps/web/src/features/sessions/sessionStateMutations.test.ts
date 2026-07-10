@@ -7,6 +7,7 @@ import type {
 } from "../../domain/chat/sessionModel";
 import {
   updateMessageByIdInState,
+  updateMessageInSessionByIdInState,
   upsertSessionFilesInState
 } from "./sessionStateMutations";
 
@@ -154,5 +155,78 @@ describe("session state mutations", () => {
       ),
       state
     );
+  });
+
+  it("updates only the explicitly targeted session when message ids collide", () => {
+    const target = session("target", 1);
+    const other = session("other", 5);
+    target.messages[0] = { ...target.messages[0], id: "shared-message" };
+    other.messages[0] = { ...other.messages[0], id: "shared-message" };
+    const state: SessionState = {
+      activeSessionId: other.id,
+      sessions: [other, target]
+    };
+
+    const result = updateMessageInSessionByIdInState(
+      state,
+      target.id,
+      "shared-message",
+      (message) => ({ ...message, content: "Target only" }),
+      10
+    );
+
+    assert.equal(result.sessions[0].id, target.id);
+    assert.equal(result.sessions[0].messages[0].content, "Target only");
+    assert.equal(result.sessions[0].updatedAt, 10);
+    assert.equal(result.sessions[1], other);
+    assert.equal(other.messages[0].content, "other");
+  });
+
+  it("keeps exact-session missing and identity mutations as no-ops", () => {
+    const active = session("active", 1);
+    const state: SessionState = {
+      activeSessionId: active.id,
+      sessions: [active]
+    };
+    let calls = 0;
+
+    assert.equal(
+      updateMessageInSessionByIdInState(
+        state,
+        "missing-session",
+        active.messages[0].id,
+        () => {
+          throw new Error("should not run");
+        },
+        10
+      ),
+      state
+    );
+    assert.equal(
+      updateMessageInSessionByIdInState(
+        state,
+        active.id,
+        "missing-message",
+        () => {
+          throw new Error("should not run");
+        },
+        10
+      ),
+      state
+    );
+    assert.equal(
+      updateMessageInSessionByIdInState(
+        state,
+        active.id,
+        active.messages[0].id,
+        (message) => {
+          calls += 1;
+          return message;
+        },
+        10
+      ),
+      state
+    );
+    assert.equal(calls, 1);
   });
 });

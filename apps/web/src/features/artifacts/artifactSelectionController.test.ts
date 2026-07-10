@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ArtifactSelection } from "../../core/artifactSelection";
-import { createArtifactSelectionController } from "./artifactSelectionController";
+import {
+  createArtifactSelectionController,
+  isArtifactSelectionTargetActive
+} from "./artifactSelectionController";
 
-function selection(key: string): ArtifactSelection {
+function selection(
+  key: string,
+  messageId = "assistant-1"
+): ArtifactSelection {
   return {
     id: `selection-${key}`,
-    messageId: "assistant-1",
+    messageId,
     kind: "element",
     selector: `#${key}`,
     key,
@@ -38,4 +44,25 @@ test("artifact selection controller preserves changes and notifies explicit clea
   controller.clearSelections();
   assert.deepEqual(controller.getSelections(), []);
   assert.equal(clearCount, 2);
+});
+
+test("artifact selection controller clears only the requested message", () => {
+  const clearTargets: Array<string | undefined> = [];
+  const controller = createArtifactSelectionController({
+    onSelectionsCleared: (messageId) => clearTargets.push(messageId)
+  });
+  const first = selection("first", "assistant-1");
+  const second = selection("second", "assistant-2");
+  controller.changeSelections([first, second]);
+
+  controller.clearSelectionsForMessage("assistant-1");
+
+  assert.deepEqual(controller.getSelections(), [second]);
+  assert.deepEqual(clearTargets, ["assistant-1"]);
+});
+
+test("artifact selection target must still own the active session", () => {
+  assert.equal(isArtifactSelectionTargetActive("session-a", "session-a"), true);
+  assert.equal(isArtifactSelectionTargetActive("session-b", "session-a"), false);
+  assert.equal(isArtifactSelectionTargetActive("", "session-a"), false);
 });
