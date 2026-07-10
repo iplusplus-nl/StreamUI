@@ -964,6 +964,66 @@ describe("sessionModel", () => {
     assert.equal(message?.artifactEdits?.[0]?.variants[0]?.status, "pending");
   });
 
+  it("round-trips pending artifact operation ids through persistence", () => {
+    const timestamp = Date.now();
+    const serialized = serializeSessions([
+      {
+        id: "s1",
+        title: "Pending edit",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        files: [],
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "Artifact",
+            rawStream: "<chat></chat><streamui><p>Original</p></streamui>",
+            artifactEdits: [
+              {
+                id: "edit-1",
+                createdAt: timestamp,
+                prompt: "Still pending",
+                references: [],
+                activeVariantId: "variant-1",
+                variants: [
+                  {
+                    id: "variant-1",
+                    operationId: "artifact-edit-operation-1",
+                    createdAt: timestamp,
+                    status: "pending"
+                  }
+                ],
+                status: "pending"
+              }
+            ],
+            activeArtifactEditId: "edit-1"
+          }
+        ]
+      }
+    ]);
+    const reloaded = normalizeStoredSessionState(
+      JSON.parse(
+        JSON.stringify({
+          activeSessionId: "s1",
+          sessions: serialized
+        })
+      ),
+      timestamp,
+      { rebuildSnapshots: false }
+    );
+
+    assert.equal(
+      reloaded.sessions[0].messages[0].artifactEdits?.[0].variants[0]
+        .operationId,
+      "artifact-edit-operation-1"
+    );
+    assert.equal(
+      reloaded.sessions[0].messages[0].artifactEdits?.[0].variants[0].status,
+      "pending"
+    );
+  });
+
   it("does not interrupt recently restored pending artifact edits", () => {
     const now = Date.now();
     const message = normalizeStoredMessage(

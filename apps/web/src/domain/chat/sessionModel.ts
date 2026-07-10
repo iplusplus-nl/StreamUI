@@ -25,6 +25,7 @@ export type ArtifactEditReference = {
 
 export type ArtifactEditVariant = {
   id: string;
+  operationId?: string;
   createdAt: number;
   status: "pending" | "complete" | "error";
   rawStream?: string;
@@ -879,6 +880,7 @@ function normalizeArtifactEditVariant(
 
   return {
     id,
+    operationId: normalizeBoundedString(variant.operationId, 160),
     createdAt,
     status: restoredStatus,
     rawStream:

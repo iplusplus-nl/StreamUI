@@ -9,6 +9,14 @@ import {
 const source = "<chat></chat><streamui><p>Before</p></streamui>";
 const updated = "<chat></chat><streamui><p>After</p></streamui>";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("artifact edit API", () => {
   it("normalizes responses and caps summaries", () => {
     assert.deepEqual(
@@ -100,5 +108,30 @@ describe("artifact edit API", () => {
       ),
       /HTTP 502.*Provider unavailable/
     );
+  });
+
+  it("rejects an abort that arrives while the response body is pending", async () => {
+    const body = deferred<unknown>();
+    const fetchImpl: typeof fetch = async () =>
+      ({
+        ok: true,
+        json: () => body.promise
+      }) as Response;
+    const controller = new AbortController();
+    const pending = requestArtifactEdit(
+      { source, prompt: "Change", references: [], apiSettings: {} },
+      "client-1",
+      controller.signal,
+      fetchImpl
+    );
+
+    await Promise.resolve();
+    controller.abort();
+    body.resolve({ rawStream: updated });
+
+    await assert.rejects(pending, (error: unknown) => {
+      assert.equal((error as { name?: unknown }).name, "AbortError");
+      return true;
+    });
   });
 });

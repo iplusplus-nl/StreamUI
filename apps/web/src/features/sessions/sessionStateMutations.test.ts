@@ -5,7 +5,10 @@ import type {
   SessionFile,
   SessionState
 } from "../../domain/chat/sessionModel";
-import { upsertSessionFilesInState } from "./sessionStateMutations";
+import {
+  updateMessageByIdInState,
+  upsertSessionFilesInState
+} from "./sessionStateMutations";
 
 function file(
   id: string,
@@ -83,5 +86,73 @@ describe("session state mutations", () => {
     );
     assert.deepEqual(target.files, [oldFile]);
     assert.deepEqual(state.sessions, [other, target]);
+  });
+
+  it("keeps message identity no-ops from changing state or timestamps", () => {
+    const active = session("active", 1);
+    const state: SessionState = {
+      activeSessionId: active.id,
+      sessions: [active]
+    };
+    let calls = 0;
+
+    const result = updateMessageByIdInState(
+      state,
+      active.messages[0].id,
+      (message) => {
+        calls += 1;
+        return message;
+      },
+      99
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(result, state);
+    assert.equal(result.sessions[0], active);
+    assert.equal(result.sessions[0].updatedAt, 1);
+  });
+
+  it("updates a matching message, title, timestamp, and session order", () => {
+    const target = session("target", 1);
+    const other = session("other", 5);
+    const state: SessionState = {
+      activeSessionId: target.id,
+      sessions: [other, target]
+    };
+
+    const result = updateMessageByIdInState(
+      state,
+      target.messages[0].id,
+      (message) => ({ ...message, content: "Updated title" }),
+      10
+    );
+
+    assert.notEqual(result, state);
+    assert.deepEqual(result.sessions.map((item) => item.id), ["target", "other"]);
+    assert.equal(result.sessions[0].title, "Updated title");
+    assert.equal(result.sessions[0].updatedAt, 10);
+    assert.equal(result.sessions[0].messages[0].content, "Updated title");
+    assert.equal(result.sessions[1], other);
+    assert.equal(state.sessions[1], target);
+  });
+
+  it("does not invoke a message updater for a missing id", () => {
+    const active = session("active", 1);
+    const state: SessionState = {
+      activeSessionId: active.id,
+      sessions: [active]
+    };
+
+    assert.equal(
+      updateMessageByIdInState(
+        state,
+        "missing",
+        () => {
+          throw new Error("should not run");
+        },
+        10
+      ),
+      state
+    );
   });
 });

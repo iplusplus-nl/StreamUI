@@ -337,6 +337,57 @@ describe("server session merge", () => {
     assert.equal(edit?.variants?.[0]?.status, "complete");
   });
 
+  it("preserves pending artifact operation ids through server client-save merge", () => {
+    const current = {
+      sessions: [session("active", 1, [userMessage("u1", "make a card")])],
+      activeSessionId: "active"
+    };
+    const incoming = {
+      sessions: [
+        session("active", 2, [
+          userMessage("u1", "make a card"),
+          {
+            id: "a1",
+            role: "assistant" as const,
+            content: "Artifact",
+            rawStream: "<chat></chat><streamui><p>Original</p></streamui>",
+            activeArtifactEditId: "edit-1",
+            artifactEdits: [
+              {
+                id: "edit-1",
+                createdAt: 2,
+                prompt: "Still pending",
+                references: [],
+                activeVariantId: "variant-1",
+                variants: [
+                  {
+                    id: "variant-1",
+                    operationId: "artifact-edit-operation-1",
+                    createdAt: 2,
+                    status: "pending"
+                  }
+                ],
+                status: "pending"
+              }
+            ]
+          }
+        ])
+      ],
+      activeSessionId: "active"
+    };
+
+    const merged = mergeClientSaveState(current, incoming);
+    const assistant = merged.sessions[0].messages[1];
+    const variant = (
+      assistant.artifactEdits?.[0] as
+        | { variants?: Array<{ operationId?: string; status?: string }> }
+        | undefined
+    )?.variants?.[0];
+
+    assert.equal(variant?.operationId, "artifact-edit-operation-1");
+    assert.equal(variant?.status, "pending");
+  });
+
   it("allows a newer save to discard artifact edit history", () => {
     const current = {
       sessions: [

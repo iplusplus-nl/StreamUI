@@ -106,7 +106,10 @@ import { useSessionSave } from "./features/sessions/useSessionSave";
 import { useSessionIndex } from "./features/sessions/useSessionIndex";
 import { useSessionActions } from "./features/sessions/useSessionActions";
 import { useSessionAttachmentController } from "./features/sessions/useSessionAttachmentController";
-import { upsertSessionFilesInState } from "./features/sessions/sessionStateMutations";
+import {
+  updateMessageByIdInState,
+  upsertSessionFilesInState
+} from "./features/sessions/sessionStateMutations";
 import {
   commitUploadedImageFile,
   createArtifactFileUpload,
@@ -116,17 +119,10 @@ import {
 import {
   getArtifactEditActiveVariant,
   getArtifactEditCompleteRawStream,
-  getArtifactEditParentId,
   getArtifactEditRawStream,
-  getResolvedArtifactEditId,
-  hasUsableArtifactEditVariant
+  getResolvedArtifactEditId
 } from "./features/artifacts/artifactEditModel";
 import { requestArtifactEdit } from "./features/artifacts/artifactEditApi";
-import {
-  completeArtifactEditVariant,
-  failArtifactEditVariant,
-  removeArtifactEdit
-} from "./features/artifacts/artifactEditTransitions";
 import {
   artifactSelectionToReference,
   buildCompletedAssistantPatchFromRawStream
@@ -135,7 +131,15 @@ import { hasRenderError } from "./features/artifacts/renderErrors";
 import { buildVisualRepairPrompt } from "./features/artifacts/visualRepair";
 import { useArtifactSelections } from "./features/artifacts/useArtifactSelections";
 import { useArtifactActions } from "./features/artifacts/useArtifactActions";
-import { selectArtifactEditVersion } from "./features/artifacts/artifactEditOperationModel";
+import {
+  applyPendingArtifactEditOperation,
+  cancelArtifactEditOperation,
+  completeArtifactEditOperation,
+  failArtifactEditOperation,
+  prepareArtifactEditRegeneration,
+  prepareArtifactSourceEdit,
+  selectArtifactEditVersion
+} from "./features/artifacts/artifactEditOperationModel";
 import { coerceApiSettingsForRuntime } from "./features/settings/appSettingsPolicy";
 import { useAppSettings } from "./features/settings/useAppSettings";
 import { useCloudAuthController } from "./features/auth/useCloudAuthController";
@@ -518,40 +522,9 @@ export default function App() {
 
   const updateAssistantMessage = useCallback(
     (id: string, updater: (message: ClientMessage) => ClientMessage) => {
-      setSessionStateAndRef((current) => {
-        let didUpdate = false;
-        const now = Date.now();
-        const sessions = current.sessions.map((session) => {
-          let sessionChanged = false;
-          const messages = session.messages.map((message) => {
-            if (message.id !== id) {
-              return message;
-            }
-
-            didUpdate = true;
-            sessionChanged = true;
-            return updater(message);
-          });
-
-          if (!sessionChanged) {
-            return session;
-          }
-
-          return {
-            ...session,
-            title: summarizeSession(messages),
-            updatedAt: now,
-            messages
-          };
-        });
-
-        return didUpdate
-          ? {
-              ...current,
-              sessions: sortSessions(sessions)
-            }
-          : current;
-      });
+      setSessionStateAndRef((current) =>
+        updateMessageByIdInState(current, id, updater)
+      );
     },
     [setSessionStateAndRef]
   );
@@ -1843,25 +1816,28 @@ export default function App() {
         return false;
       }
 
-      const edits = assistant.artifactEdits ?? [];
-      const editIndex = edits.findIndex((edit) => edit.id === editId);
-      if (editIndex < 0) {
+      const prepared = prepareArtifactEditRegeneration(
+        assistant,
+        editId,
+        nextPrompt,
+        {
+          createEditId: () => createId("artifact-edit"),
+          createVariantId: () => createId("artifact-edit-variant"),
+          createOperationId: () => createId("artifact-edit-operation"),
+          now: Date.now
+        }
+      );
+      if (prepared.status === "missing") {
         return false;
       }
-
-      if (edits.some((edit) => edit.status === "pending")) {
+      if (prepared.status === "pending") {
         return true;
       }
-
-      const edit = edits[editIndex];
-      const isPromptEdit = nextPrompt !== undefined;
-      const prompt = (nextPrompt ?? edit.prompt).trim();
-      const sourceEditId = getArtifactEditParentId(edits, edit);
-      const source = getArtifactEditRawStream(assistant, sourceEditId) ?? "";
-      if (!prompt || !source.trim()) {
+      if (prepared.status === "invalid") {
         console.warn("Artifact edit regeneration requires a completed source.");
         return true;
       }
+      const operation = prepared.operation;
 
       const requestModel = (session.model || apiSettings.model).trim();
       const requestReasoningEffort =
@@ -1887,154 +1863,50 @@ export default function App() {
         return true;
       }
 
-      const retryExistingFailedEdit =
-        edit.status === "error" && !hasUsableArtifactEditVariant(edit);
-      const variantId =
-        retryExistingFailedEdit && edit.activeVariantId
-          ? edit.activeVariantId
-          : createId("artifact-edit-variant");
-      const nextEditId = retryExistingFailedEdit
-        ? edit.id
-        : createId("artifact-edit");
-      const createdAt = Date.now();
-      const previousActiveEditId = getResolvedArtifactEditId(assistant);
       const controller = new AbortController();
       localArtifactEditAbortRef.current = controller;
-      const pendingEdit: ArtifactEdit = {
-        id: nextEditId,
-        parentId: sourceEditId,
-        createdAt,
-        prompt,
-        references: edit.references,
-        promptBubble: isPromptEdit ? undefined : false,
-        activeVariantId: variantId,
-        variants: [
-          {
-            id: variantId,
-            createdAt,
-            status: "pending"
-          }
-        ],
-        status: "pending"
-      };
-      const pendingArtifactEdits = retryExistingFailedEdit
-        ? (assistant.artifactEdits ?? []).map((item) => {
-            if (item.id !== edit.id) {
-              return item;
-            }
-
-            const hasVariant = item.variants.some(
-              (variant) => variant.id === variantId
-            );
-            const pendingVariant = {
-              id: variantId,
-              createdAt,
-              status: "pending" as const
-            };
-
-            return {
-              ...item,
-              prompt,
-              status: "pending" as const,
-              error: undefined,
-              activeVariantId: variantId,
-              variants: hasVariant
-                ? item.variants.map((variant) =>
-                    variant.id === variantId
-                      ? {
-                          ...variant,
-                          createdAt,
-                          status: "pending" as const,
-                          rawStream: undefined,
-                          summary: undefined,
-                          error: undefined,
-                          editCount: undefined
-                        }
-                      : variant
-                  )
-                : [...item.variants, pendingVariant]
-            };
-          })
-        : [...(assistant.artifactEdits ?? []), pendingEdit];
-      updateAssistantMessage(assistantId, (message) => ({
-        ...message,
-        ...buildCompletedAssistantPatchFromRawStream(source, themeMode),
-        artifactEditBaseRawStream:
-          message.artifactEditBaseRawStream ?? message.rawStream,
-        artifactEdits: pendingArtifactEdits,
-        activeArtifactEditId: nextEditId
-      }));
+      updateAssistantMessage(assistantId, (message) =>
+        applyPendingArtifactEditOperation(message, operation, themeMode)
+      );
       setIsSending(true);
       isSendingRef.current = true;
 
       try {
         const result = await requestArtifactEdit(
           {
-            source,
-            prompt,
-            references: edit.references,
+            source: operation.source,
+            prompt: operation.prompt,
+            references: operation.references,
             apiSettings: serializeApiSettings(requestApiSettings)
           },
           sessionClientIdRef.current,
           controller.signal
         );
-        const patch = buildCompletedAssistantPatchFromRawStream(
-          result.rawStream,
-          themeMode
-        );
         const editCount = result.edits?.length;
 
-        updateAssistantMessage(assistantId, (message) =>
-          completeArtifactEditVariant(
-            { ...message, ...patch },
+        let didComplete = false;
+        updateAssistantMessage(assistantId, (message) => {
+          const next = completeArtifactEditOperation(
+            message,
+            operation,
             {
-              editId: nextEditId,
-              variantId,
               rawStream: result.rawStream,
               summary: result.summary,
-              editCount,
-              baseRawStream: assistant.artifactEditBaseRawStream ?? source
-            }
-          )
-        );
-        clearArtifactSelections();
+              editCount
+            },
+            themeMode
+          );
+          didComplete ||= next !== message;
+          return next;
+        });
+        if (didComplete) {
+          clearArtifactSelections();
+        }
       } catch (error) {
         if (isAbortError(error)) {
-          updateAssistantMessage(assistantId, (message) => {
-            if (retryExistingFailedEdit) {
-              return {
-                ...message,
-                ...buildCompletedAssistantPatchFromRawStream(source, themeMode),
-                artifactEdits: (message.artifactEdits ?? []).map((item) =>
-                  item.id === edit.id ? edit : item
-                ),
-                activeArtifactEditId: previousActiveEditId
-              };
-            }
-
-            const artifactEdits = (message.artifactEdits ?? []).filter(
-              (item) => item.id !== nextEditId
-            );
-            const fallbackRawStream = getArtifactEditRawStream(
-              {
-                ...message,
-                artifactEdits
-              },
-              previousActiveEditId
-            );
-
-            return {
-              ...message,
-              ...(fallbackRawStream
-                ? buildCompletedAssistantPatchFromRawStream(
-                    fallbackRawStream,
-                    themeMode
-                  )
-                : {}),
-              artifactEdits: artifactEdits.length ? artifactEdits : undefined,
-              activeArtifactEditId: previousActiveEditId
-            };
-          });
+          updateAssistantMessage(assistantId, (message) =>
+            cancelArtifactEditOperation(message, operation, themeMode)
+          );
           return true;
         }
 
@@ -2046,12 +1918,7 @@ export default function App() {
               )
             : "The artifact edit regeneration failed.";
         updateAssistantMessage(assistantId, (message) =>
-          failArtifactEditVariant(
-            message,
-            nextEditId,
-            variantId,
-            errorMessage
-          )
+          failArtifactEditOperation(message, operation, errorMessage)
         );
       } finally {
         if (localArtifactEditAbortRef.current === controller) {
@@ -2294,81 +2161,57 @@ export default function App() {
         return;
       }
 
-      const editId = createId("artifact-edit");
-      const variantId = createId("artifact-edit-variant");
-      const createdAt = Date.now();
       const references = selections.map(artifactSelectionToReference);
-      const controller = new AbortController();
-      localArtifactEditAbortRef.current = controller;
-      const pendingEdit: ArtifactEdit = {
-        id: editId,
-        parentId: previousEditId,
-        createdAt,
+      const operation = prepareArtifactSourceEdit(assistant, {
         prompt: trimmed,
         references,
-        activeVariantId: variantId,
-        variants: [
-          {
-            id: variantId,
-            createdAt,
-            status: "pending"
-          }
-        ],
-        status: "pending"
-      };
-
-      updateAssistantMessage(assistantId, (message) => ({
-        ...message,
-        ...buildCompletedAssistantPatchFromRawStream(source, themeMode),
-        artifactEditBaseRawStream:
-          message.artifactEditBaseRawStream ?? message.rawStream,
-        artifactEdits: [...(message.artifactEdits ?? []), pendingEdit],
-        activeArtifactEditId: editId
-      }));
+        editId: createId("artifact-edit"),
+        variantId: createId("artifact-edit-variant"),
+        operationId: createId("artifact-edit-operation"),
+        createdAt: Date.now()
+      });
+      if (!operation) {
+        console.warn("Artifact edits require a completed artifact source.");
+        return;
+      }
+      const controller = new AbortController();
+      localArtifactEditAbortRef.current = controller;
+      updateAssistantMessage(assistantId, (message) =>
+        applyPendingArtifactEditOperation(message, operation, themeMode)
+      );
       clearArtifactSelections();
       setIsSending(true);
       isSendingRef.current = true;
 
-      const failEdit = (errorMessage: string) => {
-        updateAssistantMessage(assistantId, (message) =>
-          failArtifactEditVariant(message, editId, variantId, errorMessage)
-        );
-      };
-
       try {
         const result = await requestArtifactEdit(
           {
-            source,
-            prompt: trimmed,
-            references,
+            source: operation.source,
+            prompt: operation.prompt,
+            references: operation.references,
             apiSettings: serializeApiSettings(requestApiSettings)
           },
           sessionClientIdRef.current,
           controller.signal
         );
-        const patch = buildCompletedAssistantPatchFromRawStream(
-          result.rawStream,
-          themeMode
-        );
         const editCount = result.edits?.length;
 
         updateAssistantMessage(assistantId, (message) =>
-          completeArtifactEditVariant(
-            { ...message, ...patch },
+          completeArtifactEditOperation(
+            message,
+            operation,
             {
-              editId,
-              variantId,
               rawStream: result.rawStream,
               summary: result.summary,
-              editCount,
-              baseRawStream: source
-            }
+              editCount
+            },
+            themeMode
           )
         );
       } catch (error) {
         if (isAbortError(error)) {
           updateAssistantMessage(assistantId, (message) =>
-            removeArtifactEdit(message, editId, previousEditId)
+            cancelArtifactEditOperation(message, operation, themeMode)
           );
           return;
         }
@@ -2377,7 +2220,9 @@ export default function App() {
           error instanceof Error
             ? sanitizeChatErrorMessage(error.message, "The artifact edit failed.")
             : "The artifact edit failed.";
-        failEdit(message);
+        updateAssistantMessage(assistantId, (current) =>
+          failArtifactEditOperation(current, operation, message)
+        );
       } finally {
         if (localArtifactEditAbortRef.current === controller) {
           localArtifactEditAbortRef.current = null;

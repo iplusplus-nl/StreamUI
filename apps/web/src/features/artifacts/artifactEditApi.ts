@@ -4,6 +4,20 @@ import { formatChatHttpError } from "../chat/chatErrors";
 
 type FetchLike = typeof fetch;
 
+function throwIfArtifactEditAborted(signal: AbortSignal): void {
+  if (!signal.aborted) {
+    return;
+  }
+
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+
+  const error = new Error("The artifact edit request was aborted.");
+  error.name = "AbortError";
+  throw error;
+}
+
 export type ArtifactEditResponse = {
   rawStream: string;
   summary?: string;
@@ -57,19 +71,24 @@ export async function requestArtifactEdit(
   signal: AbortSignal,
   fetchImpl: FetchLike = fetch
 ): Promise<ArtifactEditResponse> {
+  throwIfArtifactEditAborted(signal);
   const response = await fetchImpl("/api/artifact-edits", {
     method: "POST",
     headers: clientRequestHeaders(clientId, "application/json"),
     signal,
     body: JSON.stringify(request)
   });
+  throwIfArtifactEditAborted(signal);
 
   if (!response.ok) {
     const errorText = await response.text();
+    throwIfArtifactEditAborted(signal);
     throw new Error(formatChatHttpError(response, errorText));
   }
 
-  const result = normalizeArtifactEditResponse(await response.json());
+  const responseBody = await response.json();
+  throwIfArtifactEditAborted(signal);
+  const result = normalizeArtifactEditResponse(responseBody);
   if (!didArtifactEditChangeSource(request.source, result.rawStream)) {
     throw new Error(
       "The artifact edit did not change the source. Try a more specific prompt or select a larger reference."
