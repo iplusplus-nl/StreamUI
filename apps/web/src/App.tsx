@@ -33,25 +33,19 @@ import {
   getSnapshotDiagnostics,
   renderSnapshotToPngBlob
 } from "./core/artifactExport";
-import { captureCurrentPageScreenshotBlob } from "./core/pageScreenshot";
 import { modelLikelySupportsImageInput } from "./core/modelCapabilities";
 import {
-  createEmptyBugReportDraft,
   createId,
   createInitialSessionState,
   getSessionStreamingRunIds,
   interruptStaleArtifactEditsInSessionState,
   initialMessages,
   normalizeStoredSessionState,
-  normalizeBugReportDraft,
   sortSessions,
-  MAX_BUG_REPORT_IMAGES,
   STALE_ARTIFACT_EDIT_SWEEP_INTERVAL_MS,
   STREAM_INTERRUPTED_ERROR,
   summarizeSession,
   type ArtifactEdit,
-  type BugReportDraft,
-  type BugReportImage,
   type ChatSession,
   type ClientMessage,
   type SessionFile,
@@ -86,7 +80,7 @@ import {
   replayManagedAuthRequest
 } from "./features/chat/managedAuthContinuation";
 import { StreamThread } from "./features/chat/ui/StreamThread";
-import { submitBugReport } from "./features/bug-reports/bugReportApi";
+import { useBugReportController } from "./features/bug-reports/useBugReportController";
 import {
   getAssistantBranchInfo,
   getAssistantForUserTurn,
@@ -278,19 +272,6 @@ export default function App() {
     refresh: refreshAuthSummary,
     logout: logoutCloudAccount
   } = useCloudAuthController({ cloudEnabled });
-  const [isBugReportOpen, setIsBugReportOpen] = useState(false);
-  const [bugReportSessionId, setBugReportSessionId] = useState<string | null>(
-    null
-  );
-  const [isBugReportCapturing, setIsBugReportCapturing] = useState(false);
-  const [isBugReportSubmitting, setIsBugReportSubmitting] = useState(false);
-  const [isBugReportSubmitted, setIsBugReportSubmitted] = useState(false);
-  const [bugReportCaptureError, setBugReportCaptureError] = useState<
-    string | null
-  >(null);
-  const [bugReportSubmitError, setBugReportSubmitError] = useState<string | null>(
-    null
-  );
   const [isSending, setIsSending] = useState(false);
   const activeSession =
     sessionState.sessions.find(
@@ -303,12 +284,6 @@ export default function App() {
   );
   const isActiveSessionSending = getSessionStreamingRunIds(activeSession).length > 0;
   const activeFiles = activeSession?.files ?? [];
-  const bugReportSession =
-    sessionState.sessions.find(
-      (session) => session.id === (bugReportSessionId ?? sessionState.activeSessionId)
-    ) ?? activeSession;
-  const bugReportDraft =
-    bugReportSession?.bugReportDraft ?? createEmptyBugReportDraft();
   const activeSessionModel = activeSession?.model || apiSettings.model;
   const activeSessionReasoningEffort =
     activeSession?.reasoningEffort ?? apiSettings.reasoningEffort;
@@ -343,7 +318,6 @@ export default function App() {
   const branchRunCancelCleanupRef = useRef<
     Map<string, BranchRunCancelCleanup>
   >(new Map());
-  const bugReportSuccessCloseTimerRef = useRef<number | null>(null);
   const localArtifactEditAbortRef = useRef<AbortController | null>(null);
   const [pendingManagedRequestSlot] = useState(
     () => createPendingRequestSlot<PendingManagedRequest>(),
@@ -405,10 +379,6 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      if (bugReportSuccessCloseTimerRef.current !== null) {
-        window.clearTimeout(bugReportSuccessCloseTimerRef.current);
-        bugReportSuccessCloseTimerRef.current = null;
-      }
       localArtifactEditAbortRef.current?.abort();
       localArtifactEditAbortRef.current = null;
       runConnectionsRef.current.forEach((controller) => controller.abort());
@@ -505,160 +475,26 @@ export default function App() {
     defaultUiComplexity: apiSettings.uiComplexity
   });
 
-  const handleBugReportDraftChange = useCallback(
-    (draft: BugReportDraft) => {
-      const targetSessionId = bugReportSessionId ?? activeSessionIdRef.current;
-      updateSessionById(targetSessionId, (session) => {
-        const now = Date.now();
-        return {
-          ...session,
-          updatedAt: now,
-          bugReportDraft: normalizeBugReportDraft(draft, now)
-        };
-      });
-    },
-    [bugReportSessionId, updateSessionById]
-  );
-
-  const handleBugReportClose = useCallback(() => {
-    if (bugReportSuccessCloseTimerRef.current !== null) {
-      window.clearTimeout(bugReportSuccessCloseTimerRef.current);
-      bugReportSuccessCloseTimerRef.current = null;
-    }
-    setIsBugReportOpen(false);
-    setBugReportSubmitError(null);
-    setIsBugReportSubmitted(false);
-    setBugReportSessionId(null);
-    saveCurrentSessionStateNow();
-  }, [saveCurrentSessionStateNow]);
-
-  const handleBugReportOpen = useCallback(async () => {
-    if (isBugReportCapturing) {
-      return;
-    }
-
-    const targetSessionId = activeSessionIdRef.current;
-    const targetSession = sessionStateRef.current.sessions.find(
-      (session) => session.id === targetSessionId
-    );
-    if (!targetSession) {
-      return;
-    }
-
-    setBugReportSessionId(targetSessionId);
-    setBugReportSubmitError(null);
-    setBugReportCaptureError(null);
-    setIsBugReportSubmitted(false);
-
-    const existingDraft = targetSession.bugReportDraft;
-    const shouldCaptureScreenshot =
-      !existingDraft?.screenshotCapturedAt &&
-      !existingDraft?.images.some((image) => image.captured);
-    if (!shouldCaptureScreenshot) {
-      setIsBugReportOpen(true);
-      return;
-    }
-
-    setIsBugReportCapturing(true);
-    let screenshot: BugReportImage | null = null;
-    try {
-      const blob = await captureCurrentPageScreenshotBlob();
-      screenshot = {
-        id: createId("bug-image"),
-        name: "page-screenshot.png",
-        mimeType: "image/png",
-        size: blob.size,
-        dataUrl: await blobToDataUrl(blob),
-        width: window.innerWidth,
-        height: window.innerHeight,
-        captured: true,
-        createdAt: Date.now()
-      };
-    } catch (error) {
-      console.warn("Could not capture bug report screenshot.", error);
-      setBugReportCaptureError(
-        "Could not capture the page screenshot. You can still add images manually."
-      );
-    } finally {
-      setIsBugReportCapturing(false);
-    }
-
-    const capturedScreenshot = screenshot;
-    if (capturedScreenshot) {
-      updateSessionById(targetSessionId, (session) => {
-        const now = Date.now();
-        const currentDraft =
-          session.bugReportDraft ?? createEmptyBugReportDraft(now);
-        const hasRoom = currentDraft.images.length < MAX_BUG_REPORT_IMAGES;
-        const nextDraft =
-          hasRoom && !currentDraft.images.some((image) => image.captured)
-            ? {
-                ...currentDraft,
-                images: [capturedScreenshot, ...currentDraft.images],
-                screenshotCapturedAt: capturedScreenshot.createdAt,
-                updatedAt: now
-              }
-            : currentDraft;
-
-        return {
-          ...session,
-          updatedAt: now,
-          bugReportDraft: normalizeBugReportDraft(nextDraft, now)
-        };
-      });
-    }
-
-    setIsBugReportOpen(true);
-  }, [isBugReportCapturing, updateSessionById]);
-
-  const handleBugReportSubmit = useCallback(async () => {
-    const targetSessionId = bugReportSessionId ?? activeSessionIdRef.current;
-    const targetSession = sessionStateRef.current.sessions.find(
-      (session) => session.id === targetSessionId
-    );
-    const draft = targetSession?.bugReportDraft;
-    if (!targetSession || !draft || (!draft.text.trim() && !draft.images.length)) {
-      return;
-    }
-
-    setIsBugReportSubmitting(true);
-    setBugReportSubmitError(null);
-    try {
-      await submitBugReport(
-        {
-          sessionId: targetSession.id,
-          sessionTitle:
-            targetSession.title || summarizeSession(targetSession.messages),
-          draft
-        },
-        sessionClientIdRef.current
-      );
-      setBugReportCaptureError(null);
-      setBugReportSubmitError(null);
-      setIsBugReportSubmitted(true);
-      if (bugReportSuccessCloseTimerRef.current !== null) {
-        window.clearTimeout(bugReportSuccessCloseTimerRef.current);
-      }
-      bugReportSuccessCloseTimerRef.current = window.setTimeout(() => {
-        bugReportSuccessCloseTimerRef.current = null;
-        updateSessionById(targetSession.id, (session) => ({
-          ...session,
-          updatedAt: Date.now(),
-          bugReportDraft: undefined
-        }));
-        setIsBugReportOpen(false);
-        setBugReportSessionId(null);
-        setIsBugReportSubmitted(false);
-        saveCurrentSessionStateNow();
-      }, 1400);
-    } catch (error) {
-      setBugReportSubmitError(
-        error instanceof Error ? error.message : "Could not submit bug report."
-      );
-    } finally {
-      setIsBugReportSubmitting(false);
-    }
-  }, [bugReportSessionId, saveCurrentSessionStateNow, updateSessionById]);
+  const {
+    session: bugReportSession,
+    draft: bugReportDraft,
+    isOpen: isBugReportOpen,
+    isSubmitting: isBugReportSubmitting,
+    isSubmitted: isBugReportSubmitted,
+    captureError: bugReportCaptureError,
+    submitError: bugReportSubmitError,
+    open: handleBugReportOpen,
+    changeDraft: handleBugReportDraftChange,
+    close: handleBugReportClose,
+    submit: handleBugReportSubmit
+  } = useBugReportController({
+    sessionState,
+    sessionStateRef,
+    activeSessionIdRef,
+    sessionClientIdRef,
+    updateSessionById,
+    saveNow: saveCurrentSessionStateNow
+  });
 
   const updateActiveSessionMessages = useCallback(
     (updater: (messages: ClientMessage[]) => ClientMessage[]) => {
