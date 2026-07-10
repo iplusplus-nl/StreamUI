@@ -115,4 +115,22 @@ describe("chat API", () => {
     );
     assert.equal(accepted, 1);
   });
+
+  it("keeps a successful response claimed when its acceptance observer throws", () => {
+    const observerError = new Error("observer failed");
+    const observedErrors: unknown[] = [];
+    const response = new Response("stream", { status: 200 });
+
+    const claimed = claimAcceptedChatRunResponse(
+      response,
+      () => {
+        throw observerError;
+      },
+      (error) => observedErrors.push(error)
+    );
+
+    assert.equal(claimed?.response, response);
+    assert.ok(claimed?.body);
+    assert.deepEqual(observedErrors, [observerError]);
+  });
 });

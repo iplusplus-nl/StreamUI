@@ -1435,7 +1435,10 @@ export default function App() {
 
         const acceptedResponse = claimAcceptedChatRunResponse(
           response,
-          options.onRunAccepted
+          options.onRunAccepted,
+          (error) => {
+            console.warn("Chat run acceptance observer failed.", error);
+          }
         );
         if (!acceptedResponse) {
           const errorText = await response.text();

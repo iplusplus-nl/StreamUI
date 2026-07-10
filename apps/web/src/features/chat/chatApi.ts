@@ -9,12 +9,20 @@ export type AcceptedChatRunResponse = {
 
 export function claimAcceptedChatRunResponse(
   response: Response,
-  onAccepted?: () => void
+  onAccepted?: () => void,
+  onAcceptedError: (error: unknown) => void = (error) => {
+    console.warn("Chat run acceptance observer failed.", error);
+  }
 ): AcceptedChatRunResponse | undefined {
   if (!response.ok || !response.body) {
     return undefined;
   }
-  onAccepted?.();
+
+  try {
+    onAccepted?.();
+  } catch (error) {
+    onAcceptedError(error);
+  }
   return { response, body: response.body };
 }
 
