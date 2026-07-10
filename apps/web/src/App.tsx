@@ -136,6 +136,7 @@ import {
 } from "./features/artifacts/artifactMessageProjection";
 import { hasRenderError } from "./features/artifacts/renderErrors";
 import { buildVisualRepairPrompt } from "./features/artifacts/visualRepair";
+import { useArtifactSelections } from "./features/artifacts/useArtifactSelections";
 import { coerceApiSettingsForRuntime } from "./features/settings/appSettingsPolicy";
 import { useAppSettings } from "./features/settings/useAppSettings";
 import { useCloudAuthController } from "./features/auth/useCloudAuthController";
@@ -309,7 +310,6 @@ export default function App() {
   const isSendingRef = useRef(isSending);
   const sessionNewOrDeleteBlockedRef = useRef(isSending);
   const sessionSelectionBlockedRef = useRef(false);
-  const artifactSelectionsRef = useRef<ArtifactSelection[]>([]);
   const sessionsLoadedRef = useRef(sessionsLoaded);
   const sessionsHydratedRef = useRef(sessionsHydrated);
   const renderersRef = useRef<Map<string, StreamingRenderer>>(new Map());
@@ -323,8 +323,12 @@ export default function App() {
     () => createPendingRequestSlot<PendingManagedRequest>(),
   );
   const pendingArtifactActionRef = useRef<PendingArtifactAction | null>(null);
-  const [artifactSelectionClearVersion, setArtifactSelectionClearVersion] =
-    useState(0);
+  const {
+    getSelections: getArtifactSelections,
+    changeSelections: handleArtifactSelectionsChange,
+    clearSelections: clearArtifactSelections,
+    selectionClearVersion: artifactSelectionClearVersion
+  } = useArtifactSelections();
   const {
     adapter: attachmentAdapter,
     isSendBlocked: isAttachmentSendBlocked,
@@ -808,10 +812,9 @@ export default function App() {
         },
         updatedAt: Date.now()
       }));
-      artifactSelectionsRef.current = [];
-      setArtifactSelectionClearVersion((version) => version + 1);
+      clearArtifactSelections();
     },
-    [updateActiveSession]
+    [clearArtifactSelections, updateActiveSession]
   );
 
   const handleModelChange = useCallback((model: string) => {
@@ -2002,8 +2005,7 @@ export default function App() {
             }
           )
         );
-        artifactSelectionsRef.current = [];
-        setArtifactSelectionClearVersion((version) => version + 1);
+        clearArtifactSelections();
       } catch (error) {
         if (isAbortError(error)) {
           updateAssistantMessage(assistantId, (message) => {
@@ -2081,6 +2083,7 @@ export default function App() {
     [
       apiSettings,
       authenticatedUser,
+      clearArtifactSelections,
       cloudEnabled,
       openAuthOverlay,
       refreshAuthSummary,
@@ -2360,8 +2363,7 @@ export default function App() {
         artifactEdits: [...(message.artifactEdits ?? []), pendingEdit],
         activeArtifactEditId: editId
       }));
-      artifactSelectionsRef.current = [];
-      setArtifactSelectionClearVersion((version) => version + 1);
+      clearArtifactSelections();
       setIsSending(true);
       isSendingRef.current = true;
 
@@ -2434,6 +2436,7 @@ export default function App() {
     [
       apiSettings,
       authenticatedUser,
+      clearArtifactSelections,
       cloudEnabled,
       openAuthOverlay,
       refreshAuthSummary,
@@ -2755,13 +2758,6 @@ export default function App() {
     sessionsLoaded
   ]);
 
-  const handleArtifactSelectionsChange = useCallback(
-    (selections: ArtifactSelection[]) => {
-      artifactSelectionsRef.current = selections;
-    },
-    []
-  );
-
   const handleEditArtifactEditPrompt = useCallback(
     (assistantId: string, editId: string, prompt: string): boolean => {
       const trimmed = prompt.trim();
@@ -2821,10 +2817,9 @@ export default function App() {
           activeArtifactEditId: editId
         };
       });
-      artifactSelectionsRef.current = [];
-      setArtifactSelectionClearVersion((version) => version + 1);
+      clearArtifactSelections();
     },
-    [themeMode, updateAssistantMessage]
+    [clearArtifactSelections, themeMode, updateAssistantMessage]
   );
 
   const handleNewMessage = useCallback(
@@ -2837,7 +2832,7 @@ export default function App() {
 
       const text = getAppendMessageText(message);
       const attachments = getAppendMessageImages(message);
-      const artifactSelections = artifactSelectionsRef.current;
+      const artifactSelections = getArtifactSelections();
       if (artifactSelections.length > 0) {
         await runArtifactSourceEdit(text, artifactSelections, attachments);
         return;
@@ -2847,6 +2842,7 @@ export default function App() {
     },
     [
       isAttachmentSendBlocked,
+      getArtifactSelections,
       runArtifactSourceEdit,
       sendStreamUiRequest
     ]
