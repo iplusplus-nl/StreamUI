@@ -32,7 +32,6 @@ import {
   getSessionStreamingRunIds,
   interruptStaleArtifactEditsInSessionState,
   initialMessages,
-  normalizeStoredSessionState,
   sortSessions,
   STALE_ARTIFACT_EDIT_SWEEP_INTERVAL_MS,
   STREAM_INTERRUPTED_ERROR,
@@ -53,20 +52,12 @@ import {
 import {
   createCancelledAssistantPatch,
   formatChatHttpError,
-  isAbortError,
   sanitizeChatErrorMessage
 } from "./features/chat/chatErrors";
-import { createChatStreamLineHandler } from "./features/chat/chatStreamEvents";
-import {
-  presentLocalChatRunTerminal,
-  projectStreamingChatRun
-} from "./features/chat/chatRunPresentation";
-import {
-  createChatRunState,
-  reduceChatRunState
-} from "./features/chat/chatRunStateMachine";
 import { createChatRunReconnectScheduler } from "./features/chat/chatRunReconnectScheduler";
 import { subscribeRestoredChatRunRenderer } from "./features/chat/chatRunRendererLifecycle";
+import { createChatRunExecutionController } from "./features/chat/chatRunExecutionController";
+import { loadChatRunServerMessage } from "./features/chat/chatRunServerMessage";
 import type {
   ChatRunAssistantPhase,
   PendingManagedRequest,
@@ -98,10 +89,7 @@ import {
   getVisibleSessionMessages,
   isMessageVisibleInSession
 } from "./features/chat/branching";
-import {
-  requestSessions,
-  uploadSessionFile
-} from "./features/sessions/sessionApi";
+import { uploadSessionFile } from "./features/sessions/sessionApi";
 import {
   loadSessionClientId
 } from "./features/sessions/sessionPersistence";
@@ -1154,198 +1142,55 @@ export default function App() {
         return;
       }
 
-      let runState = createChatRunState({
-        runId: generationRunId,
-        reasoning: options.initialReasoning
-      });
       let streamConnected = false;
-      let serverSyncIntervalId: number | undefined;
-      let serverSyncPromise: Promise<void> | null = null;
-
-      const dispatchRunEvent = (
-        event: Parameters<typeof reduceChatRunState>[1]
-      ) => {
-        const result = reduceChatRunState(runState, event);
-        runState = result.state;
-        return result;
-      };
-
-      const canAcceptRunStreamEvent = () => {
-        if (
-          cancelledRunIdsRef.current.has(generationRunId) ||
-          runConnectionsRef.current.get(generationRunId) !== streamController ||
-          (streamController.signal.aborted &&
-            runState.terminal?.source !== "server")
-        ) {
-          dispatchRunEvent({ type: "cancel" });
-          return false;
-        }
-        return true;
-      };
-
-      const applyServerAssistantMessage = (serverMessage: ClientMessage) => {
-        if (
-          cancelledRunIdsRef.current.has(generationRunId) ||
-          runConnectionsRef.current.get(generationRunId) !== streamController ||
-          (streamController.signal.aborted &&
-            runState.terminal?.source !== "server")
-        ) {
-          dispatchRunEvent({ type: "cancel" });
-          return;
-        }
-
-        const result = dispatchRunEvent({
-          type: "server",
-          message: serverMessage
-        });
-        if (!result.accepted || !result.phase || !result.assistantPatch) {
-          return;
-        }
-
-        updateAssistantForPhase(result.assistantPatch, result.phase);
-
-        if (result.abortConnection) {
-          streamController.abort();
-        }
-      };
-
-      const reconcileAssistantFromServer = (): Promise<void> => {
-        if (runState.terminal?.source === "server") {
-          return Promise.resolve();
-        }
-        if (serverSyncPromise) {
-          return serverSyncPromise;
-        }
-
-        serverSyncPromise = (async () => {
-          try {
-            const response = await requestSessions(sessionClientIdRef.current);
-            if (!response.ok) {
-              throw new Error(`Session sync failed with HTTP ${response.status}.`);
-            }
-
-            const serverState = normalizeStoredSessionState(
-              await response.json(),
-              Date.now(),
-              {
-                rebuildSnapshots: false,
-                interruptPendingArtifactEdits: true
-              }
-            );
-            const serverMessage = serverState.sessions
-              .find((session) => session.id === requestSessionId)
-              ?.messages.find((message) => message.id === assistantId);
-            if (serverMessage) {
-              applyServerAssistantMessage(serverMessage);
-            }
-          } catch (error) {
-            if ((error as { name?: unknown }).name !== "AbortError") {
-              console.warn("Could not reconcile ChatHTML stream state.", error);
-            }
-          } finally {
-            serverSyncPromise = null;
-          }
-        })();
-        return serverSyncPromise;
-      };
-
-      const startServerReconcile = () => {
-        serverSyncIntervalId = window.setInterval(() => {
-          void reconcileAssistantFromServer();
-        }, 1500);
-        void reconcileAssistantFromServer();
-      };
-
-      const handleContentChunk = (chunk: string, streamSequence?: number) => {
-        if (!canAcceptRunStreamEvent()) {
-          return;
-        }
-        const result = dispatchRunEvent({
-          type: "content",
-          text: chunk,
-          sequence: streamSequence
-        });
-        if (!result.accepted) {
-          return;
-        }
-        const projection = projectStreamingChatRun(
-          runState.raw,
-          typeof streamSequence === "number"
-            ? runState.streamSequence
-            : undefined
-        );
-
-        if (projection.streamUiSource !== undefined) {
-          renderer.replace(projection.streamUiSource);
-        }
-
-        const snapshot =
-          projection.streamUiSource !== undefined
-            ? renderer.getSnapshot()
-            : undefined;
-
-        updateRunAssistant({
-          ...projection.patch,
-          ...(snapshot ? { snapshot } : {}),
-        });
-      };
-
-      let handleStreamEvent: ReturnType<typeof createChatStreamLineHandler>;
+      let execution: ReturnType<typeof createChatRunExecutionController>;
       try {
-        handleStreamEvent = createChatStreamLineHandler({
+        execution = createChatRunExecutionController({
           runId: generationRunId,
-          getLastSequence: () => runState.streamSequence,
-          onSequence: () => undefined,
-          onDone: (status, error, streamSequence) => {
-            if (!canAcceptRunStreamEvent()) {
+          initial: { reasoning: options.initialReasoning },
+          renderer,
+          signal: streamController.signal,
+          isConnectionCurrent: () =>
+            !cancelledRunIdsRef.current.has(generationRunId) &&
+            runConnectionsRef.current.get(generationRunId) === streamController,
+          abortConnection: () => streamController.abort(),
+          applyAssistant: updateAssistantForPhase,
+          onMemory: handleMemoryStreamEvent,
+          loadServerMessage: () =>
+            loadChatRunServerMessage({
+              clientId: sessionClientIdRef.current,
+              sessionId: requestSessionId,
+              assistantId
+            }),
+          afterLocalComplete: async ({ state, patch }) => {
+            const artifactUpload = createArtifactFileUpload(
+              assistantId,
+              state.raw,
+              patch.snapshot,
+              patch.artifactContext?.textSummary
+            );
+            if (!artifactUpload) {
               return;
             }
-            const result = dispatchRunEvent({
-              type: "done",
-              status,
-              error,
-              sequence: streamSequence
-            });
-            if (result.accepted && typeof streamSequence === "number") {
-              updateRunAssistant({ streamSequence: runState.streamSequence });
+            upsertSessionFiles(requestSessionId, [
+              await uploadSessionFile(
+                requestSessionId,
+                artifactUpload,
+                sessionClientIdRef.current
+              )
+            ]);
+          },
+          onError: (scope, error) => {
+            if (scope === "reconcile") {
+              console.warn("Could not reconcile ChatHTML stream state.", error);
+            } else {
+              console.warn("Could not persist ChatHTML artifact file.", error);
             }
           },
-          onMemory: (event, streamSequence) => {
-            if (!canAcceptRunStreamEvent()) {
-              return;
-            }
-            const result = dispatchRunEvent({
-              type: "memory",
-              sequence: streamSequence
-            });
-            if (!result.accepted) {
-              return;
-            }
-            handleMemoryStreamEvent(event);
-            if (typeof streamSequence === "number") {
-              updateRunAssistant({ streamSequence: runState.streamSequence });
-            }
-          },
-          onReasoning: (text, streamSequence) => {
-            if (!canAcceptRunStreamEvent()) {
-              return;
-            }
-            const result = dispatchRunEvent({
-              type: "reasoning",
-              text,
-              sequence: streamSequence
-            });
-            if (!result.accepted) {
-              return;
-            }
-            updateRunAssistant({
-              reasoning: runState.reasoning,
-              ...(typeof streamSequence === "number"
-                ? { streamSequence: runState.streamSequence }
-                : {})
-            });
-          },
-          onContent: handleContentChunk
+          scheduleInterval: (task, intervalMs) => {
+            const intervalId = window.setInterval(task, intervalMs);
+            return () => window.clearInterval(intervalId);
+          }
         });
       } catch (error) {
         cleanupChatActivity(true);
@@ -1361,41 +1206,6 @@ export default function App() {
         return;
       }
 
-      const applyLocalRunTerminal = async (): Promise<boolean> => {
-        const presentation = presentLocalChatRunTerminal(runState, renderer);
-        if (!presentation) {
-          return false;
-        }
-        const terminalApplied = updateAssistantForPhase(
-          presentation.patch,
-          presentation.phase
-        );
-        if (!terminalApplied || presentation.phase !== "complete") {
-          return true;
-        }
-
-        const artifactUpload = createArtifactFileUpload(
-          assistantId,
-          runState.raw,
-          presentation.patch.snapshot,
-          presentation.patch.artifactContext?.textSummary
-        );
-        if (artifactUpload) {
-          try {
-            upsertSessionFiles(requestSessionId, [
-              await uploadSessionFile(
-                requestSessionId,
-                artifactUpload,
-                sessionClientIdRef.current
-              )
-            ]);
-          } catch (uploadError) {
-            console.warn("Could not persist ChatHTML artifact file.", uploadError);
-          }
-        }
-        return true;
-      };
-
       try {
         const requestHistory =
           typeof options.requestHistory === "function"
@@ -1408,7 +1218,7 @@ export default function App() {
           requestSession?.files ?? [],
           preparedAttachmentFiles
         );
-        startServerReconcile();
+        execution.startReconcile();
 
         const response = await startChatRun(
           {
@@ -1446,58 +1256,24 @@ export default function App() {
         }
         streamConnected = true;
 
-        await readNdjsonLines(acceptedResponse.body, handleStreamEvent);
+        await readNdjsonLines(acceptedResponse.body, execution.handleLine);
 
-        await reconcileAssistantFromServer();
-        const eofResult = dispatchRunEvent({ type: "eof" });
-
-        if (runState.terminal?.source === "server") {
-          return;
-        }
-
-        if (eofResult.eofDisposition === "detached") {
-          updateRunAssistant({
-            reasoning: runState.reasoning,
-            rawStream: runState.raw,
-            streamSequence: runState.streamSequence,
-            status: "streaming"
-          });
-          return;
-        }
-
-        if (await applyLocalRunTerminal()) {
-          return;
+        const outcome = await execution.finishTransport();
+        if (outcome.kind === "detached") {
+          execution.checkpointStreaming();
         }
       } catch (error) {
-        if (runState.terminal?.source === "server") {
+        const outcome = await execution.handleTransportError(error);
+        if (outcome.kind !== "unhandled") {
           return;
         }
-        if (
-          cancelledRunIdsRef.current.has(generationRunId) ||
-          streamController.signal.aborted ||
-          isAbortError(error)
-        ) {
-          dispatchRunEvent({ type: "cancel" });
-          await applyLocalRunTerminal();
-          return;
-        }
-        if (await applyLocalRunTerminal()) {
-          return;
-        }
+        const runState = execution.getState();
         const message =
           error instanceof Error
             ? sanitizeChatErrorMessage(error.message)
             : "The chat request failed.";
-        if (
-          streamConnected &&
-          runState.terminal?.phase !== "error"
-        ) {
-          updateRunAssistant({
-            reasoning: runState.reasoning,
-            rawStream: runState.raw,
-            streamSequence: runState.streamSequence,
-            status: "streaming"
-          });
+        if (streamConnected) {
+          execution.checkpointStreaming();
           return;
         }
         updateAssistantForPhase(
@@ -1512,9 +1288,7 @@ export default function App() {
           "error"
         );
       } finally {
-        if (typeof serverSyncIntervalId === "number") {
-          window.clearInterval(serverSyncIntervalId);
-        }
+        execution.dispose();
         cleanupChatActivity();
         if (requestApiSettings.apiKeySource === "managed") {
           void refreshAuthSummary().catch((error) => {
@@ -2070,6 +1844,7 @@ export default function App() {
                 );
               });
             }
+            return changed;
           };
           let setupRenderer: StreamingRenderer | null = null;
           let setupUnsubscribeSnapshot: (() => void) | null = null;
@@ -2122,40 +1897,67 @@ export default function App() {
             cleanupRestoredChatActivity();
             return;
           }
-          let runState = createChatRunState({
-            runId: generationRunId,
-            raw: message.rawStream,
-            reasoning: message.reasoning,
-            streamSequence: message.streamSequence
-          });
-          let serverSyncIntervalId: number | undefined;
-          let serverSyncPromise: Promise<void> | null = null;
-
-          const dispatchRunEvent = (
-            event: Parameters<typeof reduceChatRunState>[1]
-          ) => {
-            const result = reduceChatRunState(runState, event);
-            runState = result.state;
-            return result;
-          };
-
-          const canAcceptRunStreamEvent = () => {
-            if (
-              cancelledRunIdsRef.current.has(generationRunId) ||
-              runConnectionsRef.current.get(generationRunId) !== controller ||
-              (controller.signal.aborted &&
-                runState.terminal?.source !== "server")
-            ) {
-              dispatchRunEvent({ type: "cancel" });
-              return false;
-            }
-            return true;
-          };
+          const isRestoredConnectionCurrent = () =>
+            !cancelledRunIdsRef.current.has(generationRunId) &&
+            runConnectionsRef.current.get(generationRunId) === controller;
+          let execution: ReturnType<typeof createChatRunExecutionController>;
+          try {
+            execution = createChatRunExecutionController({
+              runId: generationRunId,
+              initial: {
+                raw: message.rawStream,
+                reasoning: message.reasoning,
+                streamSequence: message.streamSequence
+              },
+              renderer,
+              signal: controller.signal,
+              isConnectionCurrent: isRestoredConnectionCurrent,
+              abortConnection: () => controller.abort(),
+              applyAssistant: updateRestoredAssistant,
+              onMemory: handleMemoryStreamEvent,
+              loadServerMessage: () =>
+                loadChatRunServerMessage({
+                  clientId: sessionClientIdRef.current,
+                  sessionId: session.id,
+                  assistantId: message.id
+                }),
+              onProgress: () =>
+                restoredRunReconnectScheduler.markProgress(generationRunId),
+              onError: (scope, error) => {
+                if (
+                  scope === "reconcile" &&
+                  (error as { name?: unknown }).name !== "AbortError"
+                ) {
+                  console.warn(
+                    "Could not reconcile ChatHTML stream state.",
+                    error
+                  );
+                }
+              },
+              scheduleInterval: (task, intervalMs) => {
+                const intervalId = window.setInterval(task, intervalMs);
+                return () => window.clearInterval(intervalId);
+              }
+            });
+          } catch (error) {
+            cleanupRestoredChatActivity();
+            updateRestoredAssistant(
+              {
+                content: "I could not complete that request.",
+                status: "error",
+                error: STREAM_INTERRUPTED_ERROR
+              },
+              "error"
+            );
+            console.warn("Could not restore ChatHTML stream handler.", error);
+            return;
+          }
 
           const scheduleRestoredReconnect = () => {
             if (
-              runState.terminal ||
-              !canAcceptRunStreamEvent()
+              execution.getState().terminal ||
+              !isRestoredConnectionCurrent() ||
+              controller.signal.aborted
             ) {
               return;
             }
@@ -2175,230 +1977,25 @@ export default function App() {
             });
           };
 
-          const applyServerAssistantMessage = (serverMessage: ClientMessage) => {
-            if (
-              cancelledRunIdsRef.current.has(generationRunId) ||
-              runConnectionsRef.current.get(generationRunId) !== controller ||
-              (controller.signal.aborted &&
-                runState.terminal?.source !== "server")
-            ) {
-              dispatchRunEvent({ type: "cancel" });
-              return;
-            }
-
-            const result = dispatchRunEvent({
-              type: "server",
-              message: serverMessage
-            });
-            if (!result.accepted || !result.phase || !result.assistantPatch) {
-              return;
-            }
-
-            restoredRunReconnectScheduler.markProgress(generationRunId);
-            updateRestoredAssistant(
-              result.assistantPatch,
-              result.phase
-            );
-
-            if (result.abortConnection) {
-              controller.abort();
-            }
-          };
-
-          const reconcileAssistantFromServer = (): Promise<void> => {
-            if (runState.terminal?.source === "server") {
-              return Promise.resolve();
-            }
-            if (serverSyncPromise) {
-              return serverSyncPromise;
-            }
-
-            serverSyncPromise = (async () => {
-              try {
-                const response = await requestSessions(sessionClientIdRef.current);
-                if (!response.ok) {
-                  throw new Error(
-                    `Session sync failed with HTTP ${response.status}.`
-                  );
-                }
-
-                const serverState = normalizeStoredSessionState(
-                  await response.json(),
-                  Date.now(),
-                  {
-                    rebuildSnapshots: false,
-                    interruptPendingArtifactEdits: true
-                  }
-                );
-                const serverMessage = serverState.sessions
-                  .find((candidate) => candidate.id === session.id)
-                  ?.messages.find((candidate) => candidate.id === message.id);
-                if (serverMessage) {
-                  applyServerAssistantMessage(serverMessage);
-                }
-              } catch (error) {
-                if ((error as { name?: unknown }).name !== "AbortError") {
-                  console.warn("Could not reconcile ChatHTML stream state.", error);
-                }
-              } finally {
-                serverSyncPromise = null;
-              }
-            })();
-            return serverSyncPromise;
-          };
-
-          const startServerReconcile = () => {
-            serverSyncIntervalId = window.setInterval(() => {
-              void reconcileAssistantFromServer();
-            }, 1500);
-            void reconcileAssistantFromServer();
-          };
-
-          const handleContentChunk = (chunk: string, streamSequence?: number) => {
-            if (!canAcceptRunStreamEvent()) {
-              return;
-            }
-            const result = dispatchRunEvent({
-              type: "content",
-              text: chunk,
-              sequence: streamSequence
-            });
-            if (!result.accepted) {
-              return;
-            }
-            restoredRunReconnectScheduler.markProgress(generationRunId);
-            const projection = projectStreamingChatRun(
-              runState.raw,
-              typeof streamSequence === "number"
-                ? runState.streamSequence
-                : undefined
-            );
-
-            if (projection.streamUiSource !== undefined) {
-              renderer.replace(projection.streamUiSource);
-            }
-
-            const snapshot = projection.streamUiSource !== undefined
-              ? renderer.getSnapshot()
-              : undefined;
-
-            updateRestoredAssistant({
-              ...projection.patch,
-              ...(snapshot ? { snapshot } : {}),
-            });
-          };
-
-          let handleStreamEvent: ReturnType<
-            typeof createChatStreamLineHandler
-          >;
           try {
-            handleStreamEvent = createChatStreamLineHandler({
-              runId: generationRunId,
-              getLastSequence: () => runState.streamSequence,
-              onSequence: () => undefined,
-              onDone: (status, error, streamSequence) => {
-                if (!canAcceptRunStreamEvent()) {
-                  return;
-                }
-                const result = dispatchRunEvent({
-                  type: "done",
-                  status,
-                  error,
-                  sequence: streamSequence
-                });
-                if (result.accepted) {
-                  restoredRunReconnectScheduler.markProgress(generationRunId);
-                }
-                if (result.accepted && typeof streamSequence === "number") {
-                  updateRestoredAssistant({
-                    streamSequence: runState.streamSequence
-                  });
-                }
-              },
-              onMemory: (event, streamSequence) => {
-                if (!canAcceptRunStreamEvent()) {
-                  return;
-                }
-                const result = dispatchRunEvent({
-                  type: "memory",
-                  sequence: streamSequence
-                });
-                if (!result.accepted) {
-                  return;
-                }
-                restoredRunReconnectScheduler.markProgress(generationRunId);
-                handleMemoryStreamEvent(event);
-                if (typeof streamSequence === "number") {
-                  updateRestoredAssistant({
-                    streamSequence: runState.streamSequence
-                  });
-                }
-              },
-              onReasoning: (text, streamSequence) => {
-                if (!canAcceptRunStreamEvent()) {
-                  return;
-                }
-                const result = dispatchRunEvent({
-                  type: "reasoning",
-                  text,
-                  sequence: streamSequence
-                });
-                if (!result.accepted) {
-                  return;
-                }
-                restoredRunReconnectScheduler.markProgress(generationRunId);
-                updateRestoredAssistant({
-                  reasoning: runState.reasoning,
-                  ...(typeof streamSequence === "number"
-                    ? { streamSequence: runState.streamSequence }
-                    : {})
-                });
-              },
-              onContent: handleContentChunk
-            });
-          } catch (error) {
-            cleanupRestoredChatActivity();
-            updateRestoredAssistant(
-              {
-                content: "I could not complete that request.",
-                status: "error",
-                error: STREAM_INTERRUPTED_ERROR
-              },
-              "error"
-            );
-            console.warn("Could not restore ChatHTML stream handler.", error);
-            return;
-          }
-
-          const applyLocalRunTerminal = (): boolean => {
-            const presentation = presentLocalChatRunTerminal(runState, renderer);
-            if (!presentation) {
-              return false;
-            }
-            updateRestoredAssistant(presentation.patch, presentation.phase);
-            return true;
-          };
-
-          try {
-            startServerReconcile();
+            execution.startReconcile();
             const response = await requestChatRunEvents(
               generationRunId,
-              runState.streamSequence,
+              execution.getState().streamSequence,
               sessionClientIdRef.current,
               controller.signal
             );
 
             if (response.status === 404) {
-              await reconcileAssistantFromServer();
+              await execution.reconcileNow();
+              const runState = execution.getState();
               if (runState.terminal?.source === "server") {
                 return;
               }
-              if (
-                cancelledRunIdsRef.current.has(generationRunId) ||
-                controller.signal.aborted
-              ) {
-                dispatchRunEvent({ type: "cancel" });
-                applyLocalRunTerminal();
+              if (!isRestoredConnectionCurrent() || controller.signal.aborted) {
+                await execution.handleTransportError(
+                  new DOMException("Chat run cancelled.", "AbortError")
+                );
                 return;
               }
               updateRestoredAssistant(
@@ -2420,45 +2017,21 @@ export default function App() {
               throw new Error(formatChatHttpError(response, errorText));
             }
 
-            await readNdjsonLines(response.body, handleStreamEvent);
+            await readNdjsonLines(response.body, execution.handleLine);
 
-            await reconcileAssistantFromServer();
-            const eofResult = dispatchRunEvent({ type: "eof" });
-
-            if (runState.terminal?.source === "server") {
-              return;
-            }
-
-            if (eofResult.eofDisposition === "detached") {
+            const outcome = await execution.finishTransport();
+            if (outcome.kind === "detached") {
               scheduleRestoredReconnect();
-              return;
             }
-
-            applyLocalRunTerminal();
           } catch (error) {
-            if (runState.terminal?.source === "server") {
+            const outcome = await execution.handleTransportError(error);
+            if (outcome.kind !== "unhandled") {
               return;
             }
-            if (
-              cancelledRunIdsRef.current.has(generationRunId) ||
-              controller.signal.aborted ||
-              isAbortError(error)
-            ) {
-              dispatchRunEvent({ type: "cancel" });
-              applyLocalRunTerminal();
-              return;
-            }
-            if (applyLocalRunTerminal()) {
-              return;
-            }
-            if ((error as { name?: unknown }).name !== "AbortError") {
-              console.warn("Could not resume ChatHTML run.", error);
-            }
+            console.warn("Could not resume ChatHTML run.", error);
             scheduleRestoredReconnect();
           } finally {
-            if (typeof serverSyncIntervalId === "number") {
-              window.clearInterval(serverSyncIntervalId);
-            }
+            execution.dispose();
             cleanupRestoredChatActivity();
           }
         })();
