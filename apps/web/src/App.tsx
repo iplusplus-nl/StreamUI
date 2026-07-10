@@ -26,7 +26,6 @@ import {
   type ReasoningEffort
 } from "./core/apiSettings";
 import { serializeSearchSettings } from "./core/searchSettings";
-import { buildArtifactContext } from "./core/artifactContext";
 import {
   createId,
   createInitialSessionState,
@@ -59,6 +58,11 @@ import {
 } from "./features/chat/chatErrors";
 import { createChatStreamLineHandler } from "./features/chat/chatStreamEvents";
 import { reconcileChatRunState } from "./features/chat/chatRunReconcile";
+import {
+  projectCompletedChatRun,
+  projectFailedChatRun,
+  projectStreamingChatRun
+} from "./features/chat/chatRunPresentation";
 import type {
   ChatRunAssistantPhase,
   PendingManagedRequest,
@@ -122,9 +126,6 @@ import {
   getArtifactEditCompleteRawStream,
   getResolvedArtifactEditId
 } from "./features/artifacts/artifactEditModel";
-import {
-  buildCompletedAssistantPatchFromRawStream
-} from "./features/artifacts/artifactMessageProjection";
 import { hasRenderError } from "./features/artifacts/renderErrors";
 import { useArtifactSelections } from "./features/artifacts/useArtifactSelections";
 import { isArtifactSelectionTargetActive } from "./features/artifacts/artifactSelectionController";
@@ -151,7 +152,6 @@ import { coerceApiSettingsForRuntime } from "./features/settings/appSettingsPoli
 import { useAppSettings } from "./features/settings/useAppSettings";
 import { useCloudAuthController } from "./features/auth/useCloudAuthController";
 import type { ImageAttachment } from "./core/imageAttachments";
-import { extractStreamUiParts } from "./runtime/streamui/protocol";
 import { createStreamingRenderer } from "./runtime/streamui/streamingRenderer";
 import type {
   RenderError,
@@ -1225,31 +1225,20 @@ export default function App() {
 
       const handleContentChunk = (chunk: string, streamSequence?: number) => {
         raw += chunk;
-        const parts = extractStreamUiParts(raw);
+        const projection = projectStreamingChatRun(raw, streamSequence);
 
-        if (parts.hasStreamUi) {
-          renderer.replace(parts.streamui);
+        if (projection.streamUiSource !== undefined) {
+          renderer.replace(projection.streamUiSource);
         }
 
-        const snapshot = parts.hasStreamUi ? renderer.getSnapshot() : undefined;
-        const artifactContext =
-          parts.hasStreamUi && parts.streamUiComplete && parts.streamui.trim()
-            ? buildArtifactContext(raw)
-            : undefined;
-        const sessionTitle =
-          parts.sessionTitleComplete && parts.sessionTitle.trim()
-            ? parts.sessionTitle
+        const snapshot =
+          projection.streamUiSource !== undefined
+            ? renderer.getSnapshot()
             : undefined;
 
         updateRunAssistant({
-          content: parts.chat || (!parts.hasStreamUi ? parts.fallbackText : ""),
-          rawStream: raw,
+          ...projection.patch,
           ...(snapshot ? { snapshot } : {}),
-          ...(artifactContext ? { artifactContext } : {}),
-          ...(sessionTitle ? { sessionTitle } : {}),
-          hasStreamUi: parts.hasStreamUi,
-          streamUiComplete: parts.streamUiComplete,
-          ...(typeof streamSequence === "number" ? { streamSequence } : {})
         });
       };
 
@@ -1355,53 +1344,35 @@ export default function App() {
         }
 
         if (doneStatus === "error") {
-          const finalParts = extractStreamUiParts(raw);
           updateAssistantForPhase(
-            {
-              content:
-                finalParts.chat ||
-                finalParts.fallbackText ||
-                "I could not complete that request.",
+            projectFailedChatRun({
+              raw,
               reasoning,
-              rawStream: raw,
               streamSequence: lastStreamSequence,
-              error: sanitizeChatErrorMessage(doneError),
-              status: "error"
-            },
+              error: doneError
+            }),
             "error"
           );
           return;
         }
 
-        const finalParts = extractStreamUiParts(raw);
+        const completion = projectCompletedChatRun({
+          raw,
+          reasoning,
+          streamSequence: lastStreamSequence
+        });
         let finalSnapshot: RenderSnapshot | undefined;
-        const artifactContext =
-          finalParts.hasStreamUi && finalParts.streamui.trim()
-            ? buildArtifactContext(raw)
-            : undefined;
 
-        if (finalParts.hasStreamUi && finalParts.streamui.trim()) {
-          renderer.replace(finalParts.streamui);
+        if (completion.streamUiSource) {
+          renderer.replace(completion.streamUiSource);
           renderer.complete();
           finalSnapshot = renderer.getSnapshot();
         }
 
         const terminalApplied = updateAssistantForPhase(
           {
-            content: finalParts.chat || finalParts.fallbackText,
-            reasoning,
-            sessionTitle:
-              finalParts.sessionTitleComplete && finalParts.sessionTitle.trim()
-                ? finalParts.sessionTitle
-                : undefined,
-            rawStream: raw,
-            streamSequence: lastStreamSequence,
-            snapshot: finalSnapshot,
-            artifactContext,
-            hasStreamUi:
-              finalParts.hasStreamUi && finalParts.streamui.trim().length > 0,
-            streamUiComplete: finalParts.streamUiComplete,
-            status: "complete"
+            ...completion.patch,
+            snapshot: finalSnapshot
           },
           "complete"
         );
@@ -1412,7 +1383,7 @@ export default function App() {
           assistantId,
           raw,
           finalSnapshot,
-          artifactContext?.textSummary
+          completion.patch.artifactContext?.textSummary
         );
         if (artifactUpload) {
           try {
@@ -2155,33 +2126,19 @@ export default function App() {
 
           const handleContentChunk = (chunk: string, streamSequence?: number) => {
             raw += chunk;
-            const parts = extractStreamUiParts(raw);
+            const projection = projectStreamingChatRun(raw, streamSequence);
 
-            if (parts.hasStreamUi) {
-              renderer.replace(parts.streamui);
+            if (projection.streamUiSource !== undefined) {
+              renderer.replace(projection.streamUiSource);
             }
 
-            const snapshot = parts.hasStreamUi
+            const snapshot = projection.streamUiSource !== undefined
               ? renderer.getSnapshot()
               : undefined;
-            const artifactContext =
-              parts.hasStreamUi && parts.streamUiComplete && parts.streamui.trim()
-                ? buildArtifactContext(raw)
-                : undefined;
-            const sessionTitle =
-              parts.sessionTitleComplete && parts.sessionTitle.trim()
-                ? parts.sessionTitle
-                : undefined;
 
             updateRestoredAssistant({
-              content: parts.chat || (!parts.hasStreamUi ? parts.fallbackText : ""),
-              rawStream: raw,
+              ...projection.patch,
               ...(snapshot ? { snapshot } : {}),
-              ...(artifactContext ? { artifactContext } : {}),
-              ...(sessionTitle ? { sessionTitle } : {}),
-              hasStreamUi: parts.hasStreamUi,
-              streamUiComplete: parts.streamUiComplete,
-              ...(typeof streamSequence === "number" ? { streamSequence } : {})
             });
           };
 
@@ -2271,55 +2228,35 @@ export default function App() {
             }
 
             if (doneStatus === "error") {
-              const finalParts = extractStreamUiParts(raw);
               updateRestoredAssistant(
-                {
-                  content:
-                    finalParts.chat ||
-                    finalParts.fallbackText ||
-                    "I could not complete that request.",
+                projectFailedChatRun({
+                  raw,
                   reasoning,
-                  rawStream: raw,
                   streamSequence: lastStreamSequence,
-                  error: sanitizeChatErrorMessage(doneError),
-                  status: "error"
-                },
+                  error: doneError
+                }),
                 "error"
               );
               return;
             }
 
-            const finalParts = extractStreamUiParts(raw);
+            const completion = projectCompletedChatRun({
+              raw,
+              reasoning,
+              streamSequence: lastStreamSequence
+            });
             let finalSnapshot: RenderSnapshot | undefined;
-            const artifactContext =
-              finalParts.hasStreamUi && finalParts.streamui.trim()
-                ? buildArtifactContext(raw)
-                : undefined;
 
-            if (finalParts.hasStreamUi && finalParts.streamui.trim()) {
-              renderer.replace(finalParts.streamui);
+            if (completion.streamUiSource) {
+              renderer.replace(completion.streamUiSource);
               renderer.complete();
               finalSnapshot = renderer.getSnapshot();
             }
 
             updateRestoredAssistant(
               {
-                content: finalParts.chat || finalParts.fallbackText,
-                reasoning,
-                sessionTitle:
-                  finalParts.sessionTitleComplete &&
-                  finalParts.sessionTitle.trim()
-                    ? finalParts.sessionTitle
-                    : undefined,
-                rawStream: raw,
-                streamSequence: lastStreamSequence,
-                snapshot: finalSnapshot,
-                artifactContext,
-                hasStreamUi:
-                  finalParts.hasStreamUi &&
-                  finalParts.streamui.trim().length > 0,
-                streamUiComplete: finalParts.streamUiComplete,
-                status: "complete"
+                ...completion.patch,
+                snapshot: finalSnapshot
               },
               "complete"
             );
