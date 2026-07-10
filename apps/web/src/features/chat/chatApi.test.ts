@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   cancelChatRun,
+  claimAcceptedChatRunResponse,
   readNdjsonLines,
   requestChatRunEvents,
   startChatRun
@@ -84,5 +85,34 @@ describe("chat API", () => {
       '{"type":"reasoning","text":"done"}',
       "last-line"
     ]);
+  });
+
+  it("transfers run ownership only after a successful streaming response", () => {
+    let accepted = 0;
+    const success = new Response("stream", { status: 200 });
+    const claimed = claimAcceptedChatRunResponse(success, () => {
+      accepted += 1;
+    });
+
+    assert.ok(claimed?.body);
+    assert.equal(claimed?.response, success);
+    assert.equal(accepted, 1);
+
+    assert.equal(
+      claimAcceptedChatRunResponse(
+        new Response("failed", { status: 500 }),
+        () => {
+          accepted += 1;
+        }
+      ),
+      undefined
+    );
+    assert.equal(
+      claimAcceptedChatRunResponse(new Response(null, { status: 204 }), () => {
+        accepted += 1;
+      }),
+      undefined
+    );
+    assert.equal(accepted, 1);
   });
 });

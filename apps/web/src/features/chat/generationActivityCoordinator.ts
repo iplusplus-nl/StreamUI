@@ -17,6 +17,10 @@ export type GenerationActivityCoordinator = {
   getSnapshot(): GenerationActivitySnapshot;
   tryAcquireChatRun(runId: string): ChatGenerationLease | undefined;
   registerRestoredChatRun(runId: string): ChatGenerationLease | undefined;
+  promoteLocalToChat(
+    localLease: LocalGenerationLease,
+    runId: string
+  ): ChatGenerationLease | undefined;
   finishChatRun(runId: string): boolean;
   tryAcquireLocal(ownerId: string): LocalGenerationLease | undefined;
   reset(): void;
@@ -31,6 +35,7 @@ export function createGenerationActivityCoordinator(
 ): GenerationActivityCoordinator {
   const chatRunTokens = new Map<string, symbol>();
   let localOwner: { id: string; token: symbol } | null = null;
+  const localLeaseTokens = new WeakMap<LocalGenerationLease, symbol>();
   let lastEmittedBusy = false;
 
   const isBusy = () => chatRunTokens.size > 0 || localOwner !== null;
@@ -96,6 +101,25 @@ export function createGenerationActivityCoordinator(
       return createChatLease(normalizedRunId, token);
     },
 
+    promoteLocalToChat(localLease, runId) {
+      const normalizedRunId = runId.trim();
+      const localToken = localLeaseTokens.get(localLease);
+      if (
+        !normalizedRunId ||
+        !localToken ||
+        localOwner?.token !== localToken ||
+        chatRunTokens.size > 0
+      ) {
+        return undefined;
+      }
+
+      const chatToken = Symbol(normalizedRunId);
+      chatRunTokens.set(normalizedRunId, chatToken);
+      localOwner = null;
+      emitBusyChange();
+      return createChatLease(normalizedRunId, chatToken);
+    },
+
     finishChatRun(runId) {
       if (!chatRunTokens.delete(runId)) {
         return false;
@@ -115,7 +139,7 @@ export function createGenerationActivityCoordinator(
       localOwner = { id: normalizedOwnerId, token };
       emitBusyChange();
       let released = false;
-      return {
+      const lease: LocalGenerationLease = {
         release() {
           if (released) {
             return;
@@ -128,6 +152,8 @@ export function createGenerationActivityCoordinator(
           emitBusyChange();
         }
       };
+      localLeaseTokens.set(lease, token);
+      return lease;
     },
 
     reset() {

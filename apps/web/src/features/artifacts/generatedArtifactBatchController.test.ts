@@ -342,6 +342,34 @@ describe("generated artifact batch controller", () => {
     assert.equal(requestCount, 1);
   });
 
+  it("forwards a pre-acquired chat lease and visual request ownership hooks", async () => {
+    const test = harness();
+    test.busy = true;
+    const lease = { release() {} };
+    let accepted = false;
+    const result = test.controller.start({
+      ...input(),
+      runId: " visual-run ",
+      chatActivityLease: lease,
+      ephemeralAttachments: true,
+      onRunAccepted: () => {
+        accepted = true;
+      }
+    });
+
+    assert.equal(result.status, "started");
+    if (result.status !== "started") {
+      return;
+    }
+    assert.equal(result.operation.runId, "visual-run");
+    assert.equal(test.requests[0].options.generationRunId, "visual-run");
+    assert.equal(test.requests[0].options.chatActivityLease, lease);
+    assert.equal(test.requests[0].options.ephemeralAttachments, true);
+    test.requests[0].options.onRunAccepted?.();
+    assert.equal(accepted, true);
+    assert.deepEqual(await result.completion, { status: "fulfilled" });
+  });
+
   it("contains asynchronous request failures and reports them once", async () => {
     const failure = new Error("request failed");
     const test = harness({
@@ -349,9 +377,15 @@ describe("generated artifact batch controller", () => {
         throw failure;
       }
     });
-    assert.equal(test.controller.start(input()).status, "started");
-    await Promise.resolve();
-    await Promise.resolve();
+    const result = test.controller.start(input());
+    assert.equal(result.status, "started");
+    if (result.status !== "started") {
+      return;
+    }
+    assert.deepEqual(await result.completion, {
+      status: "rejected",
+      error: failure
+    });
 
     assert.deepEqual(test.warnings, [
       { message: "Could not run generated artifact batch.", error: failure }

@@ -13,6 +13,21 @@ import {
   readStoredFile,
   type StoredFileKind
 } from "./fileStore.js";
+import {
+  TombstonedSessionUploadError,
+  applyUploadedSessionFileMetadata,
+  assertSessionFileUploadAllowed,
+  mergeSessionFilesForClientSave,
+  removeOwnedEphemeralFilesFromSession,
+  runSessionFileDeletionTransaction,
+  runSessionFileUploadTransaction,
+  selectTombstonedSessionStorageKeys,
+  type EphemeralSessionFileIdentity
+} from "./sessionFileUploadSafety.js";
+import {
+  ActiveEphemeralFileDeletionError,
+  activeEphemeralFileRegistry
+} from "./activeEphemeralFileRegistry.js";
 
 type StoredMessage = {
   id: string;
@@ -611,6 +626,10 @@ function hasCommittedSessionFiles(session: StoredSession): boolean {
   return Boolean((session.files ?? []).some((file) => !file.draft));
 }
 
+function hasDraftSessionFiles(session: StoredSession): boolean {
+  return Boolean((session.files ?? []).some((file) => file.draft));
+}
+
 function isStoredSessionEmpty(session: StoredSession): boolean {
   return (
     session.messages.length === 0 &&
@@ -1147,9 +1166,11 @@ export function mergeClientSaveState(
       messages: mergeMessagesForClientSave(currentSession.messages, session.messages, {
         preserveStaleArtifactEdits: incomingIsOlder
       }),
-      files: hasActiveRun
-        ? mergeSessionFiles(currentSession.files, session.files)
-        : session.files,
+      files: mergeSessionFilesForClientSave(
+        currentSession.files,
+        session.files,
+        hasActiveRun
+      ),
       bugReportDraft: mergeBugReportDraftForClientSave(
         currentSession.bugReportDraft,
         session.bugReportDraft,
@@ -1159,7 +1180,10 @@ export function mergeClientSaveState(
   });
 
   for (const session of currentSessions) {
-    if (!incomingIds.has(session.id) && !isStoredSessionEmpty(session)) {
+    if (
+      !incomingIds.has(session.id) &&
+      (!isStoredSessionEmpty(session) || hasDraftSessionFiles(session))
+    ) {
       sessions.push(session);
     }
   }
@@ -1233,6 +1257,66 @@ async function enqueueSessionStateUpdate(
     () => undefined
   );
   await operation;
+}
+
+async function enqueueSessionStateInspection(
+  stateKey: string,
+  inspector: (state: StoredSessionState) => void
+): Promise<void> {
+  const operation = saveQueue.then(async () => {
+    inspector(await readSessionState(stateKey));
+  });
+  saveQueue = operation.then(
+    () => undefined,
+    () => undefined
+  );
+  await operation;
+}
+
+export async function deleteEphemeralSessionFiles({
+  stateKey = DEFAULT_SESSION_STATE_KEY,
+  sessionId,
+  expectedFiles
+}: {
+  stateKey?: string;
+  sessionId: string;
+  expectedFiles: readonly EphemeralSessionFileIdentity[];
+}): Promise<number> {
+  if (!sessionId || !expectedFiles.length) {
+    return 0;
+  }
+
+  let removedCount = 0;
+  const operation = saveQueue.then(() =>
+    runSessionFileDeletionTransaction({
+      prepare: async () => {
+        const state = await readSessionState(stateKey);
+        const result = removeOwnedEphemeralFilesFromSession(
+          state.sessions,
+          sessionId,
+          expectedFiles
+        );
+        return {
+          storageKeys: result.removedStorageKeys,
+          persistMetadata: async () => {
+            if (!result.removedStorageKeys.length) {
+              return;
+            }
+            state.sessions = result.sessions;
+            await writeSessionState(state, stateKey);
+            removedCount = result.removedStorageKeys.length;
+          }
+        };
+      },
+      deleteBlob: deleteStoredFile
+    })
+  );
+  saveQueue = operation.then(
+    () => undefined,
+    () => undefined
+  );
+  await operation;
+  return removedCount;
 }
 
 export async function upsertSessionMessages({
@@ -1423,20 +1507,62 @@ export async function handleSaveSessions(
     const deletedSessionIds = normalizeDeletedSessionIds(
       (req.body as { deletedSessionIds?: unknown })?.deletedSessionIds
     );
-    saveQueue = saveQueue.then(async () => {
-      const current = await readSessionState(stateKey);
-      await writeSessionState(
-        mergeClientSaveState(current, state, deletedSessionIds),
-        stateKey
-      );
+    const operation = saveQueue.then(() => {
+      const sessionIdsByStorageKey = new Map<string, Set<string>>();
+      return runSessionFileDeletionTransaction({
+        prepare: async () => {
+          const current = await readSessionState(stateKey);
+          const merged = mergeClientSaveState(
+            current,
+            state,
+            deletedSessionIds
+          );
+          const tombstones = new Set(merged.deletedSessionIds ?? []);
+          for (const session of current.sessions) {
+            if (!tombstones.has(session.id)) {
+              continue;
+            }
+            for (const file of session.files ?? []) {
+              if (!file.storageKey) {
+                continue;
+              }
+              const owners =
+                sessionIdsByStorageKey.get(file.storageKey) ?? new Set<string>();
+              owners.add(session.id);
+              sessionIdsByStorageKey.set(file.storageKey, owners);
+            }
+          }
+          return {
+            storageKeys: selectTombstonedSessionStorageKeys(
+              current.sessions,
+              merged.deletedSessionIds ?? []
+            ),
+            persistMetadata: () => writeSessionState(merged, stateKey)
+          };
+        },
+        acquireDeletion: (storageKeys) =>
+          activeEphemeralFileRegistry.acquireDeletion(
+            storageKeys.flatMap((storageKey) =>
+              Array.from(sessionIdsByStorageKey.get(storageKey) ?? []).map(
+                (sessionId) => ({ stateKey, sessionId, storageKey })
+              )
+            )
+          ),
+        deleteBlob: deleteStoredFile
+      });
     });
-    await saveQueue;
+    saveQueue = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    await operation;
     res.json({ ok: true });
   } catch (error) {
-    saveQueue = Promise.resolve();
-    res.status(500).json({
-      error: error instanceof Error ? error.message : String(error)
-    });
+    res
+      .status(error instanceof ActiveEphemeralFileDeletionError ? 409 : 500)
+      .json({
+        error: error instanceof Error ? error.message : String(error)
+      });
   }
 }
 
@@ -1492,48 +1618,49 @@ export async function handleCreateSessionFile(
       dataUrl: stringValue(body.dataUrl) || undefined,
       text: stringValue(body.text) || undefined
     };
-    const stored = await putStoredFile(fileId, input);
-    const file: StoredSessionFile = {
-      id: fileId,
-      kind,
-      name,
-      mimeType: stored.mimeType,
-      size: stored.size,
-      createdAt: now(),
-      sourceMessageId: stringValue(body.sourceMessageId) || undefined,
-      storageKey: stored.storageKey,
-      contentHash: stored.contentHash,
-      accessToken: createFileAccessToken(),
-      draft: Boolean(body.draft),
-      width:
-        typeof body.width === "number" && Number.isFinite(body.width)
-          ? Math.max(1, Math.round(body.width))
-          : undefined,
-      height:
-        typeof body.height === "number" && Number.isFinite(body.height)
-          ? Math.max(1, Math.round(body.height))
-          : undefined,
-      summary: stringValue(body.summary).slice(0, 1_200) || undefined
-    };
-
-    let savedFile: StoredSessionFile | null = null;
-    saveQueue = saveQueue.then(async () => {
-      const state = await readSessionState(stateKey);
-      const session = ensureSession(state, sessionId);
-      session.files = [
-        ...(session.files ?? []).filter((candidate) => candidate.id !== file.id),
-        file
-      ];
-      session.updatedAt = now();
-      await writeSessionState(state, stateKey);
-      savedFile = file;
+    const file = await runSessionFileUploadTransaction({
+      assertUploadAllowed: () =>
+        enqueueSessionStateInspection(stateKey, (state) => {
+          assertSessionFileUploadAllowed(state, sessionId);
+        }),
+      storeBlob: () => putStoredFile(fileId, input),
+      createFile: (stored): StoredSessionFile => ({
+        id: fileId,
+        kind,
+        name,
+        mimeType: stored.mimeType,
+        size: stored.size,
+        createdAt: now(),
+        sourceMessageId: stringValue(body.sourceMessageId) || undefined,
+        storageKey: stored.storageKey,
+        contentHash: stored.contentHash,
+        accessToken: createFileAccessToken(),
+        draft: Boolean(body.draft),
+        width:
+          typeof body.width === "number" && Number.isFinite(body.width)
+            ? Math.max(1, Math.round(body.width))
+            : undefined,
+        height:
+          typeof body.height === "number" && Number.isFinite(body.height)
+            ? Math.max(1, Math.round(body.height))
+            : undefined,
+        summary: stringValue(body.summary).slice(0, 1_200) || undefined
+      }),
+      persistMetadata: (uploadedFile) =>
+        enqueueSessionStateUpdate(stateKey, (state) => {
+          applyUploadedSessionFileMetadata(
+            state,
+            sessionId,
+            uploadedFile,
+            now()
+          );
+        }),
+      rollbackBlob: (stored) => deleteStoredFile(stored.storageKey)
     });
-    await saveQueue;
 
-    res.json({ file: withFileUrls(req, savedFile ?? file) });
+    res.json({ file: withFileUrls(req, file) });
   } catch (error) {
-    saveQueue = Promise.resolve();
-    res.status(400).json({
+    res.status(error instanceof TombstonedSessionUploadError ? 409 : 400).json({
       error: error instanceof Error ? error.message : String(error)
     });
   }
@@ -1587,30 +1714,51 @@ export async function handleDeleteSessionFile(
   const stateKey = getRequestStateKey(req);
 
   try {
-    let removed: StoredSessionFile | undefined;
-    saveQueue = saveQueue.then(async () => {
-      const state = await readSessionState(stateKey);
-      const session = findSession(state, sessionId);
-      if (!session) {
-        return;
-      }
-
-      removed = (session.files ?? []).find((file) => file.id === fileId);
-      session.files = (session.files ?? []).filter((file) => file.id !== fileId);
-      session.updatedAt = now();
-      await writeSessionState(state, stateKey);
-    });
-    await saveQueue;
-
-    if (removed?.storageKey) {
-      await deleteStoredFile(removed.storageKey);
-    }
+    const operation = saveQueue.then(() =>
+      runSessionFileDeletionTransaction({
+        prepare: async () => {
+          const state = await readSessionState(stateKey);
+          const session = findSession(state, sessionId);
+          const removed = (session?.files ?? []).find(
+            (file) => file.id === fileId
+          );
+          return {
+            storageKeys: removed?.storageKey ? [removed.storageKey] : [],
+            persistMetadata: async () => {
+              if (!session || !removed) {
+                return;
+              }
+              session.files = (session.files ?? []).filter(
+                (file) => file.id !== fileId
+              );
+              session.updatedAt = now();
+              await writeSessionState(state, stateKey);
+            }
+          };
+        },
+        acquireDeletion: (storageKeys) =>
+          activeEphemeralFileRegistry.acquireDeletion(
+            storageKeys.map((storageKey) => ({
+              stateKey,
+              sessionId,
+              storageKey
+            }))
+          ),
+        deleteBlob: deleteStoredFile
+      })
+    );
+    saveQueue = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    await operation;
 
     res.json({ ok: true });
   } catch (error) {
-    saveQueue = Promise.resolve();
-    res.status(500).json({
-      error: error instanceof Error ? error.message : String(error)
-    });
+    res
+      .status(error instanceof ActiveEphemeralFileDeletionError ? 409 : 500)
+      .json({
+        error: error instanceof Error ? error.message : String(error)
+      });
   }
 }

@@ -18,7 +18,6 @@ import {
   type ThemeMode
 } from "./components/SessionSidebar";
 import { AuthOverlay } from "./components/AuthOverlay";
-import { blobToDataUrl } from "./core/blob";
 import {
   getSelectableModelOptions,
   normalizeApiSettings,
@@ -28,11 +27,6 @@ import {
 } from "./core/apiSettings";
 import { serializeSearchSettings } from "./core/searchSettings";
 import { buildArtifactContext } from "./core/artifactContext";
-import {
-  getSnapshotDiagnostics,
-  renderSnapshotToPngBlob
-} from "./core/artifactExport";
-import { modelLikelySupportsImageInput } from "./core/modelCapabilities";
 import {
   createId,
   createInitialSessionState,
@@ -52,6 +46,7 @@ import {
 import { toApiMessages } from "./features/chat/apiMessages";
 import {
   cancelChatRun,
+  claimAcceptedChatRunResponse,
   readNdjsonLines,
   requestChatRunEvents,
   startChatRun
@@ -69,6 +64,7 @@ import type {
   PendingManagedRequest,
   SendStreamUiRequestOptions
 } from "./features/chat/chatRunRequest";
+import { isManagedRequestReplaySafe } from "./features/chat/chatRunRequest";
 import { createGenerationActivityCoordinator } from "./features/chat/generationActivityCoordinator";
 import {
   convertMessage,
@@ -102,8 +98,11 @@ import {
   loadSessionClientId
 } from "./features/sessions/sessionPersistence";
 import {
-  mergeSessionFiles
-} from "./features/sessions/sessionSelectors";
+  getChatRunRequestFiles,
+  getChatRunSessionFiles,
+  getEphemeralChatRunFileIds,
+  prepareChatRunAttachmentFiles
+} from "./features/chat/chatRunAttachmentFiles";
 import { useSessionSync } from "./features/sessions/useSessionSync";
 import { useSessionSave } from "./features/sessions/useSessionSave";
 import { useSessionIndex } from "./features/sessions/useSessionIndex";
@@ -115,10 +114,8 @@ import {
   upsertSessionFilesInState
 } from "./features/sessions/sessionStateMutations";
 import {
-  commitUploadedImageFile,
   createArtifactFileUpload,
-  getAttachmentSessionError,
-  imageAttachmentToFileUpload
+  getAttachmentSessionError
 } from "./features/sessions/sessionFileModel";
 import {
   getArtifactEditActiveVariant,
@@ -129,13 +126,18 @@ import {
   buildCompletedAssistantPatchFromRawStream
 } from "./features/artifacts/artifactMessageProjection";
 import { hasRenderError } from "./features/artifacts/renderErrors";
-import { buildVisualRepairPrompt } from "./features/artifacts/visualRepair";
 import { useArtifactSelections } from "./features/artifacts/useArtifactSelections";
 import { isArtifactSelectionTargetActive } from "./features/artifacts/artifactSelectionController";
 import { useArtifactActions } from "./features/artifacts/useArtifactActions";
 import { selectArtifactEditVersion } from "./features/artifacts/artifactEditOperationModel";
 import { useArtifactEditController } from "./features/artifacts/useArtifactEditController";
 import { createGeneratedArtifactBatchController } from "./features/artifacts/generatedArtifactBatchController";
+import { useVisualRepairController } from "./features/artifacts/useVisualRepairController";
+import {
+  replayPendingVisualRepair,
+  startVisualRepairWithAuthContinuation
+} from "./features/artifacts/visualRepairAuthContinuation";
+import type { StartVisualRepairInput } from "./features/artifacts/visualRepairController";
 import {
   finalizePersistedGeneratedArtifactBatches,
   reduceGeneratedArtifactBatchPatch,
@@ -148,10 +150,7 @@ import type {
 import { coerceApiSettingsForRuntime } from "./features/settings/appSettingsPolicy";
 import { useAppSettings } from "./features/settings/useAppSettings";
 import { useCloudAuthController } from "./features/auth/useCloudAuthController";
-import type {
-  ImageAttachment,
-  UploadedSessionFile
-} from "./core/imageAttachments";
+import type { ImageAttachment } from "./core/imageAttachments";
 import { extractStreamUiParts } from "./runtime/streamui/protocol";
 import { createStreamingRenderer } from "./runtime/streamui/streamingRenderer";
 import type {
@@ -290,6 +289,9 @@ export default function App() {
   const [pendingManagedRequestSlot] = useState(
     () => createPendingRequestSlot<PendingManagedRequest>(),
   );
+  const [pendingVisualRepairSlot] = useState(
+    () => createPendingRequestSlot<StartVisualRepairInput>()
+  );
   const {
     getSelections: getArtifactSelections,
     changeSelections: handleArtifactSelectionsChange,
@@ -323,18 +325,21 @@ export default function App() {
     []
   );
   const handleAuthOverlayRequest = useCallback(() => {
+    pendingVisualRepairSlot.clear();
     openManualAuth(pendingManagedRequestSlot, openAuthOverlay);
-  }, [openAuthOverlay, pendingManagedRequestSlot]);
+  }, [openAuthOverlay, pendingManagedRequestSlot, pendingVisualRepairSlot]);
   const handleAuthOverlayClose = useCallback(() => {
     closeAuthAndDiscard(pendingManagedRequestSlot, closeAuthOverlay);
-  }, [closeAuthOverlay, pendingManagedRequestSlot]);
+    pendingVisualRepairSlot.clear();
+  }, [closeAuthOverlay, pendingManagedRequestSlot, pendingVisualRepairSlot]);
   const handleLogout = useCallback(async () => {
     try {
       await logoutCloudAccount();
     } finally {
       pendingManagedRequestSlot.clear();
+      pendingVisualRepairSlot.clear();
     }
-  }, [logoutCloudAccount, pendingManagedRequestSlot]);
+  }, [logoutCloudAccount, pendingManagedRequestSlot, pendingVisualRepairSlot]);
 
   useEffect(() => {
     sessionStateRef.current = sessionState;
@@ -371,8 +376,9 @@ export default function App() {
   useEffect(() => {
     if (!cloudEnabled) {
       pendingManagedRequestSlot.clear();
+      pendingVisualRepairSlot.clear();
     }
-  }, [cloudEnabled, pendingManagedRequestSlot]);
+  }, [cloudEnabled, pendingManagedRequestSlot, pendingVisualRepairSlot]);
 
   const sessionListPreview = useSessionIndex({
     sessionState,
@@ -818,62 +824,6 @@ export default function App() {
     [setSessionStateAndRef, themeMode]
   );
 
-  const handleCancelRun = useCallback(async () => {
-    const activeSession = sessionStateRef.current.sessions.find(
-      (session) => session.id === activeSessionIdRef.current
-    );
-    const runIds = getSessionStreamingRunIds(activeSession);
-    const cancelledLocalArtifactEdit = cancelActiveArtifactEdit();
-    if (!runIds.length && !cancelledLocalArtifactEdit) {
-      return;
-    }
-
-    const branchCleanupRunIds = runIds.filter((runId) =>
-      branchRunCancelCleanupRef.current.has(runId)
-    );
-    const patchCancelledRunIds = runIds.filter(
-      (runId) => !branchRunCancelCleanupRef.current.has(runId)
-    );
-
-    runIds.forEach((runId) => cancelledRunIdsRef.current.add(runId));
-
-    const cancelRequests = runIds.map((runId) =>
-      cancelChatRun(runId, sessionClientIdRef.current).catch((error) => {
-        console.warn("Could not cancel ChatHTML run on the server.", error);
-      })
-    );
-
-    runIds.forEach((runId) => {
-      const controller = runConnectionsRef.current.get(runId);
-      controller?.abort();
-      runConnectionsRef.current.delete(runId);
-      generationActivity.finishChatRun(runId);
-    });
-    if (branchCleanupRunIds.length) {
-      removeCancelledBranchRunVariants(branchCleanupRunIds);
-    }
-    if (patchCancelledRunIds.length) {
-      markRunsCancelled(patchCancelledRunIds);
-    }
-    await Promise.allSettled(cancelRequests);
-    if (runIds.length) {
-      try {
-        await saveCurrentSessionStateNow();
-      } catch (error) {
-        console.warn("Could not persist cancelled ChatHTML runs.", error);
-      }
-    }
-    window.setTimeout(() => {
-      runIds.forEach((runId) => cancelledRunIdsRef.current.delete(runId));
-    }, SESSION_SYNC_INTERVAL_MS);
-  }, [
-    cancelActiveArtifactEdit,
-    generationActivity,
-    markRunsCancelled,
-    removeCancelledBranchRunVariants,
-    saveCurrentSessionStateNow
-  ]);
-
   const handleSelectBranch = useCallback(
     (groupId: string, variantId: string) => {
       updateActiveSession((session) => ({
@@ -949,12 +899,13 @@ export default function App() {
       const trimmed = text.trim();
       if (
         (!trimmed && attachments.length === 0) ||
-        generationActivity.isBusy()
+        (!options.chatActivityLease && generationActivity.isBusy())
       ) {
         return;
       }
 
       const appendUserMessage = options.appendUserMessage ?? true;
+      const ephemeralAttachments = options.ephemeralAttachments ?? false;
       const requestedSessionId = options.targetSessionId?.trim();
       const requestSessionId = requestedSessionId || activeSessionIdRef.current;
       const requestSessionForModel = sessionStateRef.current.sessions.find(
@@ -997,6 +948,11 @@ export default function App() {
         cloudEnabled &&
         !authenticatedUser
       ) {
+        if (!isManagedRequestReplaySafe(options)) {
+          options.chatActivityLease?.release();
+          openAuthOverlay();
+          return;
+        }
         queueManagedAuthRequest(
           pendingManagedRequestSlot,
           pinManagedRequestToSession(
@@ -1009,10 +965,13 @@ export default function App() {
       }
       const userMessageId = createId("user");
       const previousMessages = getVisibleSessionMessages(requestSessionForModel);
-      const uploadedFiles = attachments
-        .map((attachment) => commitUploadedImageFile(attachment, userMessageId))
-        .filter((file): file is SessionFile => file !== null);
-      if (uploadedFiles.length !== attachments.length) {
+      const preparedAttachmentFiles = prepareChatRunAttachmentFiles(
+        attachments,
+        userMessageId,
+        ephemeralAttachments
+      );
+      const uploadedFiles = preparedAttachmentFiles.uploadedFiles;
+      if (!preparedAttachmentFiles.allAttachmentsCommitted) {
         console.warn(
           "Image upload is still in progress. Please wait before sending."
         );
@@ -1070,6 +1029,7 @@ export default function App() {
         updateAssistantForPhase(patch, "streaming");
       };
       const chatActivityLease =
+        options.chatActivityLease ??
         generationActivity.tryAcquireChatRun(generationRunId);
       if (!chatActivityLease) {
         return;
@@ -1162,7 +1122,10 @@ export default function App() {
             uiComplexity: requestUiComplexity,
             branchSelections,
             messages: nextMessages,
-            files: mergeSessionFiles([...session.files, ...uploadedFiles])
+            files: getChatRunSessionFiles(
+              session.files,
+              preparedAttachmentFiles
+            )
           };
         });
       } catch (error) {
@@ -1344,10 +1307,10 @@ export default function App() {
         const requestSession = sessionStateRef.current.sessions.find(
           (session) => session.id === requestSessionId
         );
-        const requestFiles = mergeSessionFiles([
-          ...(requestSession?.files ?? []),
-          ...uploadedFiles
-        ]);
+        const requestFiles = getChatRunRequestFiles(
+          requestSession?.files ?? [],
+          preparedAttachmentFiles
+        );
         startServerReconcile();
 
         const response = await startChatRun(
@@ -1361,6 +1324,9 @@ export default function App() {
             assistantMessage,
             messages: toApiMessages(requestHistory),
             files: requestFiles,
+            ephemeralFileIds: getEphemeralChatRunFileIds(
+              preparedAttachmentFiles
+            ),
             canvas: getCanvasContext(),
             themeMode,
             apiSettings: serializeApiSettings(requestApiSettings),
@@ -1370,13 +1336,17 @@ export default function App() {
           streamController.signal
         );
 
-        if (!response.ok || !response.body) {
+        const acceptedResponse = claimAcceptedChatRunResponse(
+          response,
+          options.onRunAccepted
+        );
+        if (!acceptedResponse) {
           const errorText = await response.text();
           throw new Error(formatChatHttpError(response, errorText));
         }
         streamConnected = true;
 
-        await readNdjsonLines(response.body, handleStreamEvent);
+        await readNdjsonLines(acceptedResponse.body, handleStreamEvent);
 
         await reconcileAssistantFromServer();
 
@@ -1739,124 +1709,133 @@ export default function App() {
 
   const startGeneratedArtifactBatch = generatedArtifactBatchController.start;
 
+  const {
+    start: startVisualRepair,
+    cancelActive: cancelActiveVisualRepair,
+    getActiveRun: getActiveVisualRepairRun,
+    isRunning: isVisualRepairRunning
+  } = useVisualRepairController({
+    sessionStateRef,
+    apiSettings,
+    runtimeSettings,
+    cloudEnabled,
+    authenticated: Boolean(authenticatedUser),
+    themeMode,
+    isBusy: generationActivity.isBusy,
+    tryAcquireLocal: generationActivity.tryAcquireLocal,
+    promoteLocalToChat: generationActivity.promoteLocalToChat,
+    startGeneratedBatch: startGeneratedArtifactBatch,
+    openAuthentication: openAuthOverlay
+  });
+
   const handleVisualRepairAssistant = useCallback(
-    async (assistantId: string, snapshot: RenderSnapshot, width: number) => {
-      if (generationActivity.isBusy() || snapshot.status !== "complete") {
-        return;
-      }
-
-      const session =
-        sessionStateRef.current.sessions.find((candidate) =>
-          candidate.messages.some((message) => message.id === assistantId)
-        ) ??
-        sessionStateRef.current.sessions.find(
-          (candidate) => candidate.id === activeSessionIdRef.current
-        ) ??
-        sessionStateRef.current.sessions[0];
-      if (!session) {
-        return;
-      }
-
-      const visibleMessages = getVisibleSessionMessages(session);
-      const assistantIndex = visibleMessages.findIndex(
-        (message) => message.id === assistantId && message.role === "assistant"
-      );
-      if (assistantIndex < 0) {
-        return;
-      }
-
-      const activeAssistant = visibleMessages[assistantIndex];
-      const userIndex = (() => {
-        for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-          if (visibleMessages[index].role === "user") {
-            return index;
-          }
-        }
-        return -1;
-      })();
-      if (userIndex < 0) {
-        return;
-      }
-
-      const exportWidth = Math.max(320, Math.min(1100, Math.round(width || 900)));
-      const requestModel = (session.model || apiSettings.model).trim();
-      const canUseScreenshot = modelLikelySupportsImageInput(requestModel);
-
-      try {
-        const diagnostics = canUseScreenshot
-          ? undefined
-          : getSnapshotDiagnostics(snapshot, {
-              exportWidth,
-              themeMode
-            });
-        const attachments: ImageAttachment[] = [];
-        if (canUseScreenshot) {
-          const blob = await renderSnapshotToPngBlob(snapshot, {
-            themeMode,
-            width: exportWidth
-          });
-          const dataUrl = await blobToDataUrl(blob);
-          const image: ImageAttachment = {
-            id: createId("render"),
-            name: `${assistantId}-render.png`,
-            mimeType: "image/png",
-            size: blob.size,
-            dataUrl
-          };
-          const uploadedFile = await uploadSessionFile(
-            session.id,
-            imageAttachmentToFileUpload(image, assistantId, true),
-            sessionClientIdRef.current
-          );
-          if (uploadedFile.kind !== "image") {
-            throw new Error("Rendered screenshot upload did not return an image.");
-          }
-
-          attachments.push({
-            ...image,
-            id: uploadedFile.id,
-            name: uploadedFile.name,
-            mimeType: uploadedFile.mimeType,
-            size: uploadedFile.size,
-            width: uploadedFile.width,
-            height: uploadedFile.height,
-            sessionFile: uploadedFile as UploadedSessionFile,
-            ownerSessionId: session.id
-          });
-        }
-        const repairOfMessageId =
-          activeAssistant.repairOfMessageId || activeAssistant.id;
-        const repairAttempt = (activeAssistant.repairAttempt ?? 0) + 1;
-
-        startGeneratedArtifactBatch({
-          sessionId: session.id,
-          assistantId: activeAssistant.id,
-          sourceUserMessageId: visibleMessages[userIndex].id,
-          prompt: buildVisualRepairPrompt({
-            diagnostics,
-            hasScreenshot: canUseScreenshot,
-            width: exportWidth
-          }),
-          attachments,
-          assistantPatch: {
-            repairOfMessageId,
-            repairAttempt
-          },
-          initialReasoning:
-            "Captured the rendered artifact screenshot for visual repair.",
-          historyMode: "through-target-assistant"
-        });
-      } catch (error) {
+    (assistantId: string, snapshot: RenderSnapshot, width: number) => {
+      const request: StartVisualRepairInput = {
+        sessionId: activeSessionIdRef.current,
+        assistantId,
+        snapshot,
+        width
+      };
+      pendingVisualRepairSlot.clear();
+      void startVisualRepairWithAuthContinuation(
+        request,
+        startVisualRepair,
+        pendingVisualRepairSlot
+      ).catch((error) => {
         console.warn("Could not start visual artifact repair.", error);
-      }
+      });
     },
-    [
-      apiSettings.model,
-      generationActivity,
-      startGeneratedArtifactBatch,
-      themeMode
-    ]
+    [pendingVisualRepairSlot, startVisualRepair]
   );
+
+  useEffect(() => {
+    if (!authenticatedUser || isSending) {
+      return;
+    }
+    if (pendingVisualRepairSlot.peek()) {
+      closeAuthOverlay();
+    }
+    replayPendingVisualRepair(
+      pendingVisualRepairSlot,
+      startVisualRepair,
+      (message, error) => console.warn(message, error)
+    );
+  }, [
+    authenticatedUser,
+    closeAuthOverlay,
+    isSending,
+    pendingVisualRepairSlot,
+    startVisualRepair
+  ]);
+
+  const handleCancelRun = useCallback(async () => {
+    const activeSession = sessionStateRef.current.sessions.find(
+      (session) => session.id === activeSessionIdRef.current
+    );
+    const activeVisualRun = getActiveVisualRepairRun();
+    const runIds = Array.from(
+      new Set([
+        ...getSessionStreamingRunIds(activeSession),
+        ...(activeVisualRun ? [activeVisualRun.runId] : [])
+      ])
+    );
+    const cancelledLocalArtifactEdit = cancelActiveArtifactEdit();
+    const cancelledVisualRepair = cancelActiveVisualRepair();
+    if (
+      !runIds.length &&
+      !cancelledLocalArtifactEdit &&
+      !cancelledVisualRepair
+    ) {
+      return;
+    }
+
+    const branchCleanupRunIds = runIds.filter((runId) =>
+      branchRunCancelCleanupRef.current.has(runId)
+    );
+    const patchCancelledRunIds = runIds.filter(
+      (runId) => !branchRunCancelCleanupRef.current.has(runId)
+    );
+
+    runIds.forEach((runId) => cancelledRunIdsRef.current.add(runId));
+
+    const cancelRequests = runIds.map((runId) =>
+      cancelChatRun(runId, sessionClientIdRef.current).catch((error) => {
+        console.warn("Could not cancel ChatHTML run on the server.", error);
+      })
+    );
+
+    runIds.forEach((runId) => {
+      const controller = runConnectionsRef.current.get(runId);
+      controller?.abort();
+      runConnectionsRef.current.delete(runId);
+      generationActivity.finishChatRun(runId);
+    });
+    if (branchCleanupRunIds.length) {
+      removeCancelledBranchRunVariants(branchCleanupRunIds);
+    }
+    if (patchCancelledRunIds.length) {
+      markRunsCancelled(patchCancelledRunIds);
+    }
+    await Promise.allSettled(cancelRequests);
+    if (runIds.length) {
+      try {
+        await saveCurrentSessionStateNow();
+      } catch (error) {
+        console.warn("Could not persist cancelled ChatHTML runs.", error);
+      }
+    }
+    window.setTimeout(() => {
+      runIds.forEach((runId) => cancelledRunIdsRef.current.delete(runId));
+    }, SESSION_SYNC_INTERVAL_MS);
+  }, [
+    cancelActiveArtifactEdit,
+    cancelActiveVisualRepair,
+    generationActivity,
+    getActiveVisualRepairRun,
+    markRunsCancelled,
+    removeCancelledBranchRunVariants,
+    saveCurrentSessionStateNow
+  ]);
 
   const handleRegenerateAssistant = useCallback(
     (assistantId: string) => {
@@ -2453,7 +2432,10 @@ export default function App() {
 
   const runtime = useExternalStoreRuntime({
     messages,
-    isRunning: isActiveSessionSending || isLocalArtifactEditRunning,
+    isRunning:
+      isActiveSessionSending ||
+      isLocalArtifactEditRunning ||
+      isVisualRepairRunning,
     isSendDisabled:
       isSending ||
       isAttachmentSendBlocked,

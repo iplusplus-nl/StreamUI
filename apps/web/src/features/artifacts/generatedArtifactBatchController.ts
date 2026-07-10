@@ -11,6 +11,7 @@ import type {
   SendStreamUiRequest,
   SendStreamUiRequestOptions
 } from "../chat/chatRunRequest";
+import type { ChatGenerationLease } from "../chat/generationActivityCoordinator";
 import {
   getGeneratedArtifactBatchAssistantPatch,
   isGeneratedArtifactBatchSourceCurrent,
@@ -32,11 +33,23 @@ export type StartGeneratedArtifactBatchInput = {
   assistantPatch?: Partial<ClientMessage>;
   initialReasoning?: string;
   historyMode?: GeneratedArtifactBatchHistoryMode;
+  runId?: string;
+  chatActivityLease?: ChatGenerationLease;
+  ephemeralAttachments?: boolean;
+  onRunAccepted?(): void;
 };
+
+export type GeneratedArtifactBatchCompletion =
+  | { status: "fulfilled" }
+  | { status: "rejected"; error: unknown };
 
 export type StartGeneratedArtifactBatchResult =
   | { status: "busy" | "missing" | "invalid" | "failed" }
-  | { status: "started"; operation: GeneratedArtifactBatchOperation };
+  | {
+      status: "started";
+      operation: GeneratedArtifactBatchOperation;
+      completion: Promise<GeneratedArtifactBatchCompletion>;
+    };
 
 export type GeneratedArtifactBatchControllerPorts = {
   getState(): SessionState;
@@ -119,7 +132,7 @@ export function createGeneratedArtifactBatchController(
 
   return {
     start(input) {
-      if (ports.isBusy()) {
+      if (ports.isBusy() && !input.chatActivityLease) {
         return { status: "busy" };
       }
 
@@ -139,7 +152,7 @@ export function createGeneratedArtifactBatchController(
         assistantId: target.assistant.id,
         sourceUserMessageId: input.sourceUserMessageId,
         prompt: input.prompt,
-        runId: createId("run"),
+        runId: input.runId?.trim() || createId("run"),
         operationId: createId("artifact-edit-operation"),
         editId: createId("artifact-edit"),
         variantId: createId("artifact-edit-variant"),
@@ -181,6 +194,9 @@ export function createGeneratedArtifactBatchController(
             appendUserMessage: false,
             assistantMessageId: operation.target.assistantId,
             generationRunId: operation.runId,
+            chatActivityLease: input.chatActivityLease,
+            ephemeralAttachments: input.ephemeralAttachments,
+            onRunAccepted: input.onRunAccepted,
             targetSessionId: operation.target.sessionId,
             initialReasoning: input.initialReasoning ?? "Thinking",
             assistantPatch: {
@@ -237,11 +253,18 @@ export function createGeneratedArtifactBatchController(
         warn("Could not run generated artifact batch.", error);
         return { status: "failed" };
       }
-      void request.catch((error) => {
-        warn("Could not run generated artifact batch.", error);
-      });
+      const completion = request.then<
+        GeneratedArtifactBatchCompletion,
+        GeneratedArtifactBatchCompletion
+      >(
+        () => ({ status: "fulfilled" }),
+        (error) => {
+          warn("Could not run generated artifact batch.", error);
+          return { status: "rejected", error };
+        }
+      );
 
-      return { status: "started", operation };
+      return { status: "started", operation, completion };
     }
   };
 }

@@ -2,6 +2,22 @@ import { clientRequestHeaders } from "../../api/client";
 
 type FetchLike = typeof fetch;
 
+export type AcceptedChatRunResponse = {
+  response: Response;
+  body: ReadableStream<Uint8Array>;
+};
+
+export function claimAcceptedChatRunResponse(
+  response: Response,
+  onAccepted?: () => void
+): AcceptedChatRunResponse | undefined {
+  if (!response.ok || !response.body) {
+    return undefined;
+  }
+  onAccepted?.();
+  return { response, body: response.body };
+}
+
 export function startChatRun(
   payload: unknown,
   clientId: string,

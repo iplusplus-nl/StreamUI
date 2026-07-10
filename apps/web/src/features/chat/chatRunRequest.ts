@@ -3,6 +3,7 @@ import type {
   ChatSession,
   ClientMessage
 } from "../../domain/chat/sessionModel";
+import type { ChatGenerationLease } from "./generationActivityCoordinator";
 
 export type ChatRunAssistantPhase =
   | "streaming"
@@ -14,6 +15,9 @@ export type SendStreamUiRequestOptions = {
   appendUserMessage?: boolean;
   assistantMessageId?: string;
   generationRunId?: string;
+  chatActivityLease?: ChatGenerationLease;
+  ephemeralAttachments?: boolean;
+  onRunAccepted?(): void;
   assistantPatch?: Partial<ClientMessage>;
   persistUserMessage?: ClientMessage;
   userMessagePatch?: Partial<ClientMessage>;
@@ -60,3 +64,13 @@ export type PendingManagedRequest = {
   attachments: ImageAttachment[];
   options: SendStreamUiRequestOptions;
 };
+
+export function isManagedRequestReplaySafe(
+  options: SendStreamUiRequestOptions
+): boolean {
+  return !(
+    options.chatActivityLease ||
+    options.ephemeralAttachments ||
+    options.onRunAccepted
+  );
+}

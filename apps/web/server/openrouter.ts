@@ -4,6 +4,13 @@ import {
   finalizeGeneratedArtifactBatchPatch,
   getGeneratedArtifactBatchIdentity
 } from "./generatedArtifactBatchPersistence.js";
+import { finalizeChatRunTerminal } from "./chatRunFinalization.js";
+import {
+  ActiveEphemeralFileDeletionError,
+  activeEphemeralFileRegistry,
+  cleanupReleasedEphemeralFiles,
+  type ActiveEphemeralFileLease
+} from "./activeEphemeralFileRegistry.js";
 import {
   buildMemoryContextPrompt,
   createMemoryTools,
@@ -30,6 +37,12 @@ import {
   type ResponsesToolOutput
 } from "./sessionFileTools.js";
 import {
+  normalizeEphemeralFileIds,
+  selectDurableSessionFiles,
+  selectEphemeralSessionFileIdentities
+} from "./sessionFileUploadSafety.js";
+import {
+  deleteEphemeralSessionFiles,
   getSessionStateKeyFromClientId,
   patchSessionMessage,
   updateSessionMessageAtomically,
@@ -177,6 +190,7 @@ type ResponsesToolExecutionResult = {
 type ChatRequestBody = {
   messages?: unknown;
   files?: unknown;
+  ephemeralFileIds?: unknown;
   canvas?: unknown;
   themeMode?: unknown;
   apiSettings?: unknown;
@@ -236,6 +250,7 @@ type ChatRunInput = {
   model: string;
   messages: ClientChatMessage[];
   files: SessionFile[];
+  ephemeralFileIds: string[];
   canvasContext: CanvasContext;
   themeMode: PageThemeMode;
   useOpenRouterReasoning: boolean;
@@ -256,6 +271,9 @@ type ChatRun = {
   error?: string;
   persistTimer?: NodeJS.Timeout;
   persistPromise: Promise<void>;
+  executionSettled: Promise<void>;
+  settleExecution(): void;
+  ephemeralFileLease: ActiveEphemeralFileLease;
   cleanupTimer?: NodeJS.Timeout;
 };
 
@@ -807,6 +825,7 @@ function createChatRunInput(body: ChatRequestBody, requestId: string): ChatRunIn
   const apiSettings = readRuntimeApiSettings(body.apiSettings);
   const model = apiSettings.model;
   const messages = normalizeMessages(body.messages);
+  const ephemeralFileIds = normalizeEphemeralFileIds(body.ephemeralFileIds);
   const files = normalizeSessionFiles(body.files);
   const canvasContext = normalizeCanvasContext(body.canvas);
   const themeMode = normalizeThemeMode(body.themeMode);
@@ -845,6 +864,7 @@ function createChatRunInput(body: ChatRequestBody, requestId: string): ChatRunIn
     model,
     messages,
     files,
+    ephemeralFileIds,
     canvasContext,
     themeMode,
     useOpenRouterReasoning: isOpenRouterRuntime(apiSettings),
@@ -1071,7 +1091,13 @@ function emitRunStreamEvent(run: ChatRun, event: StreamEvent): void {
 }
 
 async function persistInitialRunMessages(run: ChatRun): Promise<void> {
-  const { sessionId, userMessage, assistantMessage, files } = run.input;
+  const {
+    sessionId,
+    userMessage,
+    assistantMessage,
+    files,
+    ephemeralFileIds
+  } = run.input;
   if (!sessionId || !assistantMessage) {
     return;
   }
@@ -1082,7 +1108,35 @@ async function persistInitialRunMessages(run: ChatRun): Promise<void> {
     messages: [userMessage, assistantMessage].filter(
       (message): message is SessionMessageInput => Boolean(message)
     ),
-    files: files as StoredSessionFile[]
+    files: selectDurableSessionFiles(
+      files as StoredSessionFile[],
+      ephemeralFileIds
+    )
+  });
+}
+
+async function cleanupRunEphemeralFiles(
+  run: ChatRun,
+  inactiveStorageKeys: readonly string[]
+): Promise<void> {
+  const sessionId = run.input.sessionId;
+  if (!sessionId) {
+    return;
+  }
+
+  const inactiveStorageKeySet = new Set(inactiveStorageKeys);
+  const expectedFiles = selectEphemeralSessionFileIdentities(
+    run.input.files,
+    run.input.ephemeralFileIds
+  ).filter((file) => inactiveStorageKeySet.has(file.storageKey));
+  if (!expectedFiles.length) {
+    return;
+  }
+
+  await deleteEphemeralSessionFiles({
+    stateKey: run.input.stateKey,
+    sessionId,
+    expectedFiles
   });
 }
 
@@ -1103,11 +1157,29 @@ function finishChatRun(
     ...(status === "error" && error ? { error } : {})
   });
   activeChatFinalizations += 1;
-  void flushRunPersistence(run, status, error).finally(() => {
-    activeChatFinalizations = Math.max(0, activeChatFinalizations - 1);
-    scheduleRunCleanup(run);
-    refreshOpenRouterIdleState();
-  });
+  void finalizeChatRunTerminal({
+    outcome: run.cancelRequested ? "cancelled" : status,
+    persistTerminalState: () => flushRunPersistence(run, status, error),
+    waitForExecution: () => run.executionSettled,
+    cleanupEphemeralFiles: () =>
+      cleanupReleasedEphemeralFiles(
+        run.ephemeralFileLease,
+        (inactiveStorageKeys) =>
+          cleanupRunEphemeralFiles(run, inactiveStorageKeys)
+      )
+  })
+    .catch((finalizationError) => {
+      console.warn(
+        `[chat:${run.input.requestId}] could not finalize run resources`,
+        finalizationError
+      );
+    })
+    .finally(() => {
+      run.ephemeralFileLease.release();
+      activeChatFinalizations = Math.max(0, activeChatFinalizations - 1);
+      scheduleRunCleanup(run);
+      refreshOpenRouterIdleState();
+    });
 }
 
 function cancelChatRun(run: ChatRun): boolean {
@@ -1150,10 +1222,20 @@ async function executeChatRun(run: ChatRun): Promise<void> {
     ].filter(Boolean);
     console.error(stats.join(" "));
     finishChatRun(run, "error", message);
+  } finally {
+    run.settleExecution();
   }
 }
 
 function startChatRun(input: ChatRunInput): ChatRun {
+  let settleExecution: () => void = () => {};
+  const executionSettled = new Promise<void>((resolve) => {
+    settleExecution = resolve;
+  });
+  const ephemeralFiles = selectEphemeralSessionFileIdentities(
+    input.files,
+    input.ephemeralFileIds
+  );
   const run: ChatRun = {
     id: input.runId,
     input,
@@ -1164,7 +1246,14 @@ function startChatRun(input: ChatRunInput): ChatRun {
     raw: input.assistantMessage?.rawStream ?? "",
     reasoning: input.assistantMessage?.reasoning ?? "",
     status: "running",
-    persistPromise: Promise.resolve()
+    persistPromise: Promise.resolve(),
+    executionSettled,
+    settleExecution,
+    ephemeralFileLease: activeEphemeralFileRegistry.register({
+      stateKey: input.stateKey,
+      sessionId: input.sessionId ?? "",
+      storageKeys: ephemeralFiles.map((file) => file.storageKey)
+    })
   };
 
   chatRuns.set(run.id, run);
@@ -2906,7 +2995,10 @@ export async function handleOpenRouterChat(
       error instanceof Error ? error.message : "Unknown chat proxy error.";
     console.error(`[chat:${requestId}] error ${message}`);
     if (!res.headersSent) {
-      res.status(500).type("text/plain").send(message);
+      res
+        .status(error instanceof ActiveEphemeralFileDeletionError ? 409 : 500)
+        .type("text/plain")
+        .send(message);
       return;
     }
     endResponse(res);
