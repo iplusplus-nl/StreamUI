@@ -126,6 +126,47 @@ export type SessionMessageInput = {
 };
 
 export type SessionMessagePatch = Partial<Omit<SessionMessageInput, "id" | "role">>;
+export type SessionMessageSnapshot = Omit<SessionMessageInput, "fileIds"> & {
+  fileIds?: unknown[];
+};
+
+const SESSION_MESSAGE_PATCH_KEYS: Array<keyof SessionMessagePatch> = [
+  "content",
+  "fileIds",
+  "reasoning",
+  "sessionTitle",
+  "rawStream",
+  "hasStreamUi",
+  "streamUiComplete",
+  "artifactContext",
+  "runtimeErrors",
+  "repairOfMessageId",
+  "repairAttempt",
+  "branchGroupId",
+  "branchVariantId",
+  "branchAnchor",
+  "artifactEditBaseRawStream",
+  "artifactEdits",
+  "activeArtifactEditId",
+  "generationRunId",
+  "streamSequence",
+  "status",
+  "error"
+];
+
+export function selectPresentSessionMessagePatch(
+  input: SessionMessageInput,
+  normalized: SessionMessageSnapshot
+): SessionMessagePatch {
+  const patch: SessionMessagePatch = {};
+  for (const key of SESSION_MESSAGE_PATCH_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) {
+      continue;
+    }
+    Object.assign(patch, { [key]: normalized[key] });
+  }
+  return patch;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -1168,7 +1209,10 @@ function upsertMessages(
       (candidate) => candidate.id === message.id
     );
     if (index >= 0) {
-      session.messages[index] = mergeMessage(session.messages[index], message);
+      session.messages[index] = mergeMessage(
+        session.messages[index],
+        selectPresentSessionMessagePatch(input, message)
+      );
     } else {
       session.messages.push(message);
     }
@@ -1243,6 +1287,46 @@ export async function patchSessionMessage({
     session.messages[index] = mergeMessage(session.messages[index], patch);
     session.updatedAt = now();
   });
+}
+
+export async function updateSessionMessageAtomically({
+  stateKey = DEFAULT_SESSION_STATE_KEY,
+  sessionId,
+  messageId,
+  update
+}: {
+  stateKey?: string;
+  sessionId: string;
+  messageId: string;
+  update: (
+    message: Readonly<SessionMessageSnapshot>
+  ) => SessionMessagePatch | undefined;
+}): Promise<boolean> {
+  let didUpdate = false;
+  await enqueueSessionStateUpdate(stateKey, (state) => {
+    if (isSessionDeleted(state, sessionId)) {
+      return;
+    }
+    const session = findSession(state, sessionId);
+    if (!session) {
+      return;
+    }
+
+    const index = session.messages.findIndex((message) => message.id === messageId);
+    if (index < 0) {
+      return;
+    }
+
+    const patch = update(session.messages[index]);
+    if (!patch) {
+      return;
+    }
+
+    session.messages[index] = mergeMessage(session.messages[index], patch);
+    session.updatedAt = now();
+    didUpdate = true;
+  });
+  return didUpdate;
 }
 
 function findFileById(

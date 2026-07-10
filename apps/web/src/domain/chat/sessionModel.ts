@@ -34,8 +34,16 @@ export type ArtifactEditVariant = {
   editCount?: number;
 };
 
+export type ArtifactEditRollback = {
+  reasoning?: string;
+  sessionTitle?: string;
+  repairOfMessageId?: string;
+  repairAttempt?: number;
+};
+
 export type ArtifactEdit = {
   id: string;
+  origin?: "chat-run";
   parentId?: string;
   createdAt: number;
   prompt: string;
@@ -45,6 +53,7 @@ export type ArtifactEdit = {
   variants: ArtifactEditVariant[];
   status: "pending" | "complete" | "error";
   error?: string;
+  rollback?: ArtifactEditRollback;
 };
 
 export type ClientMessage = {
@@ -896,6 +905,30 @@ function normalizeArtifactEditVariant(
   };
 }
 
+function normalizeArtifactEditRollback(
+  input: unknown
+): ArtifactEditRollback | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return undefined;
+  }
+
+  const rollback = input as Partial<ArtifactEditRollback>;
+  return {
+    reasoning:
+      typeof rollback.reasoning === "string" ? rollback.reasoning : undefined,
+    sessionTitle: normalizeBoundedString(rollback.sessionTitle, 500),
+    repairOfMessageId: normalizeBoundedString(
+      rollback.repairOfMessageId,
+      160
+    ),
+    repairAttempt:
+      typeof rollback.repairAttempt === "number" &&
+      Number.isFinite(rollback.repairAttempt)
+        ? Math.max(1, Math.round(rollback.repairAttempt))
+        : undefined
+  };
+}
+
 function normalizeArtifactEdit(
   input: unknown,
   now = Date.now(),
@@ -920,7 +953,11 @@ function normalizeArtifactEdit(
   const variants = inputVariants.length
     ? inputVariants
         .map((variant) =>
-          normalizeArtifactEditVariant(variant, now, interruptPending)
+          normalizeArtifactEditVariant(
+            variant,
+            now,
+            interruptPending && edit.origin !== "chat-run"
+          )
         )
         .filter((variant): variant is ArtifactEditVariant => variant !== null)
     : [];
@@ -951,6 +988,7 @@ function normalizeArtifactEdit(
   const status = isRecentInterruptedError ? "pending" : rawStatus;
   const shouldInterrupt =
     interruptPending &&
+    edit.origin !== "chat-run" &&
     status === "pending" &&
     now - latestPendingActivityAt >= LOCAL_ARTIFACT_EDIT_INTERRUPTION_GRACE_MS;
   const restoredStatus = shouldInterrupt ? "error" : status;
@@ -963,6 +1001,7 @@ function normalizeArtifactEdit(
 
   return {
     id,
+    origin: edit.origin === "chat-run" ? "chat-run" : undefined,
     parentId: normalizeBoundedString(edit.parentId, 160),
     createdAt,
     prompt,
@@ -976,7 +1015,8 @@ function normalizeArtifactEdit(
     status: restoredStatus,
     error:
       normalizedError ??
-      (shouldInterrupt ? LOCAL_ARTIFACT_EDIT_INTERRUPTED_ERROR : undefined)
+      (shouldInterrupt ? LOCAL_ARTIFACT_EDIT_INTERRUPTED_ERROR : undefined),
+    rollback: normalizeArtifactEditRollback(edit.rollback)
   };
 }
 
@@ -1075,7 +1115,7 @@ function interruptStaleArtifactEditsInMessage(
   }
 
   const artifactEdits = message.artifactEdits.map((edit) =>
-    interruptStaleArtifactEdit(edit, now)
+    edit.origin === "chat-run" ? edit : interruptStaleArtifactEdit(edit, now)
   );
   const didChange = artifactEdits.some(
     (edit, index) => edit !== message.artifactEdits?.[index]
@@ -1537,6 +1577,96 @@ export function rebuildAssistantSnapshot(message: ClientMessage): ClientMessage 
   };
 }
 
+function legacyGeneratedArtifactSource(
+  message: ClientMessage,
+  edit: ArtifactEdit
+): string | undefined {
+  if (edit.parentId) {
+    const parent = message.artifactEdits?.find(
+      (candidate) => candidate.id === edit.parentId
+    );
+    const variant = parent?.variants.find(
+      (candidate) => candidate.id === parent.activeVariantId
+    ) ?? parent?.variants[0];
+    if (parent?.status === "complete" && variant?.status === "complete") {
+      return variant.rawStream;
+    }
+  }
+
+  return message.artifactEditBaseRawStream;
+}
+
+function migrateLegacyGeneratedArtifactBatch(
+  message: ClientMessage
+): ClientMessage {
+  if (
+    message.role !== "assistant" ||
+    !message.generationRunId ||
+    !message.activeArtifactEditId ||
+    !message.artifactEdits?.length
+  ) {
+    return message;
+  }
+
+  const editIndex = message.artifactEdits.findIndex(
+    (edit) => edit.id === message.activeArtifactEditId
+  );
+  const edit = message.artifactEdits[editIndex];
+  if (
+    !edit ||
+    edit.origin ||
+    edit.status !== "pending" ||
+    edit.promptBubble !== false ||
+    edit.references.length > 0
+  ) {
+    return message;
+  }
+  const variantIndex = edit.variants.findIndex(
+    (variant) =>
+      variant.id === edit.activeVariantId && variant.status === "pending"
+  );
+  const variant = edit.variants[variantIndex];
+  if (!variant || variant.operationId) {
+    return message;
+  }
+
+  const source = legacyGeneratedArtifactSource(message, edit);
+  const isCancelled = (value: string | undefined) =>
+    value?.replace(/\s+/g, " ").trim() === "Generation stopped.";
+  // The legacy schema had no origin marker. For terminal messages, migrate only
+  // when persisted output differs from its source or carries a cancel marker so
+  // an abandoned local artifact edit is not misclassified as a chat run.
+  const looksLikeChatRun =
+    message.status === "streaming" ||
+    isCancelled(message.content) ||
+    isCancelled(message.error) ||
+    message.rawStream !== source;
+  if (!looksLikeChatRun) {
+    return message;
+  }
+
+  const operationId = [
+    "legacy-chat-run",
+    message.generationRunId,
+    edit.id,
+    variant.id,
+    String(variant.createdAt)
+  ]
+    .join(":")
+    .slice(0, 160);
+  const variants = [...edit.variants];
+  variants[variantIndex] = { ...variant, operationId };
+  const edits = [...message.artifactEdits];
+  edits[editIndex] = {
+    ...edit,
+    origin: "chat-run",
+    variants,
+    rollback: edit.rollback ?? {}
+  };
+
+  return { ...message, artifactEdits: edits };
+}
+
 export function normalizeStoredMessage(
   message: unknown,
   options: NormalizeStoredSessionOptions = {}
@@ -1598,10 +1728,7 @@ export function normalizeStoredMessage(
       typeof input.artifactEditBaseRawStream === "string"
         ? input.artifactEditBaseRawStream
         : undefined,
-    artifactEdits: normalizeArtifactEdits(
-      input.artifactEdits,
-      options.interruptPendingArtifactEdits === true
-    ),
+    artifactEdits: normalizeArtifactEdits(input.artifactEdits, false),
     activeArtifactEditId:
       typeof input.activeArtifactEditId === "string" &&
       input.activeArtifactEditId.trim()
@@ -1634,9 +1761,14 @@ export function normalizeStoredMessage(
     normalized.status = "complete";
   }
 
+  const migrated = migrateLegacyGeneratedArtifactBatch(normalized);
+  const restored = options.interruptPendingArtifactEdits
+    ? interruptStaleArtifactEditsInMessage(migrated)
+    : migrated;
+
   return options.rebuildSnapshots === false
-    ? normalized
-    : rebuildAssistantSnapshot(normalized);
+    ? restored
+    : rebuildAssistantSnapshot(restored);
 }
 
 export function normalizeStoredSession(

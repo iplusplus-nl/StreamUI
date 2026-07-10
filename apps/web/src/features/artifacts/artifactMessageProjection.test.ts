@@ -78,6 +78,20 @@ describe("artifact message projection", () => {
     assert.equal(fallbackPatch.content, "Plain fallback");
   });
 
+  it("projects and clears protocol session titles with the selected version", () => {
+    const titled = buildCompletedAssistantPatchFromRawStream(
+      "<sessiontitle>Revised title</sessiontitle><chat>Done</chat>",
+      "night"
+    );
+    const untitled = buildCompletedAssistantPatchFromRawStream(
+      "<chat>Done</chat>",
+      "night"
+    );
+
+    assert.equal(titled.sessionTitle, "Revised title");
+    assert.equal(untitled.sessionTitle, undefined);
+  });
+
   it("clears stale snapshot and context when a projected version has no artifact", () => {
     const previous = {
       snapshot: { status: "complete" },

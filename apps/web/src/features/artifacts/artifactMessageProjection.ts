@@ -45,6 +45,10 @@ export function buildCompletedAssistantPatchFromRawStream(
 
   return {
     content: parts.chat || parts.fallbackText,
+    sessionTitle:
+      parts.sessionTitleComplete && parts.sessionTitle.trim()
+        ? parts.sessionTitle
+        : undefined,
     rawStream,
     snapshot,
     artifactContext: hasVisibleStreamUi

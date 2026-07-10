@@ -1,5 +1,10 @@
 import type { Request, Response } from "express";
 import {
+  canPersistGeneratedArtifactBatch,
+  finalizeGeneratedArtifactBatchPatch,
+  getGeneratedArtifactBatchIdentity
+} from "./generatedArtifactBatchPersistence.js";
+import {
   buildMemoryContextPrompt,
   createMemoryTools,
   createMemoryToolStats,
@@ -27,6 +32,7 @@ import {
 import {
   getSessionStateKeyFromClientId,
   patchSessionMessage,
+  updateSessionMessageAtomically,
   upsertSessionMessages,
   type SessionMessageInput,
   type SessionMessagePatch,
@@ -657,7 +663,9 @@ function writeStreamEvent(
   emit(event);
 }
 
-function normalizeSessionMessageInput(input: unknown): SessionMessageInput | undefined {
+export function normalizeSessionMessageInput(
+  input: unknown
+): SessionMessageInput | undefined {
   if (!input || typeof input !== "object") {
     return undefined;
   }
@@ -670,72 +678,125 @@ function normalizeSessionMessageInput(input: unknown): SessionMessageInput | und
     return undefined;
   }
 
-  return {
+  const normalized: SessionMessageInput = {
     id: message.id,
-    role: message.role,
-    content: typeof message.content === "string" ? message.content : "",
-    fileIds: normalizeStringArray(message.fileIds),
-    reasoning: typeof message.reasoning === "string" ? message.reasoning : undefined,
-    sessionTitle:
-      typeof message.sessionTitle === "string" ? message.sessionTitle : undefined,
-    rawStream: typeof message.rawStream === "string" ? message.rawStream : undefined,
-    hasStreamUi: Boolean(message.hasStreamUi),
-    streamUiComplete: Boolean(message.streamUiComplete),
-    artifactContext:
+    role: message.role
+  };
+  const has = (key: keyof SessionMessageInput) =>
+    Object.prototype.hasOwnProperty.call(message, key);
+
+  if (has("content")) {
+    normalized.content =
+      typeof message.content === "string" ? message.content : "";
+  }
+  if (has("fileIds")) {
+    normalized.fileIds = normalizeStringArray(message.fileIds);
+  }
+  if (has("reasoning")) {
+    normalized.reasoning =
+      typeof message.reasoning === "string" ? message.reasoning : undefined;
+  }
+  if (has("sessionTitle")) {
+    normalized.sessionTitle =
+      typeof message.sessionTitle === "string"
+        ? message.sessionTitle
+        : undefined;
+  }
+  if (has("rawStream")) {
+    normalized.rawStream =
+      typeof message.rawStream === "string" ? message.rawStream : undefined;
+  }
+  if (has("hasStreamUi")) {
+    normalized.hasStreamUi = Boolean(message.hasStreamUi);
+  }
+  if (has("streamUiComplete")) {
+    normalized.streamUiComplete = Boolean(message.streamUiComplete);
+  }
+  if (has("artifactContext")) {
+    normalized.artifactContext =
       message.artifactContext && typeof message.artifactContext === "object"
         ? message.artifactContext
-        : undefined,
-    runtimeErrors: Array.isArray(message.runtimeErrors)
+        : undefined;
+  }
+  if (has("runtimeErrors")) {
+    normalized.runtimeErrors = Array.isArray(message.runtimeErrors)
       ? message.runtimeErrors
-      : undefined,
-    repairOfMessageId:
+      : undefined;
+  }
+  if (has("repairOfMessageId")) {
+    normalized.repairOfMessageId =
       typeof message.repairOfMessageId === "string"
         ? message.repairOfMessageId
-        : undefined,
-    repairAttempt:
+        : undefined;
+  }
+  if (has("repairAttempt")) {
+    normalized.repairAttempt =
       typeof message.repairAttempt === "number" &&
       Number.isFinite(message.repairAttempt)
         ? Math.max(1, Math.round(message.repairAttempt))
-        : undefined,
-    branchGroupId:
+        : undefined;
+  }
+  if (has("branchGroupId")) {
+    normalized.branchGroupId =
       typeof message.branchGroupId === "string"
         ? message.branchGroupId
-        : undefined,
-    branchVariantId:
+        : undefined;
+  }
+  if (has("branchVariantId")) {
+    normalized.branchVariantId =
       typeof message.branchVariantId === "string"
         ? message.branchVariantId
-        : undefined,
-    branchAnchor: message.branchAnchor ? true : undefined,
-    artifactEditBaseRawStream:
+        : undefined;
+  }
+  if (has("branchAnchor")) {
+    normalized.branchAnchor = message.branchAnchor ? true : undefined;
+  }
+  if (has("artifactEditBaseRawStream")) {
+    normalized.artifactEditBaseRawStream =
       typeof message.artifactEditBaseRawStream === "string"
         ? message.artifactEditBaseRawStream
-        : undefined,
-    artifactEdits: Array.isArray(message.artifactEdits)
+        : undefined;
+  }
+  if (has("artifactEdits")) {
+    normalized.artifactEdits = Array.isArray(message.artifactEdits)
       ? message.artifactEdits
-      : undefined,
-    activeArtifactEditId:
+      : undefined;
+  }
+  if (has("activeArtifactEditId")) {
+    normalized.activeArtifactEditId =
       typeof message.activeArtifactEditId === "string"
         ? message.activeArtifactEditId
-        : undefined,
-    generationRunId:
+        : undefined;
+  }
+  if (has("generationRunId")) {
+    normalized.generationRunId =
       typeof message.generationRunId === "string"
         ? message.generationRunId
-        : undefined,
-    streamSequence:
+        : undefined;
+  }
+  if (has("streamSequence")) {
+    normalized.streamSequence =
       typeof message.streamSequence === "number" &&
       Number.isFinite(message.streamSequence)
         ? Math.max(0, Math.round(message.streamSequence))
-        : undefined,
-    status:
+        : undefined;
+  }
+  if (has("status")) {
+    normalized.status =
       message.status === "streaming" ||
       message.status === "complete" ||
       message.status === "error"
         ? message.status
         : message.role === "assistant"
           ? "complete"
-          : undefined,
-    error: typeof message.error === "string" ? message.error : undefined
-  };
+          : undefined;
+  }
+  if (has("error")) {
+    normalized.error =
+      typeof message.error === "string" ? message.error : undefined;
+  }
+
+  return normalized;
 }
 
 function createChatRunId(): string {
@@ -900,7 +961,7 @@ function queueRunPersistence(
     return Promise.resolve();
   }
 
-  const patch = getStreamUiMessagePatch(
+  const streamPatch = getStreamUiMessagePatch(
     run.raw,
     run.reasoning,
     status,
@@ -908,15 +969,46 @@ function queueRunPersistence(
     run.id,
     error
   );
+  const artifactBatchIdentity = getGeneratedArtifactBatchIdentity(
+    run.input.assistantMessage
+  );
   run.persistPromise = run.persistPromise
-    .then(() =>
-      patchSessionMessage({
+    .then(async () => {
+      if (artifactBatchIdentity) {
+        await updateSessionMessageAtomically({
+          stateKey: run.input.stateKey,
+          sessionId,
+          messageId: assistantMessageId,
+          update: (currentMessage) => {
+            if (
+              !canPersistGeneratedArtifactBatch(
+                currentMessage,
+                run.id,
+                artifactBatchIdentity
+              )
+            ) {
+              return undefined;
+            }
+
+            return finalizeGeneratedArtifactBatchPatch({
+              assistantMessage: currentMessage,
+              patch: streamPatch,
+              status,
+              error,
+              expectedIdentity: artifactBatchIdentity
+            });
+          }
+        });
+        return;
+      }
+
+      await patchSessionMessage({
         stateKey: run.input.stateKey,
         sessionId,
         messageId: assistantMessageId,
-        patch
-      })
-    )
+        patch: streamPatch
+      });
+    })
     .catch((persistError) => {
       console.warn(
         `[chat:${run.input.requestId}] could not persist stream state`,

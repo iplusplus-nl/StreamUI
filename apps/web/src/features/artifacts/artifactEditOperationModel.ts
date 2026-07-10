@@ -248,7 +248,7 @@ export function applyPendingArtifactEditOperation(
   };
 }
 
-function hasPendingArtifactEditOperation(
+export function hasPendingArtifactEditOperation(
   message: ClientMessage,
   operation: ArtifactEditOperation
 ): boolean {

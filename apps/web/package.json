@@ -8,7 +8,7 @@
     "server": "tsx server/index.ts",
     "build": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\" \"server/**/*.test.ts\""
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.24",

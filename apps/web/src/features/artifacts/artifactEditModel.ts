@@ -90,6 +90,10 @@ export function getArtifactEditParentId(
     return edit.parentId;
   }
 
+  if (edit.origin === "chat-run") {
+    return undefined;
+  }
+
   const index = edits.findIndex((candidate) => candidate.id === edit.id);
   return index > 0 ? edits[index - 1].id : undefined;
 }
