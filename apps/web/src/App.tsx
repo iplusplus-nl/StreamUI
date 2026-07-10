@@ -18,54 +18,22 @@ import {
   type ThemeMode
 } from "./components/SessionSidebar";
 import { AuthOverlay } from "./components/AuthOverlay";
-import {
-  StreamImageAttachmentAdapter
-} from "./core/assistantAttachments";
+import { StreamImageAttachmentAdapter } from "./core/assistantAttachments";
 import { blobToDataUrl } from "./core/blob";
 import {
-  hasSavedApiSettings,
-  loadApiSettings,
   getSelectableModelOptions,
   normalizeApiSettings,
   normalizeUiComplexity,
-  saveApiSettings,
   serializeApiSettings,
-  type ApiSettings,
   type ReasoningEffort
 } from "./core/apiSettings";
-import {
-  applyMemoryStreamEvent,
-  type MemoryStreamEvent
-} from "./core/memoryStreamEvents";
-import {
-  loadSearchSettings,
-  normalizeSearchSettings,
-  saveSearchSettings,
-  serializeSearchSettings,
-  type SearchSettings
-} from "./core/searchSettings";
-import {
-  loadRuntimeSettings,
-  type RuntimeSettingsSummary
-} from "./core/runtimeSettings";
+import { serializeSearchSettings } from "./core/searchSettings";
 import {
   loadAuthSummary,
   logout as logoutAuth,
   type AuthSummary,
   type AuthUser
 } from "./core/cloudAuth";
-import {
-  loadDisplaySettings,
-  normalizeDisplaySettings,
-  saveDisplaySettings,
-  type DisplaySettings
-} from "./core/displaySettings";
-import {
-  loadProfileSettings,
-  normalizeProfileSettings,
-  saveProfileSettings,
-  type ProfileSettings
-} from "./core/profileSettings";
 import { buildArtifactContext } from "./core/artifactContext";
 import type { ArtifactSelection } from "./core/artifactSelection";
 import {
@@ -173,6 +141,8 @@ import {
 } from "./features/artifacts/artifactMessageProjection";
 import { hasRenderError } from "./features/artifacts/renderErrors";
 import { buildVisualRepairPrompt } from "./features/artifacts/visualRepair";
+import { coerceApiSettingsForRuntime } from "./features/settings/appSettingsPolicy";
+import { useAppSettings } from "./features/settings/useAppSettings";
 import type {
   ImageAttachment,
   UploadedSessionFile
@@ -243,34 +213,6 @@ const THEME_STORAGE_KEY = "streamui.theme.v1";
 const SESSION_SYNC_INTERVAL_MS = 4_000;
 const SESSION_SAVE_DEBOUNCE_MS = 350;
 
-function coerceApiSettingsForRuntime(
-  settings: ApiSettings,
-  runtimeSettings: RuntimeSettingsSummary | null
-): ApiSettings {
-  const normalized = normalizeApiSettings(settings);
-  const managedProviderEnabled = Boolean(
-    runtimeSettings?.cloud?.enabled &&
-      runtimeSettings.cloud.managedProviderEnabled
-  );
-
-  if (normalized.apiKeySource !== "managed" || managedProviderEnabled) {
-    return normalized;
-  }
-
-  const defaults = normalizeApiSettings(runtimeSettings?.api.defaults);
-  return normalizeApiSettings({
-    ...defaults,
-    model: normalized.model || defaults.model,
-    modelOptions: normalized.modelOptions.length
-      ? normalized.modelOptions
-      : defaults.modelOptions,
-    reasoningEffort: normalized.reasoningEffort,
-    uiComplexity: normalized.uiComplexity,
-    userPreferencePrompt: normalized.userPreferencePrompt,
-    memoryItems: normalized.memoryItems
-  });
-}
-
 function loadThemeMode(): ThemeMode {
   if (typeof window === "undefined") {
     return "night";
@@ -308,15 +250,20 @@ export default function App() {
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [sessionsHydrated, setSessionsHydrated] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(loadThemeMode);
-  const [apiSettings, setApiSettings] = useState<ApiSettings>(loadApiSettings);
-  const [searchSettings, setSearchSettings] =
-    useState<SearchSettings>(loadSearchSettings);
-  const [displaySettings, setDisplaySettings] =
-    useState<DisplaySettings>(loadDisplaySettings);
-  const [profileSettings, setProfileSettings] =
-    useState<ProfileSettings>(loadProfileSettings);
-  const [runtimeSettings, setRuntimeSettings] =
-    useState<RuntimeSettingsSummary | null>(null);
+  const {
+    apiSettings,
+    searchSettings,
+    displaySettings,
+    profileSettings,
+    runtimeSettings,
+    cloudEnabled,
+    replaceApiSettings: handleApiSettingsChange,
+    replaceSearchSettings: handleSearchSettingsChange,
+    replaceDisplaySettings: handleDisplaySettingsChange,
+    replaceProfileSettings: handleProfileSettingsChange,
+    updateApiSettings,
+    applyMemoryEvent: handleMemoryStreamEvent
+  } = useAppSettings();
   const [authSummary, setAuthSummary] = useState<AuthSummary | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
   const [isAuthOverlayOpen, setIsAuthOverlayOpen] = useState(false);
@@ -364,7 +311,6 @@ export default function App() {
   const activeSessionUiComplexity = normalizeUiComplexity(
     activeSession?.uiComplexity ?? apiSettings.uiComplexity
   );
-  const cloudEnabled = Boolean(runtimeSettings?.cloud?.enabled);
   const authenticatedUser = cloudEnabled ? (authSummary?.user ?? null) : null;
   const selectableModels = useMemo(
     () =>
@@ -560,38 +506,6 @@ export default function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return undefined;
-    }
-
-    let cancelled = false;
-    const hadSavedApiSettings = hasSavedApiSettings();
-
-    loadRuntimeSettings()
-      .then((settings) => {
-        if (cancelled) {
-          return;
-        }
-
-        setRuntimeSettings(settings);
-        setApiSettings((current) =>
-          !hadSavedApiSettings
-            ? normalizeApiSettings(settings.api.defaults)
-            : coerceApiSettingsForRuntime(current, settings)
-        );
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.warn("Could not load ChatHTML runtime settings.", error);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     if (!cloudEnabled) {
       setAuthSummary(null);
       setAuthLoaded(false);
@@ -627,22 +541,6 @@ export default function App() {
       cancelled = true;
     };
   }, [cloudEnabled]);
-
-  useEffect(() => {
-    saveApiSettings(apiSettings);
-  }, [apiSettings]);
-
-  useEffect(() => {
-    saveSearchSettings(searchSettings);
-  }, [searchSettings]);
-
-  useEffect(() => {
-    saveDisplaySettings(displaySettings);
-  }, [displaySettings]);
-
-  useEffect(() => {
-    saveProfileSettings(profileSettings);
-  }, [profileSettings]);
 
   const sessionListPreview = useSessionIndex({
     sessionState,
@@ -1342,29 +1240,13 @@ export default function App() {
     setSessionStateAndRef
   ]);
 
-  const handleApiSettingsChange = useCallback((next: ApiSettings) => {
-    setApiSettings(normalizeApiSettings(next));
-  }, []);
-
-  const handleSearchSettingsChange = useCallback((next: SearchSettings) => {
-    setSearchSettings(normalizeSearchSettings(next));
-  }, []);
-
-  const handleDisplaySettingsChange = useCallback((next: DisplaySettings) => {
-    setDisplaySettings(normalizeDisplaySettings(next));
-  }, []);
-
-  const handleProfileSettingsChange = useCallback((next: ProfileSettings) => {
-    setProfileSettings(normalizeProfileSettings(next));
-  }, []);
-
   const handleModelChange = useCallback((model: string) => {
     const nextModel = model.trim();
     if (!nextModel) {
       return;
     }
 
-    setApiSettings((current) =>
+    updateApiSettings((current) =>
       normalizeApiSettings({
         ...current,
         model: nextModel
@@ -1374,11 +1256,11 @@ export default function App() {
       ...session,
       model: nextModel
     }));
-  }, [updateActiveSession]);
+  }, [updateActiveSession, updateApiSettings]);
 
   const handleReasoningEffortChange = useCallback(
     (reasoningEffort: ReasoningEffort) => {
-      setApiSettings((current) =>
+      updateApiSettings((current) =>
         normalizeApiSettings({
           ...current,
           reasoningEffort
@@ -1389,13 +1271,13 @@ export default function App() {
         reasoningEffort
       }));
     },
-    [updateActiveSession]
+    [updateActiveSession, updateApiSettings]
   );
 
   const handleUiComplexityChange = useCallback(
     (uiComplexity: number) => {
       const normalizedUiComplexity = normalizeUiComplexity(uiComplexity);
-      setApiSettings((current) =>
+      updateApiSettings((current) =>
         normalizeApiSettings({
           ...current,
           uiComplexity: normalizedUiComplexity
@@ -1406,12 +1288,8 @@ export default function App() {
         uiComplexity: normalizedUiComplexity
       }));
     },
-    [updateActiveSession]
+    [updateActiveSession, updateApiSettings]
   );
-
-  const handleMemoryStreamEvent = useCallback((event: MemoryStreamEvent) => {
-    setApiSettings((current) => applyMemoryStreamEvent(current, event));
-  }, []);
 
   const sendStreamUiRequest = useCallback(
     async (
