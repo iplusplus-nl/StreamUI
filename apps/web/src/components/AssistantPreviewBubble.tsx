@@ -19,6 +19,7 @@ type AssistantPreviewBubbleProps = {
   snapshot: RenderSnapshot;
   themeMode: PageThemeMode;
   actions?: ReactNode;
+  editingEnabled?: boolean;
   selectionModeActive?: boolean;
   selectionDisabled?: boolean;
   selections?: ArtifactSelection[];
@@ -52,6 +53,7 @@ export function AssistantPreviewBubble({
   snapshot,
   themeMode,
   actions,
+  editingEnabled = true,
   selectionModeActive = false,
   selectionDisabled = false,
   selections = [],
@@ -66,7 +68,8 @@ export function AssistantPreviewBubble({
   const [floatingEditPosition, setFloatingEditPosition] =
     useState<FloatingEditPosition | null>(null);
   const getExportWidth = () => containerRef.current?.clientWidth ?? 900;
-  const canEditSelection = !selectionDisabled && snapshot.status === "complete";
+  const canEditSelection =
+    editingEnabled && !selectionDisabled && snapshot.status === "complete";
   const updateFloatingEditAction = useCallback(() => {
     if (typeof window === "undefined") {
       return;
@@ -190,37 +193,39 @@ export function AssistantPreviewBubble({
             onArtifactSelection={(selection) => onArtifactSelection(id, selection)}
             onSelectionModeChange={(enabled) => onSelectionModeChange(id, enabled)}
           />
-          <button
-            className={`message-action-button artifact-select-action artifact-floating-edit-action ${
-              selectionModeActive ? "is-active" : ""
-            } ${floatingEditPosition ? "is-visible" : ""}`}
-            type="button"
-            title={
-              selectionModeActive
-                ? "Stop editing preview regions"
-                : "Edit preview region"
-            }
-            aria-label={
-              selectionModeActive
-                ? "Stop editing preview regions"
-                : "Edit preview region"
-            }
-            aria-hidden={!floatingEditPosition}
-            aria-pressed={selectionModeActive}
-            disabled={!canEditSelection}
-            tabIndex={floatingEditPosition ? 0 : -1}
-            style={
-              floatingEditPosition
-                ? {
-                    left: floatingEditPosition.left,
-                    top: floatingEditPosition.top
-                  }
-                : undefined
-            }
-            onClick={() => onSelectionModeChange(id, !selectionModeActive)}
-          >
-            <MousePointer2 size={17} strokeWidth={2.15} aria-hidden="true" />
-          </button>
+          {editingEnabled ? (
+            <button
+              className={`message-action-button artifact-select-action artifact-floating-edit-action ${
+                selectionModeActive ? "is-active" : ""
+              } ${floatingEditPosition ? "is-visible" : ""}`}
+              type="button"
+              title={
+                selectionModeActive
+                  ? "Stop editing preview regions"
+                  : "Edit preview region"
+              }
+              aria-label={
+                selectionModeActive
+                  ? "Stop editing preview regions"
+                  : "Edit preview region"
+              }
+              aria-hidden={!floatingEditPosition}
+              aria-pressed={selectionModeActive}
+              disabled={!canEditSelection}
+              tabIndex={floatingEditPosition ? 0 : -1}
+              style={
+                floatingEditPosition
+                  ? {
+                      left: floatingEditPosition.left,
+                      top: floatingEditPosition.top
+                    }
+                  : undefined
+              }
+              onClick={() => onSelectionModeChange(id, !selectionModeActive)}
+            >
+              <MousePointer2 size={17} strokeWidth={2.15} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
         <ErrorPanel errors={snapshot.errors} />
       </section>

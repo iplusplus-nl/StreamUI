@@ -1,11 +1,13 @@
 export type DisplaySettings = {
   showRawStream: boolean;
+  artifactEditingEnabled: boolean;
 };
 
 export const DISPLAY_SETTINGS_STORAGE_KEY = "streamui.displaySettings.v1";
 
 export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
-  showRawStream: false
+  showRawStream: false,
+  artifactEditingEnabled: true
 };
 
 export function normalizeDisplaySettings(input: unknown): DisplaySettings {
@@ -18,7 +20,11 @@ export function normalizeDisplaySettings(input: unknown): DisplaySettings {
     showRawStream:
       typeof object.showRawStream === "boolean"
         ? object.showRawStream
-        : DEFAULT_DISPLAY_SETTINGS.showRawStream
+        : DEFAULT_DISPLAY_SETTINGS.showRawStream,
+    artifactEditingEnabled:
+      typeof object.artifactEditingEnabled === "boolean"
+        ? object.artifactEditingEnabled
+        : DEFAULT_DISPLAY_SETTINGS.artifactEditingEnabled
   };
 }
 

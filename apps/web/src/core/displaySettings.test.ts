@@ -11,10 +11,26 @@ describe("displaySettings", () => {
     assert.equal(normalizeDisplaySettings(null).showRawStream, false);
   });
 
+  it("enables artifact editing by default", () => {
+    assert.equal(DEFAULT_DISPLAY_SETTINGS.artifactEditingEnabled, true);
+    assert.equal(
+      normalizeDisplaySettings(null).artifactEditingEnabled,
+      true
+    );
+  });
+
   it("preserves the raw stream visibility toggle", () => {
     assert.equal(
       normalizeDisplaySettings({ showRawStream: true }).showRawStream,
       true
+    );
+  });
+
+  it("preserves the artifact editing toggle", () => {
+    assert.equal(
+      normalizeDisplaySettings({ artifactEditingEnabled: false })
+        .artifactEditingEnabled,
+      false
     );
   });
 });

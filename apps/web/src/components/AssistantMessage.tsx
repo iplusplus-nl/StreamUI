@@ -35,6 +35,7 @@ type AssistantMessageProps = {
   runtimeErrors?: RenderError[];
   themeMode: PageThemeMode;
   showRawStream: boolean;
+  artifactEditingEnabled: boolean;
   status?: "streaming" | "complete" | "error";
   error?: string;
   artifactSelections?: ArtifactSelection[];
@@ -99,6 +100,7 @@ export function AssistantMessage({
   runtimeErrors,
   themeMode,
   showRawStream,
+  artifactEditingEnabled,
   status,
   error,
   artifactSelections = [],
@@ -188,7 +190,7 @@ export function AssistantMessage({
   const repairDisabled = !artifactInteractionsReady;
   const turnActions = (
     <div className="assistant-turn-actions" aria-label="Response actions">
-      {hasVisibleArtifact ? (
+      {artifactEditingEnabled && hasVisibleArtifact ? (
         <button
           className={`message-action-button artifact-select-action ${
             isArtifactSelectionModeActive ? "is-active" : ""
@@ -196,12 +198,12 @@ export function AssistantMessage({
           type="button"
           title={
             isArtifactSelectionModeActive
-              ? "Stop selecting preview regions"
+              ? "Stop editing preview regions"
               : "Edit preview region"
           }
           aria-label={
             isArtifactSelectionModeActive
-              ? "Stop selecting preview regions"
+              ? "Stop editing preview regions"
               : "Edit preview region"
           }
           aria-pressed={isArtifactSelectionModeActive}
@@ -211,7 +213,7 @@ export function AssistantMessage({
           }
         >
           <MousePointer2 size={15} strokeWidth={2.15} aria-hidden="true" />
-          <span>{isArtifactSelectionModeActive ? "Selecting" : "Edit"}</span>
+          <span>{isArtifactSelectionModeActive ? "Editing" : "Edit"}</span>
         </button>
       ) : null}
       <button
@@ -348,8 +350,9 @@ export function AssistantMessage({
             snapshot={resolvedSnapshot}
             themeMode={themeMode}
             actions={turnActions}
+            editingEnabled={artifactEditingEnabled}
             selectionModeActive={isArtifactSelectionModeActive}
-            selectionDisabled={selectionDisabled}
+            selectionDisabled={!artifactEditingEnabled || selectionDisabled}
             selections={artifactSelections}
             busySelections={artifactBusySelections}
             onRuntimeError={onRuntimeError}

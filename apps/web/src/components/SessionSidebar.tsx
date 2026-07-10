@@ -1349,6 +1349,20 @@ export function SessionSidebar({
                 ) : settingsSection === "display" ? (
                   <>
                     <label className="settings-row">
+                      <span>Direct Edit</span>
+                      <input
+                        className="settings-switch"
+                        type="checkbox"
+                        role="switch"
+                        checked={draftDisplaySettings.artifactEditingEnabled}
+                        onChange={(event) =>
+                          updateDisplayDraft({
+                            artifactEditingEnabled: event.target.checked
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="settings-row">
                       <span>Raw Stream</span>
                       <input
                         className="settings-checkbox"

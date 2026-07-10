@@ -18,3 +18,10 @@ export type ArtifactSelection = ArtifactSelectionPayload & {
   messageId: string;
   createdAt: number;
 };
+
+export function canCaptureArtifactSelection(
+  kind: ArtifactSelectionKind,
+  artifactEditingEnabled: boolean
+): boolean {
+  return kind === "text" || artifactEditingEnabled;
+}

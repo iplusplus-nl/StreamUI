@@ -74,6 +74,7 @@ import {
 import { buildArtifactContext } from "./core/artifactContext";
 import {
   MAX_ARTIFACT_SELECTIONS,
+  canCaptureArtifactSelection,
   type ArtifactSelection,
   type ArtifactSelectionPayload
 } from "./core/artifactSelection";
@@ -1465,6 +1466,7 @@ type StreamThreadProps = {
   getBranchInfo(messageId: string): MessageBranchInfo | undefined;
   themeMode: ThemeMode;
   showRawStream: boolean;
+  artifactEditingEnabled: boolean;
   model: string;
   modelOptions: string[];
   reasoningEffort: ReasoningEffort;
@@ -1599,6 +1601,7 @@ function StreamThread({
   getBranchInfo,
   themeMode,
   showRawStream,
+  artifactEditingEnabled,
   model,
   modelOptions,
   reasoningEffort,
@@ -1765,6 +1768,20 @@ function StreamThread({
   }, [activeSessionId, clearReasoningActivityCloseTimer]);
 
   useEffect(() => {
+    if (artifactEditingEnabled) {
+      return;
+    }
+
+    setArtifactSelections((current) => {
+      const next = current.filter((selection) =>
+        canCaptureArtifactSelection(selection.kind, false)
+      );
+      return next.length === current.length ? current : next;
+    });
+    setSelectionModeMessageId(null);
+  }, [artifactEditingEnabled]);
+
+  useEffect(() => {
     setArtifactSelections((current) => {
       const next = current.filter((selection) =>
         visibleMessageIds.has(selection.messageId)
@@ -1830,13 +1847,22 @@ function StreamThread({
 
   const handleArtifactSelection = useCallback(
     (messageId: string, selection: ArtifactSelectionPayload) => {
+      if (
+        !canCaptureArtifactSelection(selection.kind, artifactEditingEnabled)
+      ) {
+        return;
+      }
       addArtifactSelection(messageId, selection);
     },
-    [addArtifactSelection]
+    [addArtifactSelection, artifactEditingEnabled]
   );
 
   const handleArtifactSelectionModeChange = useCallback(
     (messageId: string, enabled: boolean) => {
+      if (!artifactEditingEnabled) {
+        setSelectionModeMessageId(null);
+        return;
+      }
       setSelectionModeMessageId((current) =>
         enabled
           ? current === messageId
@@ -1847,7 +1873,7 @@ function StreamThread({
             : current
       );
     },
-    []
+    [artifactEditingEnabled]
   );
 
   const handleRemoveArtifactSelection = useCallback((id: string) => {
@@ -2083,6 +2109,7 @@ function StreamThread({
                   runtimeErrors={clientMessage.runtimeErrors}
                   themeMode={themeMode}
                   showRawStream={showRawStream}
+                  artifactEditingEnabled={artifactEditingEnabled}
                   status={clientMessage.status}
                   error={clientMessage.error}
                   artifactSelections={
@@ -5828,6 +5855,9 @@ export default function App() {
             getBranchInfo={getBranchInfo}
             themeMode={themeMode}
             showRawStream={displaySettings.showRawStream}
+            artifactEditingEnabled={
+              displaySettings.artifactEditingEnabled
+            }
             model={activeSessionModel}
             modelOptions={selectableModels}
             reasoningEffort={activeSessionReasoningEffort}
