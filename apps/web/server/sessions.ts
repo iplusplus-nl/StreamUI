@@ -109,18 +109,33 @@ function getRequestOrigin(req: Request): string {
   return `${protocol}://${host}`;
 }
 
+function getRequestBasePath(req: Request): string {
+  const forwardedPrefix = stringValue(req.headers["x-forwarded-prefix"])
+    .split(",")[0]
+    .trim();
+  if (
+    !forwardedPrefix ||
+    forwardedPrefix === "/" ||
+    !/^\/(?:[A-Za-z0-9._~-]+\/?)*$/.test(forwardedPrefix)
+  ) {
+    return "";
+  }
+  return forwardedPrefix.replace(/\/+$/, "");
+}
+
 function withFileUrls(req: Request, file: StoredSessionFile): StoredSessionFile {
   if (!file.accessToken) {
     return file;
   }
 
   const origin = getRequestOrigin(req);
+  const basePath = getRequestBasePath(req);
   const id = encodeURIComponent(file.id);
   const token = encodeURIComponent(file.accessToken);
   return {
     ...file,
-    embedUrl: `${origin}/api/files/${id}/content?token=${token}`,
-    downloadUrl: `${origin}/api/files/${id}/content?token=${token}&download=1`
+    embedUrl: `${origin}${basePath}/api/files/${id}/content?token=${token}`,
+    downloadUrl: `${origin}${basePath}/api/files/${id}/content?token=${token}&download=1`
   };
 }
 

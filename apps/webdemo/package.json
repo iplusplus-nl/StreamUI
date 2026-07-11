@@ -1,0 +1,27 @@
+{
+  "name": "@chathtml/webdemo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "build": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4174",
+    "test": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\""
+  },
+  "dependencies": {
+    "@assistant-ui/react": "^0.14.24",
+    "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "^1.23.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6"
+  }
+}

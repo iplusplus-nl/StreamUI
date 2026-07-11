@@ -11,10 +11,13 @@
   ],
   "scripts": {
     "dev": "npm --workspace @chathtml/web run dev",
+    "dev:webdemo": "npm --workspace @chathtml/webdemo run dev",
     "server": "npm --workspace @chathtml/web run server",
     "build": "npm --workspace @chathtml/web run build",
+    "build:webdemo": "npm --workspace @chathtml/webdemo run build",
     "preview": "npm --workspace @chathtml/web run preview",
     "test": "npm --workspace @chathtml/web run test",
+    "test:webdemo": "npm --workspace @chathtml/webdemo run test",
     "wait:deploy-idle": "node scripts/wait-for-deploy-idle.mjs"
   }
 }

@@ -1056,18 +1056,24 @@ button {
 .settings-row textarea {
   width: 100%;
   min-height: 40px;
-  border: 0;
   border-radius: 9px;
   color: #18181b;
-  background: #f7f7f8;
   font-size: 14px;
   outline: 0;
   box-shadow: none;
 }
 
 .settings-row-textarea {
+  min-height: auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  padding: 10px 0;
+  gap: 12px;
+  padding: 18px 0 20px;
+}
+
+.settings-row-textarea > span {
+  font-size: 15px;
+  font-weight: 560;
 }
 
 .settings-control-stack {
@@ -1095,10 +1101,19 @@ button {
 
 .settings-row input,
 .settings-row textarea {
-  padding: 7px 11px;
+  padding: 10px 13px;
+  border: 1px solid #dedee3;
+  border-radius: 12px;
+  background: #ffffff;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background 150ms ease;
 }
 
 .settings-row select {
+  border: 0;
+  background: #f7f7f8;
   padding: 7px 32px 7px 11px;
 }
 
@@ -1285,19 +1300,24 @@ button {
 }
 
 .settings-row input:focus,
-.settings-row select:focus,
 .settings-row textarea:focus {
+  border-color: #a1a1aa;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.08);
+}
+
+.settings-row select:focus {
   background: #eeeeee;
 }
 
 .settings-row textarea {
-  min-height: 88px;
+  min-height: 96px;
   resize: vertical;
   line-height: 1.5;
 }
 
 .settings-memory-row textarea {
-  min-height: 54px;
+  min-height: 64px;
 }
 
 .settings-row input:disabled {
@@ -2538,6 +2558,14 @@ button {
   box-shadow: none;
 }
 
+.app-shell[data-theme="night"] .settings-row input,
+.app-shell[data-theme="night"] .settings-row textarea,
+.settings-overlay[data-theme="night"] .settings-row input,
+.settings-overlay[data-theme="night"] .settings-row textarea {
+  border-color: #505054;
+  background: #2b2b2d;
+}
+
 .settings-overlay[data-theme="night"] .settings-select-trigger:hover:not(:disabled),
 .settings-overlay[data-theme="night"]
   .settings-select-trigger[aria-expanded="true"] {
@@ -2575,11 +2603,16 @@ button {
 }
 
 .app-shell[data-theme="night"] .settings-row input:focus,
-.app-shell[data-theme="night"] .settings-row select:focus,
 .app-shell[data-theme="night"] .settings-row textarea:focus,
 .settings-overlay[data-theme="night"] .settings-row input:focus,
-.settings-overlay[data-theme="night"] .settings-row select:focus,
 .settings-overlay[data-theme="night"] .settings-row textarea:focus {
+  border-color: #8b8b91;
+  background: #303033;
+  box-shadow: 0 0 0 3px rgba(244, 244, 245, 0.1);
+}
+
+.app-shell[data-theme="night"] .settings-row select:focus,
+.settings-overlay[data-theme="night"] .settings-row select:focus {
   background: #444444;
 }
 
@@ -6159,6 +6192,8 @@ button {
   }
 
   .settings-row-textarea {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
     padding: 12px 0;
   }
 }

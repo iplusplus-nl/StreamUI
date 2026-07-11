@@ -1,4 +1,5 @@
 import { clientRequestHeaders } from "../../api/client";
+import { apiUrl } from "../../api/appUrl";
 import type { ArtifactEditReference } from "../../domain/chat/sessionModel";
 import { formatChatHttpError } from "../chat/chatErrors";
 
@@ -72,7 +73,7 @@ export async function requestArtifactEdit(
   fetchImpl: FetchLike = fetch
 ): Promise<ArtifactEditResponse> {
   throwIfArtifactEditAborted(signal);
-  const response = await fetchImpl("/api/artifact-edits", {
+  const response = await fetchImpl(apiUrl("/artifact-edits"), {
     method: "POST",
     headers: clientRequestHeaders(clientId, "application/json"),
     signal,

@@ -10,6 +10,7 @@ import {
   Share2
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { apiUrl } from "../api/appUrl";
 import {
   copySnapshotSourceCode,
   copySnapshotVisibleText,
@@ -99,7 +100,7 @@ async function createArtifactShareLink({
   snapshot: RenderSnapshot;
   themeMode: PageThemeMode;
 }): Promise<{ copied: boolean; url: string }> {
-  const response = await fetch("/api/html-shares", {
+  const response = await fetch(apiUrl("/html-shares"), {
     method: "POST",
     credentials: "same-origin",
     headers: {

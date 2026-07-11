@@ -1,4 +1,5 @@
 import { clientRequestHeaders } from "../../api/client";
+import { apiUrl } from "../../api/appUrl";
 
 type FetchLike = typeof fetch;
 
@@ -43,7 +44,7 @@ export function startChatRun(
   signal: AbortSignal,
   fetchImpl: FetchLike = fetch
 ): Promise<Response> {
-  return fetchImpl("/api/chat", {
+  return fetchImpl(apiUrl("/chat"), {
     method: "POST",
     headers: clientRequestHeaders(clientId, "application/json"),
     signal,
@@ -58,7 +59,7 @@ export async function cancelChatRun(
   signal?: AbortSignal
 ): Promise<CancelChatRunResult> {
   const response = await fetchImpl(
-    `/api/chat/runs/${encodeURIComponent(runId)}/cancel`,
+    apiUrl(`/chat/runs/${encodeURIComponent(runId)}/cancel`),
     {
       method: "POST",
       headers: clientRequestHeaders(clientId),
@@ -113,9 +114,11 @@ export function requestChatRunEvents(
   fetchImpl: FetchLike = fetch
 ): Promise<Response> {
   return fetchImpl(
-    `/api/chat/runs/${encodeURIComponent(runId)}/events?after=${encodeURIComponent(
-      String(afterSequence)
-    )}`,
+    apiUrl(
+      `/chat/runs/${encodeURIComponent(runId)}/events?after=${encodeURIComponent(
+        String(afterSequence)
+      )}`
+    ),
     {
       headers: clientRequestHeaders(clientId),
       signal

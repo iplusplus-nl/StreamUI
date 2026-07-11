@@ -11,12 +11,16 @@ import {
 
 const servers: Server[] = [];
 
-async function startGateway(fetchImpl: typeof fetch, nodeEnv = "test") {
+async function startGateway(
+  fetchImpl: typeof fetch,
+  nodeEnv = "test",
+  publicOrigin = "http://chat.test"
+) {
   const gateway = createChatHtmlServiceGateway({
     baseUrl: "http://service.test/v1",
     fetchImpl,
     nodeEnv,
-    publicOrigin: "http://chat.test"
+    publicOrigin
   });
   const app = express();
   app.use(express.json());
@@ -53,6 +57,27 @@ describe("ChatHTML Service gateway", () => {
     assert.equal(
       DEFAULT_CHATHTML_SERVICE_BASE_URL,
       "https://service.aietheia.com/v1"
+    );
+  });
+
+  it("keeps OAuth callbacks and transient cookies inside a deployment subpath", async () => {
+    const origin = await startGateway(
+      async () => Response.json({}),
+      "production",
+      "https://test.aietheia.com/chathtml/"
+    );
+    const started = await fetch(`${origin}/api/auth/start`, {
+      redirect: "manual"
+    });
+    const authorizationUrl = new URL(started.headers.get("location") ?? "");
+
+    assert.equal(
+      authorizationUrl.searchParams.get("redirect_uri"),
+      "https://test.aietheia.com/chathtml/api/auth/callback"
+    );
+    assert.match(
+      started.headers.get("set-cookie") ?? "",
+      /Path=\/chathtml\/api\/auth/
     );
   });
 

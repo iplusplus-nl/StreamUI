@@ -2,6 +2,7 @@ import {
   serializeApiSettings,
   type ApiSettings
 } from "../../core/apiSettings";
+import { apiUrl } from "../../api/appUrl";
 
 type ModelsResponse = {
   models?: unknown;
@@ -11,7 +12,7 @@ type ModelsResponse = {
 export async function fetchModelCatalog(
   apiSettings: ApiSettings
 ): Promise<string[]> {
-  const response = await fetch("/api/models", {
+  const response = await fetch(apiUrl("/models"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"

@@ -1,5 +1,6 @@
 import type { SessionFile } from "../../domain/chat/sessionModel";
 import { clientRequestHeaders } from "../../api/client";
+import { apiUrl } from "../../api/appUrl";
 import type { SessionFileUploadInput } from "./sessionFileContracts";
 
 export type { SessionFileUploadInput } from "./sessionFileContracts";
@@ -29,7 +30,7 @@ export function requestSessionIndex(
   clientId: string,
   fetchImpl: FetchLike = fetch
 ): Promise<Response> {
-  return fetchImpl("/api/sessions/index", {
+  return fetchImpl(apiUrl("/sessions/index"), {
     headers: sessionRequestHeaders(clientId)
   });
 }
@@ -38,7 +39,7 @@ export function requestSessions(
   clientId: string,
   fetchImpl: FetchLike = fetch
 ): Promise<Response> {
-  return fetchImpl("/api/sessions", {
+  return fetchImpl(apiUrl("/sessions"), {
     headers: sessionRequestHeaders(clientId)
   });
 }
@@ -50,7 +51,7 @@ export async function uploadSessionFile(
   fetchImpl: FetchLike = fetch
 ): Promise<SessionFile> {
   const response = await fetchImpl(
-    `/api/sessions/${encodeURIComponent(sessionId)}/files`,
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/files`),
     {
       method: "POST",
       headers: sessionRequestHeaders(clientId, "application/json"),
@@ -80,9 +81,11 @@ export async function deleteSessionFile(
   fetchImpl: FetchLike = fetch
 ): Promise<void> {
   const response = await fetchImpl(
-    `/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(
-      fileId
-    )}`,
+    apiUrl(
+      `/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(
+        fileId
+      )}`
+    ),
     {
       method: "DELETE",
       headers: sessionRequestHeaders(clientId)
@@ -100,7 +103,7 @@ export function saveSerializedSessionState(
   signal?: AbortSignal,
   fetchImpl: FetchLike = fetch
 ): Promise<Response> {
-  return fetchImpl("/api/sessions", {
+  return fetchImpl(apiUrl("/sessions"), {
     method: "PUT",
     headers: sessionRequestHeaders(clientId, "application/json"),
     signal,
@@ -133,13 +136,13 @@ export function saveSessionStateOnPageExit(
 ): void {
   if (transport.sendBeacon) {
     const body = new Blob([serializedState], { type: "application/json" });
-    if (transport.sendBeacon("/api/sessions", body)) {
+    if (transport.sendBeacon(apiUrl("/sessions"), body)) {
       return;
     }
   }
 
   void transport
-    .fetch("/api/sessions", {
+    .fetch(apiUrl("/sessions"), {
       method: "PUT",
       headers: sessionRequestHeaders(clientId, "application/json"),
       keepalive: true,

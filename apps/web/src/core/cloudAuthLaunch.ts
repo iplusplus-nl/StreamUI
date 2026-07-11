@@ -1,4 +1,5 @@
 import type { AuthSummary } from "./cloudAuth";
+import { apiUrl } from "../api/appUrl";
 
 export type NativeOAuthRequest = {
   authorizationUrl: string;
@@ -109,14 +110,14 @@ export async function startCloudAuthentication(
     const assign =
       dependencies.assignLocation ??
       ((url: string) => browserWindow?.location.assign(url));
-    assign("/api/auth/start");
+    assign(apiUrl("/auth/start"));
     return null;
   }
 
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
   const start = nativeRequest(
     await requireJson(
-      await fetchImpl("/api/auth/native/start", {
+      await fetchImpl(apiUrl("/auth/native/start"), {
         method: "POST",
         credentials: "same-origin",
         headers: { Accept: "application/json" }
@@ -131,7 +132,7 @@ export async function startCloudAuthentication(
 
   return authSummary(
     await requireJson(
-      await fetchImpl("/api/auth/native/callback", {
+      await fetchImpl(apiUrl("/auth/native/callback"), {
         method: "POST",
         credentials: "same-origin",
         headers: {

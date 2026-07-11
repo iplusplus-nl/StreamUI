@@ -71,7 +71,8 @@ function normalizePublicOrigin(value: string): string {
       "CHATHTML_PUBLIC_ORIGIN must not contain credentials, query, or fragment."
     );
   }
-  return url.origin;
+  const pathname = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${pathname === "/" ? "" : pathname}`;
 }
 
 function normalizeAppRedirectUri(value: string): string {
@@ -133,11 +134,12 @@ function oauthTransientCookie(
   name: string,
   value: string,
   secure: boolean,
+  path: string,
   maxAge = OAUTH_TRANSIENT_TTL_SECONDS
 ): string {
   const attributes = [
     `${name}=${value}`,
-    "Path=/api/auth",
+    `Path=${path}`,
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${maxAge}`
@@ -301,6 +303,10 @@ export function createChatHtmlServiceGateway(
         ? "https://preview.aietheia.com"
         : "http://127.0.0.1:5173")
   );
+  const publicBasePath = new URL(publicOrigin).pathname.replace(/\/+$/, "");
+  const authCookiePath = `${
+    publicBasePath === "/" ? "" : publicBasePath
+  }/api/auth`;
   const callbackUrl = `${publicOrigin}/api/auth/callback`;
   const appRedirectUri = normalizeAppRedirectUri(
     options.appRedirectUri ??
@@ -376,11 +382,21 @@ export function createChatHtmlServiceGateway(
     authorizationUrl.searchParams.set("code_challenge_method", "S256");
     res.append(
       "Set-Cookie",
-      oauthTransientCookie(OAUTH_STATE_COOKIE_NAME, state, secure)
+      oauthTransientCookie(
+        OAUTH_STATE_COOKIE_NAME,
+        state,
+        secure,
+        authCookiePath
+      )
     );
     res.append(
       "Set-Cookie",
-      oauthTransientCookie(OAUTH_VERIFIER_COOKIE_NAME, verifier, secure)
+      oauthTransientCookie(
+        OAUTH_VERIFIER_COOKIE_NAME,
+        verifier,
+        secure,
+        authCookiePath
+      )
     );
     res.setHeader("Cache-Control", "no-store");
     return authorizationUrl;
@@ -409,11 +425,23 @@ export function createChatHtmlServiceGateway(
     const clearOAuthCookies = () => {
       res.append(
         "Set-Cookie",
-        oauthTransientCookie(OAUTH_STATE_COOKIE_NAME, "", secure, 0)
+        oauthTransientCookie(
+          OAUTH_STATE_COOKIE_NAME,
+          "",
+          secure,
+          authCookiePath,
+          0
+        )
       );
       res.append(
         "Set-Cookie",
-        oauthTransientCookie(OAUTH_VERIFIER_COOKIE_NAME, "", secure, 0)
+        oauthTransientCookie(
+          OAUTH_VERIFIER_COOKIE_NAME,
+          "",
+          secure,
+          authCookiePath,
+          0
+        )
       );
     };
     const expectedState = readCookie(req, OAUTH_STATE_COOKIE_NAME);

@@ -17,6 +17,7 @@ function getAppCommit(): string {
 }
 
 export default defineConfig({
+  base: process.env.CHATHTML_BASE_PATH?.trim() || "/",
   plugins: [react()],
   define: {
     __APP_COMMIT__: JSON.stringify(getAppCommit())

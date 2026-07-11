@@ -1,3 +1,5 @@
+import { apiUrl } from "../api/appUrl";
+
 export type AuthUser = {
   id: string;
   email: string;
@@ -36,14 +38,14 @@ async function readJson<T>(
 }
 
 export async function loadAuthSummary(): Promise<AuthSummary> {
-  const response = await fetch("/api/auth/me", {
+  const response = await fetch(apiUrl("/auth/me"), {
     credentials: "same-origin"
   });
   return readJson<AuthSummary>(response, "Authentication status load");
 }
 
 export async function logout(): Promise<AuthSummary> {
-  const response = await fetch("/api/auth/logout", {
+  const response = await fetch(apiUrl("/auth/logout"), {
     method: "POST",
     credentials: "same-origin"
   });

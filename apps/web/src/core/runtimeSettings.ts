@@ -1,4 +1,5 @@
 import type { ApiSettings } from "./apiSettings";
+import { apiUrl } from "../api/appUrl";
 
 export type EnvironmentKeyStatus = {
   name: string;
@@ -51,7 +52,7 @@ export function getEnvironmentKeyStatus(
 }
 
 export async function loadRuntimeSettings(): Promise<RuntimeSettingsSummary> {
-  const response = await fetch("/api/settings");
+  const response = await fetch(apiUrl("/settings"));
 
   if (!response.ok) {
     throw new Error(`Settings load failed with HTTP ${response.status}.`);

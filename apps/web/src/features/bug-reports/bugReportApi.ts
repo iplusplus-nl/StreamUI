@@ -1,4 +1,5 @@
 import { clientRequestHeaders } from "../../api/client";
+import { apiUrl } from "../../api/appUrl";
 import type { BugReportDraft } from "../../domain/chat/sessionModel";
 
 type FetchLike = typeof fetch;
@@ -35,7 +36,7 @@ export async function submitBugReport(
   environment: BugReportEnvironment = browserBugReportEnvironment(),
   fetchImpl: FetchLike = fetch
 ): Promise<string> {
-  const response = await fetchImpl("/api/bug-reports", {
+  const response = await fetchImpl(apiUrl("/bug-reports"), {
     method: "POST",
     headers: clientRequestHeaders(clientId, "application/json"),
     body: JSON.stringify({

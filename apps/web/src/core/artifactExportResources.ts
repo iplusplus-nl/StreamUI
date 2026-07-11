@@ -1,5 +1,7 @@
 const EXPORT_ASSET_SETTLE_TIMEOUT_MS = 4_000;
-const EXPORT_RESOURCE_ENDPOINT = "/api/export-resource";
+import { apiUrl } from "../api/appUrl";
+
+const EXPORT_RESOURCE_ENDPOINT = apiUrl("/export-resource");
 const CSS_URL_PATTERN =
   /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"']+))\s*\)/gi;
 
