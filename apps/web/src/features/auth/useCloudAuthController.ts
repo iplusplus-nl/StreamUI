@@ -20,10 +20,8 @@ export type CloudAuthController = {
   summary: AuthSummary | null;
   loaded: boolean;
   user: AuthUser | null;
-  isOverlayOpen: boolean;
   open(): void;
   close(): void;
-  acceptSummary(summary: AuthSummary): void;
   updateUser(user: AuthUser): void;
   refresh(): Promise<AuthSummary | null>;
   logout(): Promise<void>;
@@ -38,13 +36,11 @@ export function useCloudAuthController({
   const stableDependencies = dependenciesRef.current;
   const [summary, setSummary] = useState<AuthSummary | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
 
   useEffect(() => {
     if (!cloudEnabled) {
       setSummary(null);
       setLoaded(false);
-      setIsOverlayOpen(false);
       return undefined;
     }
 
@@ -63,13 +59,10 @@ export function useCloudAuthController({
     };
   }, [cloudEnabled, stableDependencies]);
 
-  const open = useCallback(() => setIsOverlayOpen(true), []);
-  const close = useCallback(() => setIsOverlayOpen(false), []);
-  const acceptSummary = useCallback((nextSummary: AuthSummary) => {
-    setSummary(nextSummary);
-    setLoaded(true);
-    setIsOverlayOpen(false);
+  const open = useCallback(() => {
+    window.location.assign("/api/auth/start");
   }, []);
+  const close = useCallback(() => undefined, []);
   const updateUser = useCallback((user: AuthUser) => {
     setSummary((current) => authSummaryWithUser(current, user));
     setLoaded(true);
@@ -91,7 +84,7 @@ export function useCloudAuthController({
       {
         setSummary,
         setLoaded,
-        setOverlayOpen: setIsOverlayOpen
+        setOverlayOpen: () => undefined
       },
       stableDependencies
     );
@@ -102,19 +95,15 @@ export function useCloudAuthController({
       summary,
       loaded,
       user: cloudEnabled ? (summary?.user ?? null) : null,
-      isOverlayOpen,
       open,
       close,
-      acceptSummary,
       updateUser,
       refresh,
       logout
     }),
     [
-      acceptSummary,
       close,
       cloudEnabled,
-      isOverlayOpen,
       loaded,
       logout,
       open,

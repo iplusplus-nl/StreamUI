@@ -54,11 +54,13 @@ This repository is the single public source tree for ChatHTML. The current
 product deployment is open: no account gate, no billing gate, and one shared
 conversation history while the product is still early.
 
-The optional hosted-backend contract is documented for later. A future backend
-can report `cloud.enabled: true` from `GET /api/settings` to expose account,
-billing, and managed-provider surfaces, but the local open-source Express server
-keeps those disabled by default. See `docs/cloud-api.md` for that parked
-contract.
+The optional hosted backend can report `cloud.enabled: true` from
+`GET /api/settings` to expose account, billing, and managed-provider surfaces.
+Authentication uses a Service-hosted OAuth flow: ChatHTML redirects the browser
+to the Service for email registration or login, then its backend exchanges a
+one-time PKCE-protected code and keeps the service session in an HttpOnly cookie.
+The Service URL is server configuration and is not exposed as a frontend
+setting. See `docs/cloud-api.md` for the HTTP contract.
 
 ## Session Storage
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, it } from "node:test";
 import express from "express";
@@ -14,12 +15,14 @@ async function startGateway(fetchImpl: typeof fetch, nodeEnv = "test") {
   const gateway = createChatHtmlServiceGateway({
     baseUrl: "http://service.test/v1",
     fetchImpl,
-    nodeEnv
+    nodeEnv,
+    publicOrigin: "http://chat.test"
   });
   const app = express();
   app.use(express.json());
   app.get("/api/auth/me", gateway.handleAuthMe);
-  app.post("/api/auth/register", gateway.handleAuthRegister);
+  app.get("/api/auth/start", gateway.handleOAuthStart);
+  app.get("/api/auth/callback", gateway.handleOAuthCallback);
   app.post("/api/auth/logout", gateway.handleAuthLogout);
   app.post("/managed", gateway.injectManagedApiSettings, (req, res) => {
     res.json(req.body);
@@ -51,7 +54,7 @@ describe("ChatHTML Service gateway", () => {
     );
   });
 
-  it("keeps the service token in an HttpOnly cookie across auth actions", async () => {
+  it("uses Authorization Code with PKCE and keeps the token in an HttpOnly cookie", async () => {
     const token = "service_session_token_abcdefghijklmnopqrstuvwxyz";
     const calls: Array<{ url: string; authorization: string }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
@@ -60,11 +63,16 @@ describe("ChatHTML Service gateway", () => {
         url,
         authorization: new Headers(init?.headers).get("authorization") ?? ""
       });
-      if (url.endsWith("/auth/register")) {
-        assert.deepEqual(JSON.parse(String(init?.body)), {
-          email: "user@example.com",
-          password: "correct-password"
-        });
+      if (url.endsWith("/oauth/token")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.equal(body.grant_type, "authorization_code");
+        assert.equal(body.client_id, "chathtml");
+        assert.equal(body.redirect_uri, "http://chat.test/api/auth/callback");
+        assert.equal(
+          body.code,
+          "one-time-authorization-code-abcdefghijklmnopqrstuvwxyz"
+        );
+        assert.equal(typeof body.code_verifier, "string");
         return Response.json({
           user: { id: "user-1", email: "user@example.com", role: "user" },
           accessToken: token,
@@ -82,26 +90,60 @@ describe("ChatHTML Service gateway", () => {
       throw new Error(`Unexpected service request: ${url}`);
     };
     const origin = await startGateway(fetchImpl, "production");
-    const registered = await fetch(`${origin}/api/auth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: "user@example.com",
-        password: "correct-password",
-        inviteCode: "must-not-be-forwarded"
-      })
+    const started = await fetch(`${origin}/api/auth/start`, {
+      redirect: "manual"
     });
-    const registeredBody = (await registered.json()) as Record<string, unknown>;
-    const setCookie = registered.headers.get("set-cookie") ?? "";
+    assert.equal(started.status, 302);
+    const authorizationUrl = new URL(started.headers.get("location") ?? "");
+    assert.equal(authorizationUrl.origin, "http://service.test");
+    assert.equal(authorizationUrl.pathname, "/oauth/authorize");
+    assert.equal(authorizationUrl.searchParams.get("client_id"), "chathtml");
+    assert.equal(
+      authorizationUrl.searchParams.get("redirect_uri"),
+      "http://chat.test/api/auth/callback"
+    );
+    assert.equal(
+      authorizationUrl.searchParams.get("code_challenge_method"),
+      "S256"
+    );
+    assert.equal(authorizationUrl.searchParams.has("code_verifier"), false);
+    const transientCookies = started.headers.get("set-cookie") ?? "";
+    const state = authorizationUrl.searchParams.get("state") ?? "";
+    const stateCookie =
+      transientCookies.match(/chathtml_oauth_state=([^;]+)/)?.[1] ?? "";
+    const verifierCookie =
+      transientCookies.match(/chathtml_oauth_verifier=([^;]+)/)?.[1] ?? "";
+    assert.equal(stateCookie, state);
+    assert.ok(verifierCookie);
+    assert.equal(
+      authorizationUrl.searchParams.get("code_challenge"),
+      createHash("sha256").update(verifierCookie).digest("base64url")
+    );
+    assert.match(transientCookies, /HttpOnly/);
+    assert.match(transientCookies, /Secure/);
 
-    assert.equal(registered.status, 201);
-    assert.equal("accessToken" in registeredBody, false);
-    assert.match(setCookie, /^chathtml_service_session=/);
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=one-time-authorization-code-abcdefghijklmnopqrstuvwxyz&state=${state}`,
+      {
+        headers: {
+          Cookie: `chathtml_oauth_state=${stateCookie}; chathtml_oauth_verifier=${verifierCookie}`
+        },
+        redirect: "manual"
+      }
+    );
+    assert.equal(callback.status, 303);
+    assert.equal(callback.headers.get("location"), "http://chat.test/");
+    const setCookie = callback.headers.get("set-cookie") ?? "";
+    assert.match(setCookie, /chathtml_service_session=/);
     assert.match(setCookie, /HttpOnly/);
-    assert.match(setCookie, /SameSite=Lax/);
     assert.match(setCookie, /Secure/);
+    assert.doesNotMatch(
+      callback.headers.get("location") ?? "",
+      /accessToken|service_session/
+    );
 
-    const cookie = setCookie.split(";", 1)[0];
+    const cookie =
+      setCookie.match(/chathtml_service_session=([^;]+)/)?.[0] ?? "";
     const me = await fetch(`${origin}/api/auth/me`, {
       headers: { Cookie: cookie }
     });
@@ -116,6 +158,26 @@ describe("ChatHTML Service gateway", () => {
     assert.equal(logout.status, 200);
     assert.match(logout.headers.get("set-cookie") ?? "", /Max-Age=0/);
     assert.equal(calls.at(-1)?.authorization, `Bearer ${token}`);
+  });
+
+  it("rejects an OAuth callback when state does not match", async () => {
+    let calls = 0;
+    const origin = await startGateway(async () => {
+      calls += 1;
+      throw new Error("Token exchange must not run.");
+    });
+    const response = await fetch(
+      `${origin}/api/auth/callback?code=${"c".repeat(40)}&state=${"a".repeat(32)}`,
+      {
+        headers: {
+          Cookie: `chathtml_oauth_state=${"b".repeat(32)}; chathtml_oauth_verifier=${"v".repeat(48)}`
+        }
+      }
+    );
+
+    assert.equal(response.status, 400);
+    assert.equal(calls, 0);
+    assert.match(await response.text(), /invalid or expired/);
   });
 
   it("injects the fixed service connection only for managed requests", async () => {

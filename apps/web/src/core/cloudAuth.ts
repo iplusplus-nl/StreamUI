@@ -17,12 +17,6 @@ export type AuthSummary = {
   auth: AuthAvailability;
 };
 
-type AuthPayload = {
-  email?: string;
-  password?: string;
-  inviteCode?: string;
-};
-
 async function readJson<T>(
   response: Response,
   fallback: string
@@ -46,32 +40,6 @@ export async function loadAuthSummary(): Promise<AuthSummary> {
     credentials: "same-origin"
   });
   return readJson<AuthSummary>(response, "Authentication status load");
-}
-
-export async function login(payload: AuthPayload): Promise<AuthSummary> {
-  const response = await fetch("/api/auth/login", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  return readJson<AuthSummary>(response, "Login");
-}
-
-export async function register(payload: AuthPayload): Promise<AuthSummary> {
-  const response = await fetch("/api/auth/register", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  return readJson<AuthSummary>(response, "Registration");
 }
 
 export async function logout(): Promise<AuthSummary> {

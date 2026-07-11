@@ -1,8 +1,13 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 
 export const DEFAULT_CHATHTML_SERVICE_BASE_URL =
   "https://service.aietheia.com/v1";
 const SESSION_COOKIE_NAME = "chathtml_service_session";
+const OAUTH_STATE_COOKIE_NAME = "chathtml_oauth_state";
+const OAUTH_VERIFIER_COOKIE_NAME = "chathtml_oauth_verifier";
+const OAUTH_CLIENT_ID = "chathtml";
+const OAUTH_TRANSIENT_TTL_SECONDS = 10 * 60;
 const MAX_SERVICE_RESPONSE_BYTES = 256 * 1024;
 
 type ServiceUser = {
@@ -29,6 +34,7 @@ export type ChatHtmlServiceGatewayOptions = {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   nodeEnv?: string;
+  publicOrigin?: string;
 };
 
 class ServiceHttpError extends Error {
@@ -50,6 +56,19 @@ function normalizeServiceBaseUrl(value: string): string {
     throw new Error("CHATHTML_SERVICE_BASE_URL must not contain credentials.");
   }
   return value.replace(/\/+$/, "");
+}
+
+function normalizePublicOrigin(value: string): string {
+  const url = new URL(value);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("CHATHTML_PUBLIC_ORIGIN must use HTTP or HTTPS.");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      "CHATHTML_PUBLIC_ORIGIN must not contain credentials, query, or fragment."
+    );
+  }
+  return url.origin;
 }
 
 function readCookie(req: Request, name: string): string {
@@ -86,6 +105,34 @@ function sessionCookie(
 
 function expiredSessionCookie(secure: boolean): string {
   return sessionCookie("", 0, secure);
+}
+
+function oauthTransientCookie(
+  name: string,
+  value: string,
+  secure: boolean,
+  maxAge = OAUTH_TRANSIENT_TTL_SECONDS
+): string {
+  const attributes = [
+    `${name}=${value}`,
+    "Path=/api/auth",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`
+  ];
+  if (secure) {
+    attributes.push("Secure");
+  }
+  return attributes.join("; ");
+}
+
+function equalSecret(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return (
+    leftBytes.length === rightBytes.length &&
+    timingSafeEqual(leftBytes, rightBytes)
+  );
 }
 
 function useSecureCookie(req: Request, nodeEnv: string): boolean {
@@ -132,6 +179,14 @@ function errorText(payload: unknown, fallback: string): string {
     typeof payload.error === "string"
   ) {
     return payload.error.slice(0, 500);
+  }
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error_description" in payload &&
+    typeof payload.error_description === "string"
+  ) {
+    return payload.error_description.slice(0, 500);
   }
   return fallback;
 }
@@ -217,6 +272,15 @@ export function createChatHtmlServiceGateway(
   );
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const nodeEnv = options.nodeEnv ?? process.env.NODE_ENV ?? "development";
+  const publicOrigin = normalizePublicOrigin(
+    options.publicOrigin ??
+      process.env.CHATHTML_PUBLIC_ORIGIN ??
+      (nodeEnv === "production"
+        ? "https://preview.aietheia.com"
+        : "http://127.0.0.1:5173")
+  );
+  const callbackUrl = `${publicOrigin}/api/auth/callback`;
+  const serviceOrigin = new URL(baseUrl).origin;
 
   const serviceRequest = async (
     path: string,
@@ -265,36 +329,89 @@ export function createChatHtmlServiceGateway(
     }
   };
 
-  const authAction = (path: "/auth/login" | "/auth/register"): RequestHandler =>
-    async (req, res) => {
-      try {
-        const body =
-          req.body && typeof req.body === "object"
-            ? (req.body as Record<string, unknown>)
-            : {};
-        const response = await serviceRequest(path, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: body.email, password: body.password })
-        });
-        const session = asAuthSession(
-          await requireSuccessfulJson(response, "Authentication failed.")
-        );
-        res.setHeader(
-          "Set-Cookie",
-          sessionCookie(
-            session.accessToken,
-            session.expiresAt,
-            useSecureCookie(req, nodeEnv)
-          )
-        );
-        res.status(path === "/auth/register" ? 201 : 200).json(
-          authSummary(session.user)
-        );
-      } catch (error) {
-        sendGatewayError(res, error);
-      }
+  const handleOAuthStart: RequestHandler = (req, res) => {
+    const state = randomBytes(32).toString("base64url");
+    const verifier = randomBytes(48).toString("base64url");
+    const challenge = createHash("sha256")
+      .update(verifier)
+      .digest("base64url");
+    const secure = useSecureCookie(req, nodeEnv);
+    const authorizationUrl = new URL("/oauth/authorize", serviceOrigin);
+    authorizationUrl.searchParams.set("response_type", "code");
+    authorizationUrl.searchParams.set("client_id", OAUTH_CLIENT_ID);
+    authorizationUrl.searchParams.set("redirect_uri", callbackUrl);
+    authorizationUrl.searchParams.set("state", state);
+    authorizationUrl.searchParams.set("code_challenge", challenge);
+    authorizationUrl.searchParams.set("code_challenge_method", "S256");
+    res.append(
+      "Set-Cookie",
+      oauthTransientCookie(OAUTH_STATE_COOKIE_NAME, state, secure)
+    );
+    res.append(
+      "Set-Cookie",
+      oauthTransientCookie(OAUTH_VERIFIER_COOKIE_NAME, verifier, secure)
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.redirect(302, authorizationUrl.toString());
+  };
+
+  const handleOAuthCallback: RequestHandler = async (req, res) => {
+    const secure = useSecureCookie(req, nodeEnv);
+    const clearOAuthCookies = () => {
+      res.append(
+        "Set-Cookie",
+        oauthTransientCookie(OAUTH_STATE_COOKIE_NAME, "", secure, 0)
+      );
+      res.append(
+        "Set-Cookie",
+        oauthTransientCookie(OAUTH_VERIFIER_COOKIE_NAME, "", secure, 0)
+      );
     };
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const expectedState = readCookie(req, OAUTH_STATE_COOKIE_NAME);
+    const verifier = readCookie(req, OAUTH_VERIFIER_COOKIE_NAME);
+    if (
+      !code ||
+      !state ||
+      !expectedState ||
+      !verifier ||
+      !equalSecret(state, expectedState)
+    ) {
+      clearOAuthCookies();
+      res
+        .status(400)
+        .type("text/plain")
+        .send("The OAuth callback is invalid or expired.");
+      return;
+    }
+    try {
+      const response = await serviceRequest("/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          grant_type: "authorization_code",
+          client_id: OAUTH_CLIENT_ID,
+          redirect_uri: callbackUrl,
+          code,
+          code_verifier: verifier
+        })
+      });
+      const session = asAuthSession(
+        await requireSuccessfulJson(response, "OAuth token exchange failed.")
+      );
+      clearOAuthCookies();
+      res.append(
+        "Set-Cookie",
+        sessionCookie(session.accessToken, session.expiresAt, secure)
+      );
+      res.setHeader("Cache-Control", "no-store");
+      res.redirect(303, `${publicOrigin}/`);
+    } catch (error) {
+      clearOAuthCookies();
+      sendGatewayError(res, error);
+    }
+  };
 
   const handleAuthLogout: RequestHandler = async (req, res) => {
     const token = readCookie(req, SESSION_COOKIE_NAME);
@@ -366,8 +483,8 @@ export function createChatHtmlServiceGateway(
 
   return {
     handleAuthMe,
-    handleAuthLogin: authAction("/auth/login"),
-    handleAuthRegister: authAction("/auth/register"),
+    handleOAuthStart,
+    handleOAuthCallback,
     handleAuthLogout,
     injectManagedApiSettings
   };

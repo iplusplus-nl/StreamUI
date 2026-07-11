@@ -131,8 +131,8 @@ app.get("/api/admin/deploy-ready", (req, res) => {
 });
 
 app.get("/api/auth/me", chatHtmlService.handleAuthMe);
-app.post("/api/auth/login", chatHtmlService.handleAuthLogin);
-app.post("/api/auth/register", chatHtmlService.handleAuthRegister);
+app.get("/api/auth/start", chatHtmlService.handleOAuthStart);
+app.get("/api/auth/callback", chatHtmlService.handleOAuthCallback);
 app.post("/api/auth/logout", chatHtmlService.handleAuthLogout);
 app.post(
   "/api/chat",

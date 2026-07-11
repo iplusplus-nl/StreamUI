@@ -13,7 +13,6 @@ import {
 import { ChatShell } from "./components/ChatShell";
 import { BugReportDialog } from "./components/BugReportDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
-import { AuthOverlay } from "./components/AuthOverlay";
 import { createId } from "./domain/chat/sessionModel";
 import { useChatRunCancellation } from "./features/chat/useChatRunCancellation";
 import { createChatRunReconnectScheduler } from "./features/chat/chatRunReconnectScheduler";
@@ -33,7 +32,6 @@ import {
 } from "./features/chat/assistantRuntimeAdapter";
 import { createPendingRequestSlot } from "./features/chat/pendingRequestSlot";
 import {
-  closeAuthAndDiscard,
   openManualAuth,
   replayManagedAuthRequest
 } from "./features/chat/managedAuthContinuation";
@@ -115,13 +113,9 @@ export default function App() {
     applyMemoryEvent: handleMemoryStreamEvent
   } = useAppSettings();
   const {
-    summary: authSummary,
-    loaded: authLoaded,
     user: authenticatedUser,
-    isOverlayOpen: isAuthOverlayOpen,
     open: openAuthOverlay,
     close: closeAuthOverlay,
-    acceptSummary: handleAuthChange,
     updateUser: handleAuthUserChange,
     refresh: refreshAuthSummary,
     logout: logoutCloudAccount
@@ -188,10 +182,6 @@ export default function App() {
     pendingVisualRepairSlot.clear();
     openManualAuth(pendingManagedRequestSlot, openAuthOverlay);
   }, [openAuthOverlay, pendingManagedRequestSlot, pendingVisualRepairSlot]);
-  const handleAuthOverlayClose = useCallback(() => {
-    closeAuthAndDiscard(pendingManagedRequestSlot, closeAuthOverlay);
-    pendingVisualRepairSlot.clear();
-  }, [closeAuthOverlay, pendingManagedRequestSlot, pendingVisualRepairSlot]);
   const handleLogout = useCallback(async () => {
     try {
       await logoutCloudAccount();
@@ -751,14 +741,6 @@ export default function App() {
           />
         </ChatShell>
       </AssistantRuntimeProvider>
-      {cloudEnabled && isAuthOverlayOpen ? (
-        <AuthOverlay
-          authSummary={authSummary}
-          isLoading={!authLoaded}
-          onAuthChange={handleAuthChange}
-          onClose={handleAuthOverlayClose}
-        />
-      ) : null}
       {isBugReportOpen && bugReportSession ? (
         <BugReportDialog
           draft={bugReportDraft}
