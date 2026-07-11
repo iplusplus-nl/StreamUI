@@ -4,5 +4,6 @@
 node_modules/
 dist/
 /sessions/
+deploy/node-sg/
 plan.md
 server.md
