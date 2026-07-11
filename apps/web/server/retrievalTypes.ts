@@ -80,6 +80,7 @@ export type SearchResult = {
   imageCredit?: string;
   imageLicense?: string;
   imageLicenseUrl?: string;
+  freshnessFiltered?: boolean;
   provider: string;
   rank: number;
 };

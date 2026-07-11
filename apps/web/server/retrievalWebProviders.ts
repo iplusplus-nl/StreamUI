@@ -94,14 +94,7 @@ export async function searchTavily(
     throw new Error("TAVILY_API_KEY is not set.");
   }
 
-  const socialSearch = /\bsite:(?:instagram|facebook|tiktok)\.com\b/i.test(query);
-  const effectiveQuery = socialSearch
-    ? `${query
-        .replace(/\bsite:(?:instagram|facebook|tiktok)\.com(?:\/\S*)?/gi, " ")
-        .replace(/\bOR\b/gi, " ")
-        .replace(/\s+/g, " ")
-        .trim()} recent social media posts photos reels`
-    : query;
+  const queryOptions = tavilyQueryOptions(query);
   const data = (await fetchRetrievalJson(
     "https://api.tavily.com/search",
     {
@@ -112,15 +105,18 @@ export async function searchTavily(
       },
       body: JSON.stringify({
         api_key: apiKey,
-        query: effectiveQuery,
+        query: queryOptions.query,
         topic: "general",
         search_depth: "basic",
         max_results: config.searchMaxResults,
         include_answer: false,
         include_raw_content: false,
         include_images: false,
-        ...(socialSearch
-          ? { include_domains: ["instagram.com", "facebook.com", "tiktok.com"] }
+        ...(queryOptions.includeDomains.length
+          ? { include_domains: queryOptions.includeDomains }
+          : {}),
+        ...(queryOptions.timeRange
+          ? { time_range: queryOptions.timeRange }
           : {})
       })
     },
@@ -141,10 +137,44 @@ export async function searchTavily(
       snippet: clip(result.content, 420),
       imageUrl: youtubeThumbnailUrl(result.url),
       imageAlt: clip(result.title, 160),
+      freshnessFiltered: Boolean(queryOptions.timeRange),
       provider: "tavily",
       rank: index + 1
     }))
     .filter((result) => result.url);
+}
+
+export function tavilyQueryOptions(
+  query: string,
+  currentYear = new Date().getUTCFullYear()
+): {
+  query: string;
+  includeDomains: string[];
+  timeRange?: "week";
+} {
+  const includeDomains = Array.from(
+    query.matchAll(/\bsite:([a-z0-9.-]+\.[a-z]{2,})(?:\/\S*)?/gi),
+    (match) => match[1].toLowerCase()
+  ).filter((domain, index, domains) => domains.indexOf(domain) === index);
+  const effectiveQuery = includeDomains.length
+    ? query
+        .replace(/\bsite:[a-z0-9.-]+\.[a-z]{2,}(?:\/\S*)?/gi, " ")
+        .replace(/\bOR\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    : query;
+  const explicitFreshnessCue =
+    /\b(?:current|recent|latest|live|today|tonight|yesterday|this\s+(?:week|weekend|month|year))\b/i;
+  const currentVisualCue = new RegExp(`\\b${currentYear}\\b`, "i").test(query) &&
+    /\b(?:gallery|galleries|image|images|photo|photos|picture|pictures|video|videos|reel|reels|posts?)\b/i.test(query);
+
+  return {
+    query: effectiveQuery || query,
+    includeDomains,
+    ...(explicitFreshnessCue.test(query) || currentVisualCue
+      ? { timeRange: "week" as const }
+      : {})
+  };
 }
 
 export async function searchSerper(

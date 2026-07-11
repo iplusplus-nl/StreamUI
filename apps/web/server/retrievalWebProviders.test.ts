@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   searchRetrievalWeb,
   selectRetrievalWebProviders,
+  tavilyQueryOptions,
   type RetrievalWebProviderSearches
 } from "./retrievalWebProviders.js";
 import type { RetrievalConfig } from "./retrievalTypes.js";
@@ -35,6 +36,24 @@ test("auto web provider selection skips providers without keys", () => {
     selectRetrievalWebProviders(config({ allowDuckDuckGoFallback: false })),
     []
   );
+});
+
+test("Tavily converts site operators and current visual cues into native filters", () => {
+  assert.deepEqual(
+    tavilyQueryOptions(
+      "North Harbor Festival 2026 site:instagram.com OR site:youtube.com/watch videos",
+      2026
+    ),
+    {
+      query: "North Harbor Festival 2026 videos",
+      includeDomains: ["instagram.com", "youtube.com"],
+      timeRange: "week"
+    }
+  );
+  assert.deepEqual(tavilyQueryOptions("North Harbor Festival archive", 2026), {
+    query: "North Harbor Festival archive",
+    includeDomains: []
+  });
 });
 
 test("web search records missing providers when fallback is disabled", async () => {

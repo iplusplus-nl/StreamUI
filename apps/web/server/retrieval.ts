@@ -596,7 +596,7 @@ export async function collectRetrievalContext(
           visualRetrievalResultMatchesSubject(
             result,
             plannedQueries[0],
-            Boolean(result.imageUrl)
+            Boolean(result.imageUrl) && !result.freshnessFiltered
           )
       );
     }
