@@ -242,6 +242,22 @@ function visualResultRelevance(result: SearchResult, text: string): number {
   );
 }
 
+function visualResultIdentityRelevance(
+  result: SearchResult,
+  text: string
+): number {
+  const terms = visualRelevanceTerms(text);
+  if (!terms.length) {
+    return 0;
+  }
+
+  const haystack = decodeSearchText(`${result.url} ${result.title ?? ""}`);
+  return terms.reduce(
+    (matches, term) => matches + (haystack.includes(term) ? 1 : 0),
+    0
+  );
+}
+
 export function visualRetrievalResultMatchesSubject(
   result: SearchResult,
   text: string,
@@ -253,7 +269,7 @@ export function visualRetrievalResultMatchesSubject(
     : 0;
   if (
     requiredTermMatches > 0 &&
-    visualResultRelevance(result, text) < requiredTermMatches
+    visualResultIdentityRelevance(result, text) < requiredTermMatches
   ) {
     return false;
   }

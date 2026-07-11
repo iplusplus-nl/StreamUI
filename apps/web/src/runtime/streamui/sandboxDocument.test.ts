@@ -65,8 +65,21 @@ describe("sandboxDocument", () => {
     assert.match(document, /prepareYouTubeIframe/);
     assert.match(document, /streamui-video-launch/);
     assert.match(document, /data-streamui-youtube-id/);
-    assert.match(document, /youtube-nocookie\.com\/embed/);
+    assert.match(document, /youtube\.com\/embed/);
     assert.match(document, /autoplay=1/);
+    assert.match(document, /Playback blocked\? Open on YouTube/);
+    assert.match(document, /strict-origin-when-cross-origin/);
+    assert.match(document, /data-streamui-open-url/);
+  });
+
+  it("routes external images through the same-origin raster proxy", () => {
+    const document = buildIframeDocument(
+      '<img src="https://scontent.example/photo.jpg" alt="Event photo">'
+    );
+
+    assert.match(document, /proxyExternalImage/);
+    assert.match(document, /\/api\/media-image\?url=/);
+    assert.match(document, /encodeURIComponent\(source\.toString\(\)\)/);
   });
 
   it("builds the same body html used by the live preview patcher", () => {

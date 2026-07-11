@@ -277,6 +277,33 @@ export function buildSandboxStyles(theme: IframeThemeTokens): string {
       border: 0;
       border-radius: inherit;
     }
+    .streamui-video-player {
+      position: relative;
+      width: 100%;
+      min-height: 180px;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      border-radius: inherit;
+      background: #050505;
+    }
+    .streamui-video-player .streamui-video-active {
+      display: block;
+    }
+    .streamui-video-external {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      z-index: 1;
+      padding: 7px 10px;
+      border-radius: 999px;
+      color: #ffffff;
+      background: rgba(0, 0, 0, 0.82);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+      text-decoration: none;
+      cursor: pointer;
+    }
     .streamui-video-launch {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);

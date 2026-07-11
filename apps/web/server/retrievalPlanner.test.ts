@@ -184,4 +184,17 @@ test("visual subject matching requires core identity and requested year", () => 
     ),
     false
   );
+  assert.equal(
+    visualRetrievalResultMatchesSubject(
+      {
+        url: "https://video.example/watch/unrelated",
+        title: "South Valley Rally 2026 highlights",
+        snippet: "Search results for North Harbor Festival 2026 photos",
+        provider: "tavily",
+        rank: 4
+      },
+      subject
+    ),
+    false
+  );
 });

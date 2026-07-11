@@ -34,6 +34,13 @@ type ExportResource = {
   finalUrl: string;
 };
 
+const MEDIA_IMAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const MEDIA_IMAGE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+type CachedMediaImage = ExportResource & {
+  expiresAt: number;
+};
+
 export type ExportResourceFetchDependencies = Pick<
   RetrievalHttpDependencies,
   "fetchImpl" | "lookup" | "maxRedirects" | "pinnedFetchImpl"
@@ -226,3 +233,68 @@ export function createExportResourceRequestHandler(
 }
 
 export const handleExportResourceRequest = createExportResourceRequestHandler();
+
+export function createMediaImageRequestHandler(
+  dependencies: ExportResourceFetchDependencies = {}
+): (req: Request, res: Response) => Promise<void> {
+  const cache = new Map<string, CachedMediaImage>();
+  let cachedBytes = 0;
+
+  const remember = (url: string, resource: ExportResource): void => {
+    if (resource.body.byteLength > MEDIA_IMAGE_CACHE_MAX_BYTES) {
+      return;
+    }
+    while (
+      cache.size > 0 &&
+      cachedBytes + resource.body.byteLength > MEDIA_IMAGE_CACHE_MAX_BYTES
+    ) {
+      const oldestKey = cache.keys().next().value as string | undefined;
+      if (!oldestKey) {
+        break;
+      }
+      const oldest = cache.get(oldestKey);
+      cache.delete(oldestKey);
+      cachedBytes -= oldest?.body.byteLength ?? 0;
+    }
+    cache.set(url, {
+      ...resource,
+      expiresAt: Date.now() + MEDIA_IMAGE_CACHE_TTL_MS
+    });
+    cachedBytes += resource.body.byteLength;
+  };
+
+  return async (req, res) => {
+    const url = normalizeExportResourceUrl(req.query.url);
+    if (!url) {
+      res.status(400).json({ error: "A valid http or https URL is required." });
+      return;
+    }
+
+    try {
+      const existing = cache.get(url);
+      if (existing && existing.expiresAt <= Date.now()) {
+        cache.delete(url);
+        cachedBytes -= existing.body.byteLength;
+      }
+      const cached = cache.get(url);
+      const resource = cached ?? (await fetchExportResource(url, dependencies));
+      if (!cached) {
+        remember(url, resource);
+      }
+
+      res.status(200);
+      res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+      res.setHeader("Content-Disposition", 'inline; filename="media-image"');
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      res.setHeader("Content-Type", resource.contentType);
+      res.setHeader("Content-Length", String(resource.body.byteLength));
+      res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.send(resource.body);
+    } catch (error) {
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  };
+}
+
+export const handleMediaImageRequest = createMediaImageRequestHandler();

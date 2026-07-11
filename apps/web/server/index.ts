@@ -18,7 +18,10 @@ import {
   setOpenRouterDraining,
   waitForOpenRouterIdle
 } from "./openrouter.js";
-import { handleExportResourceRequest } from "./exportResources.js";
+import {
+  handleExportResourceRequest,
+  handleMediaImageRequest
+} from "./exportResources.js";
 import { handleRetrievalRequest } from "./retrieval.js";
 import { handleGetRuntimeSettings } from "./runtimeApiSettings.js";
 import { createChatHtmlServiceGateway } from "./chatHtmlService.js";
@@ -160,6 +163,7 @@ app.get(
 );
 app.post("/api/retrieve", handleRetrievalRequest);
 app.get("/api/export-resource", handleExportResourceRequest);
+app.get("/api/media-image", handleMediaImageRequest);
 app.get("/api/settings", handleGetRuntimeSettings);
 app.get("/api/sessions", handleGetSessions);
 app.get("/api/sessions/index", handleGetSessionIndex);

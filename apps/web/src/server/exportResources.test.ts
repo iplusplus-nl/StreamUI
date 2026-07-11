@@ -4,6 +4,7 @@ import {
   EXPORT_RESOURCE_MAX_BYTES,
   ExportResourceError,
   createExportResourceRequestHandler,
+  createMediaImageRequestHandler,
   fetchExportResource,
   isExportableImageContentType,
   normalizeExportResourceUrl,
@@ -132,6 +133,44 @@ test("returns a public raster image with non-executable response headers", async
   );
   assert.equal(headers.get("cross-origin-resource-policy"), "same-origin");
   assert.equal(headers.get("x-content-type-options"), "nosniff");
+});
+
+test("serves browser media inline and reuses the verified server response", async () => {
+  const headers = new Map<string, string>();
+  let fetchCalls = 0;
+  const response = {
+    status() {
+      return this;
+    },
+    setHeader(name: string, value: string) {
+      headers.set(name.toLowerCase(), value);
+      return this;
+    },
+    send() {
+      return this;
+    },
+    json() {
+      throw new Error("Expected a successful response.");
+    }
+  };
+  const handler = createMediaImageRequestHandler({
+    lookup: publicLookup,
+    fetchImpl: testFetch(() => {
+      fetchCalls += 1;
+      return new Response("photo", { headers: { "Content-Type": "image/jpeg" } });
+    })
+  });
+  const request = {
+    query: { url: "https://public.example/photo.jpg" }
+  } as never;
+
+  await handler(request, response as never);
+  await handler(request, response as never);
+
+  assert.equal(fetchCalls, 1);
+  assert.equal(headers.get("content-disposition"), 'inline; filename="media-image"');
+  assert.equal(headers.get("cache-control"), "public, max-age=86400, immutable");
+  assert.equal(headers.get("cross-origin-resource-policy"), "same-origin");
 });
 
 test("rejects and cancels active SVG content", async () => {
