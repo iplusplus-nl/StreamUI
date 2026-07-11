@@ -10,57 +10,85 @@ import {
 } from "./retrievalProviderClient.js";
 import type { RetrievalConfig, SearchResult } from "./retrievalTypes.js";
 
-export async function searchSerperImages(
+export async function searchTavilyImages(
   query: string,
   config: RetrievalConfig
 ): Promise<SearchResult[]> {
-  const apiKey = config.serperApiKey;
+  const apiKey = config.tavilyApiKey;
   if (!apiKey) {
-    throw new Error("SERPER_API_KEY is not set.");
+    throw new Error("TAVILY_API_KEY is not set.");
   }
 
   const data = (await fetchRetrievalJson(
-    "https://google.serper.dev/images",
+    "https://api.tavily.com/search",
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-API-KEY": apiKey,
         "User-Agent": RETRIEVAL_USER_AGENT
       },
       body: JSON.stringify({
-        q: query,
-        num: retrievalImageProviderLimit(config)
+        api_key: apiKey,
+        query,
+        topic: "general",
+        search_depth: "basic",
+        max_results: Math.min(5, retrievalImageProviderLimit(config)),
+        include_answer: false,
+        include_raw_content: false,
+        include_images: true,
+        include_image_descriptions: true
       })
     },
     config.timeoutMs,
     config.signal
   )) as {
-    images?: Array<{
+    images?: Array<string | { url?: string; description?: string }>;
+    results?: Array<{
       title?: string;
-      imageUrl?: string;
-      thumbnailUrl?: string;
-      link?: string;
-      source?: string;
-      imageWidth?: number;
-      imageHeight?: number;
-      position?: number;
+      url?: string;
+      content?: string;
+      images?: Array<string | { url?: string; description?: string }>;
     }>;
   };
 
-  return (data.images ?? [])
-    .map((image, index) => ({
-      url: parseAbsoluteUrl(image.link ?? image.imageUrl ?? "") ?? "",
-      title: clip(image.title, 220),
-      snippet: compactParts([image.source, "Google Images via Serper"]),
-      imageUrl: parseAbsoluteUrl(image.imageUrl ?? image.thumbnailUrl ?? ""),
-      imageAlt: clip(image.title, 160),
-      imageWidth: image.imageWidth,
-      imageHeight: image.imageHeight,
-      imageCredit: clip(image.source, 160),
-      provider: "serper-images",
-      rank: image.position ?? index + 1
-    }))
+  const results: SearchResult[] = [];
+  const addImage = (
+    image: string | { url?: string; description?: string },
+    sourceUrl: string,
+    sourceTitle: string | undefined,
+    sourceContent: string | undefined
+  ) => {
+    const rawImageUrl = typeof image === "string" ? image : image.url ?? "";
+    const imageUrl = parseAbsoluteUrl(rawImageUrl);
+    const landingUrl = parseAbsoluteUrl(sourceUrl) ?? imageUrl;
+    if (!imageUrl || !landingUrl) {
+      return;
+    }
+    const description = typeof image === "string" ? undefined : image.description;
+    results.push({
+      url: landingUrl,
+      title: clip(sourceTitle || description, 220),
+      snippet: clip(description || sourceContent, 420),
+      imageUrl,
+      imageAlt: clip(description || sourceTitle, 160),
+      imageCredit: "Tavily image search",
+      provider: "tavily-images",
+      rank: results.length + 1
+    });
+  };
+
+  for (const result of data.results ?? []) {
+    for (const image of result.images ?? []) {
+      addImage(image, result.url ?? "", result.title, result.content);
+    }
+  }
+  if (!results.length) {
+    for (const image of data.images ?? []) {
+      addImage(image, "", undefined, undefined);
+    }
+  }
+
+  return results
     .filter((result) => result.url && result.imageUrl);
 }
 

@@ -164,8 +164,11 @@ Web and external resources:
 Gallery and image-resource requests:
 - If the user asks for a gallery, photos, pictures, images, wallpapers, visual references, or similar, treat real imagery as required for a successful artifact.
 - For a recent or live event, search with the exact event name plus its date/location and target official social posts, photo pages, and video watch pages. Do not substitute archival catalogs or generic stock imagery.
+- Preserve the user's primary subject and scope. Preferences and filters may narrow that subject, but never authorize replacing it with a different event, product, person, place, or topic.
 - Use the "Verified image URLs" retrieve tool block as the primary material. Copy verified URLs exactly as given into <img src>; do not alter provider URL paths, dimensions, query strings, filenames, CDN parameters, or extensions.
+- Treat the verified-image block as a strict allowlist for every external <img src>, not merely a suggestion. Images mentioned only in source pages, snippets, reasoning, or model knowledge are forbidden.
 - A loadable image is not automatically current or on-topic. Only label an image as coming from the requested event/date when its source metadata supports that claim; clearly label older archive material.
+- The hero image must be one exact URL from "Verified image URLs" and must link to its matching source. If no verified image URL exists, do not emit any external <img> or fabricate a video embed as the hero; use a deliberate text-led header plus retrieved source cards instead.
 - Do not invent image URLs, provider filenames, CDN paths, resized variants, or placeholder photos.
 - If a Wikimedia source page also offers an "Original file", do not replace the verified URL with that original; the verified URL may intentionally be a display-sized thumbnail for performance.
 - Build the visible artifact around multiple images when enough candidates are available, with meaningful alt text and source links.

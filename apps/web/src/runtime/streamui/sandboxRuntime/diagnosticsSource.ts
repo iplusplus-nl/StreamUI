@@ -1,4 +1,27 @@
-export const diagnosticsSource = `      window.addEventListener("error", (event) => {
+export const diagnosticsSource = `      const replaceBrokenImage = (image) => {
+        if (!image || image.dataset.streamuiImageFailed === "true") {
+          return;
+        }
+        image.dataset.streamuiImageFailed = "true";
+        const fallback = document.createElement("div");
+        fallback.className = "streamui-image-fallback";
+        fallback.setAttribute("role", "img");
+        const alt = (image.getAttribute("alt") || "").trim();
+        fallback.setAttribute("aria-label", alt || "Image unavailable");
+        fallback.textContent = alt ? "Image unavailable - " + alt : "Image unavailable";
+        const width = Number(image.getAttribute("width"));
+        const height = Number(image.getAttribute("height"));
+        if (width > 0 && height > 0) {
+          fallback.style.aspectRatio = String(width) + " / " + String(height);
+        }
+        image.replaceWith(fallback);
+        scheduleMeasure();
+      };
+      window.addEventListener("error", (event) => {
+        if (event.target instanceof HTMLImageElement) {
+          replaceBrokenImage(event.target);
+          return;
+        }
         if (isExtensionNoise(event.message, event.filename)) {
           return;
         }
@@ -11,7 +34,7 @@ export const diagnosticsSource = `      window.addEventListener("error", (event)
             ? detail
             : event.message;
         post("runtime", message, { filename: event.filename || "" });
-      });
+      }, true);
       window.addEventListener("unhandledrejection", (event) => {
         const reason =
           event.reason && (event.reason.stack || event.reason.message)

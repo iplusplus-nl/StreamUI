@@ -19,7 +19,7 @@ const retrieveToolInputSchema = z.object({
     .max(MAX_TOOL_QUERY_LENGTH)
     .optional()
     .describe(
-      "A focused web search query. Use the user's exact subject and include freshness terms only when the request needs current information."
+      "A focused web search query. Preserve exact proper names and the user's primary subject. Include the requested resource type (such as photos or videos) and freshness/location terms when relevant; do not let a secondary preference replace the primary subject."
     ),
   url: z
     .string()
@@ -192,6 +192,7 @@ export function createRetrievalTools({
             {
               forceSearch: shouldForceSearch(input),
               forceFetch: shouldForceFetch(input),
+              intentText: latestUserText(messages),
               searchSettings,
               onStatus,
               signal

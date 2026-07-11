@@ -46,6 +46,17 @@ describe("sandboxDocument", () => {
     assert.match(document, /streamuiTypesetMath/);
   });
 
+  it("replaces failed images with an accessible non-blank fallback", () => {
+    const document = buildIframeDocument(
+      '<img src="https://example.com/missing.jpg" alt="Rally car">'
+    );
+
+    assert.match(document, /replaceBrokenImage/);
+    assert.match(document, /streamui-image-fallback/);
+    assert.match(document, /Image unavailable/);
+    assert.match(document, /event\.target instanceof HTMLImageElement/);
+  });
+
   it("builds the same body html used by the live preview patcher", () => {
     const body = buildIframeBodyHtml("<p>Hello</p>");
     const document = buildIframeDocument("<p>Hello</p>");

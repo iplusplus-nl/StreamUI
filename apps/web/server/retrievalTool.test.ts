@@ -75,3 +75,43 @@ test("retrieval tool propagates run cancellation through a blocked page fetch", 
     }
   }
 });
+
+test("retrieval tool keeps visual intent when the model supplies a terse query", async () => {
+  const stats = createRetrievalToolStats();
+  const retrieve = createRetrievalTools({
+    messages: [
+      {
+        role: "user",
+        content:
+          "Create a gallery of videos and photos of North Harbor Festival 2026. I like night photography."
+      }
+    ],
+    searchSettings: {
+      enabled: true,
+      provider: "none",
+      fetchMaxPages: 0
+    },
+    stats
+  }).retrieve;
+  assert.ok(retrieve.execute);
+
+  await retrieve.execute(
+    {
+      query: "North Harbor Festival 2026 night photography",
+      mode: "search"
+    },
+    { toolCallId: "retrieve-visual", messages: [] }
+  );
+
+  assert.equal(stats.contexts.length, 1);
+  assert.equal(stats.contexts[0].searchProvider, undefined);
+  assert.ok(
+    stats.contexts[0].queries.includes(
+      "videos and photos of North Harbor Festival 2026"
+    )
+  );
+  assert.match(
+    stats.contexts[0].notes.join("\n"),
+    /Recent-event visual search prioritized current web and social sources/
+  );
+});

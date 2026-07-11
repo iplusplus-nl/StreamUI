@@ -86,7 +86,11 @@ export function shouldSearchRetrieval(
 }
 
 export function buildRetrievalSearchQuery(text: string): string {
-  const original = clip(removeRetrievalUrls(text), 260) || clip(text, 260) || "";
+  const explicitQuery = text.match(/(?:^|\n)\s*Search query:\s*([^\n]+)/i)?.[1];
+  const original =
+    clip(removeRetrievalUrls(explicitQuery || text), 260) ||
+    clip(explicitQuery || text, 260) ||
+    "";
   if (!original) {
     return "";
   }
@@ -105,6 +109,7 @@ export function buildRetrievalSearchQuery(text: string): string {
       ""
     )
     .replace(/^\s*(?:of|for)\s+/i, "")
+    .replace(/\bphoto['’]s\b/gi, "photos")
     .trim();
   const query = cleaned || original;
 
@@ -119,24 +124,28 @@ export function buildRetrievalSearchQuery(text: string): string {
   return clip(`${query} photos images`, 260) || query;
 }
 
-export function buildRetrievalSearchQueries(text: string): string[] {
+export function buildRetrievalSearchQueries(
+  text: string,
+  intentText = text
+): string[] {
   const query = buildRetrievalSearchQuery(text);
   if (!query) {
     return [];
   }
 
-  if (!asksForVisualResources(text)) {
+  if (!asksForVisualResources(intentText)) {
     return [query];
   }
 
-  if (asksForRecentVisualResources(text)) {
+  if (asksForRecentVisualResources(intentText)) {
+    const intentQuery = buildRetrievalSearchQuery(intentText) || query;
     const eventQuery =
-      query
+      intentQuery
         .replace(
           /(?:[.!?]\s*|\s+)\b(?:i|we)\s+(?:like|prefer|want|love|am interested in|are interested in)\b[\s\S]*$/i,
           ""
         )
-        .trim() || query;
+        .trim() || intentQuery;
 
     return uniqueStrings([
       eventQuery,
@@ -150,6 +159,18 @@ export function buildRetrievalSearchQueries(text: string): string[] {
     `${query} Wikimedia Commons`,
     `${query} site:commons.wikimedia.org`
   ]).slice(0, 3);
+}
+
+export function buildRetrievalImageSearchQueries(
+  text: string,
+  intentText = text
+): string[] {
+  const baseQuery = buildRetrievalSearchQueries(text, intentText)[0];
+  if (!baseQuery || !asksForVisualResources(intentText)) {
+    return [];
+  }
+
+  return [baseQuery];
 }
 
 const VISUAL_RELEVANCE_STOP_WORDS = new Set([
@@ -232,7 +253,7 @@ export function visualRetrievalResultScore(result: SearchResult): number {
     [
       "openverse",
       "pexels",
-      "serper-images",
+      "tavily-images",
       "unsplash",
       "nasa",
       "loc",
@@ -280,7 +301,8 @@ export function visualRetrievalResultScore(result: SearchResult): number {
 
 export function prioritizeRetrievalSearchResults(
   results: SearchResult[],
-  text: string
+  text: string,
+  subjectText = text
 ): SearchResult[] {
   if (!asksForVisualResources(text)) {
     return results;
@@ -290,10 +312,11 @@ export function prioritizeRetrievalSearchResults(
 
   return [...results].sort(
     (a, b) =>
-      visualResultRelevance(b, text) * 45 -
-        visualResultRelevance(a, text) * 45 +
+      visualResultRelevance(b, subjectText) * 45 -
+        visualResultRelevance(a, subjectText) * 45 +
         (recentVisuals
-          ? recentVisualSourceScore(b, text) - recentVisualSourceScore(a, text)
+          ? recentVisualSourceScore(b, subjectText) -
+            recentVisualSourceScore(a, subjectText)
           : 0) +
         visualRetrievalResultScore(b) -
         visualRetrievalResultScore(a) ||
@@ -303,6 +326,11 @@ export function prioritizeRetrievalSearchResults(
 
 function recentVisualSourceScore(result: SearchResult, text: string): number {
   const hostname = getRetrievalHostname(result.url) ?? "";
+  const subjectTerms = visualRelevanceTerms(text);
+  const subjectMatches = visualResultRelevance(result, text);
+  if (subjectTerms.length >= 2 && subjectMatches < 2) {
+    return -140;
+  }
   if (
     [
       "instagram.com",

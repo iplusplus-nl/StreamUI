@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   asksForRecentVisualResources,
   asksForVisualResources,
+  buildRetrievalImageSearchQueries,
   buildRetrievalSearchQueries,
   extractRetrievalUrls,
   latestRetrievalUserText,
@@ -21,13 +22,31 @@ test("extractRetrievalUrls normalizes web URLs, removes fragments, and deduplica
 
 test("recent visual query planning targets social and video sources", () => {
   const request =
-    "Create a gallery of photos and videos from today's GTC Rally. I like Japanese cars.";
+    "Create a gallery of photos and videos from today's North Harbor Festival. I like night photography.";
 
   assert.equal(asksForRecentVisualResources(request, 2026), true);
   assert.deepEqual(buildRetrievalSearchQueries(request), [
-    "photos and videos from today's GTC Rally",
-    "photos and videos from today's GTC Rally site:instagram.com/p OR site:facebook.com/photos",
-    "photos and videos from today's GTC Rally site:youtube.com/watch videos"
+    "photos and videos from today's North Harbor Festival",
+    "photos and videos from today's North Harbor Festival site:instagram.com/p OR site:facebook.com/photos",
+    "photos and videos from today's North Harbor Festival site:youtube.com/watch videos"
+  ]);
+});
+
+test("focused tool queries retain the original gallery intent generically", () => {
+  const toolText = [
+    "Search query: North Harbor Festival 2026 night photography",
+    "Reason: Find relevant event material."
+  ].join("\n\n");
+  const intent =
+    "Create a gallery of videos and photos of North Harbor Festival 2026. I like night photography.";
+
+  assert.deepEqual(buildRetrievalSearchQueries(toolText, intent), [
+    "videos and photos of North Harbor Festival 2026",
+    "videos and photos of North Harbor Festival 2026 site:instagram.com/p OR site:facebook.com/photos",
+    "videos and photos of North Harbor Festival 2026 site:youtube.com/watch videos"
+  ]);
+  assert.deepEqual(buildRetrievalImageSearchQueries(toolText, intent), [
+    "videos and photos of North Harbor Festival 2026"
   ]);
 });
 
@@ -101,15 +120,15 @@ test("recent visual result prioritization favors relevant social event pages", (
       rank: 1
     },
     {
-      url: "https://www.instagram.com/gtcrally/",
-      title: "GTC Rally (@gtcrally) photos and videos",
-      snippet: "GTC Rally 2026 on 10 and 11 July",
+      url: "https://www.instagram.com/northharborfest/",
+      title: "North Harbor Festival photos and videos",
+      snippet: "North Harbor Festival 2026",
       provider: "duckduckgo",
       rank: 1
     },
     {
-      url: "https://www.gtcrally.com/foto-s",
-      title: "GTC Rally photos and videos",
+      url: "https://northharbor.example/photos",
+      title: "North Harbor Festival photos and videos",
       provider: "duckduckgo",
       rank: 2
     }
@@ -118,7 +137,7 @@ test("recent visual result prioritization favors relevant social event pages", (
   assert.deepEqual(
     prioritizeRetrievalSearchResults(
       results,
-      "latest GTC Rally 2026 photos and videos"
+      "latest North Harbor Festival 2026 photos and videos"
     ).map((result) => result.url),
     [results[1].url, results[2].url, results[0].url]
   );

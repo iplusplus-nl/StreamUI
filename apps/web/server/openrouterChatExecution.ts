@@ -110,7 +110,7 @@ const retrieveToolDefinition: ResponsesToolDefinition = {
       query: {
         type: "string",
         description:
-          "A focused web search query. Use freshness terms only when current information is needed."
+          "A focused web search query. Preserve exact proper names and the primary subject; include requested media types and relevant freshness/location terms."
       },
       url: {
         type: "string",

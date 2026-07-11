@@ -14,7 +14,7 @@ import { uniqueByUrl } from "./retrievalPrimitives.js";
 import {
   searchOpenverseImages,
   searchPexelsImages,
-  searchSerperImages,
+  searchTavilyImages,
   searchUnsplashImages
 } from "./retrievalStockImageProviders.js";
 import type { RetrievalConfig, SearchResult } from "./retrievalTypes.js";
@@ -34,10 +34,10 @@ export type RetrievalImageProvider = {
 export function createRecentRetrievalImageProviders(): RetrievalImageProvider[] {
   return [
     {
-      name: "Serper Images",
-      configured: (config) => Boolean(config.serperApiKey),
-      setupHint: "select Serper with an API key or set SERPER_API_KEY",
-      search: searchSerperImages
+      name: "Tavily Images",
+      configured: (config) => Boolean(config.tavilyApiKey),
+      setupHint: "select Tavily with an API key or set TAVILY_API_KEY",
+      search: searchTavilyImages
     }
   ];
 }

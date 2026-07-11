@@ -108,6 +108,7 @@ export type RetrievalConfig = {
 export type RetrievalOptions = {
   forceSearch?: boolean;
   forceFetch?: boolean;
+  intentText?: string;
   searchSettings?: unknown;
   onStatus?: (message: string) => void;
   signal?: AbortSignal;

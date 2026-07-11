@@ -16,6 +16,7 @@ import {
 import {
   asksForVisualResources,
   asksForRecentVisualResources,
+  buildRetrievalImageSearchQueries as buildImageSearchQueries,
   buildRetrievalSearchQueries as buildSearchQueries,
   extractRetrievalUrls as extractUrls,
   latestRetrievalUserText as latestUserText,
@@ -443,13 +444,15 @@ export async function collectRetrievalContext(
   const config = getRetrievalConfig(options.searchSettings, options.signal);
   const nowIso = new Date().toISOString();
   const text = latestUserText(messages);
+  const intentText = options.intentText?.trim() || text;
   const directUrls = extractUrls(text).filter((url) =>
     isDomainPermitted(url, config)
   );
-  const plannedQueries = buildSearchQueries(text);
+  const plannedQueries = buildSearchQueries(text, intentText);
+  const plannedImageQueries = buildImageSearchQueries(text, intentText);
   const searchNeeded = shouldSearch(text, options, directUrls.length > 0);
   const fetchNeeded = options.forceFetch || directUrls.length > 0;
-  const visualSearchNeeded = searchNeeded && asksForVisualResources(text);
+  const visualSearchNeeded = searchNeeded && asksForVisualResources(intentText);
   const notes: string[] = [];
 
   if (
@@ -506,26 +509,34 @@ export async function collectRetrievalContext(
   if (searchNeeded && plannedQueries.length) {
     throwIfRetrievalAborted(config.signal);
     if (visualSearchNeeded) {
-      queries.push(plannedQueries[0]);
-      if (asksForRecentVisualResources(text)) {
+      if (asksForRecentVisualResources(intentText)) {
         notes.push(
           "Recent-event visual search prioritized current web and social sources over archival image catalogs."
         );
-        searchResults = uniqueByUrl([
-          ...searchResults,
-          ...(await searchImageSources(
-            plannedQueries[0],
-            config,
-            notes,
-            options.onStatus,
-            createRecentRetrievalImageProviders()
-          ))
-        ]).slice(0, searchResultCap);
+        for (const imageQuery of plannedImageQueries) {
+          if (!queries.includes(imageQuery)) {
+            queries.push(imageQuery);
+          }
+          searchResults = uniqueByUrl([
+            ...searchResults,
+            ...(await searchImageSources(
+              imageQuery,
+              config,
+              notes,
+              options.onStatus,
+              createRecentRetrievalImageProviders()
+            ))
+          ]).slice(0, searchResultCap);
+        }
       } else {
+        const imageQuery = plannedImageQueries[0] || plannedQueries[0];
+        if (!queries.includes(imageQuery)) {
+          queries.push(imageQuery);
+        }
         searchResults = uniqueByUrl([
           ...searchResults,
           ...(await searchImageSources(
-            plannedQueries[0],
+            imageQuery,
             config,
             notes,
             options.onStatus
@@ -546,10 +557,11 @@ export async function collectRetrievalContext(
       ]).slice(0, searchResultCap);
     }
 
-    searchResults = prioritizeSearchResults(searchResults, text).slice(
-      0,
-      prioritizedResultCap
-    );
+    searchResults = prioritizeSearchResults(
+      searchResults,
+      intentText,
+      plannedQueries[0]
+    ).slice(0, prioritizedResultCap);
   }
 
   const searchUrls = searchResults.map((result) => result.url);
@@ -573,7 +585,7 @@ export async function collectRetrievalContext(
     .map(toSearchSource);
   let sources = assignSourceIds([...pageSources, ...searchOnlySources]);
   let verifiedImages: VerifiedImage[] = [];
-  if (asksForVisualResources(text)) {
+  if (asksForVisualResources(intentText)) {
     verifiedImages = await verifyImageCandidates(
       sources,
       queries,
@@ -658,10 +670,13 @@ export function buildRetrievalContextPrompt(
       "Verified image URLs for visual/gallery use. The server checked these URLs and received image/* responses. Copy these URLs exactly into <img src>. Do not resize, rewrite, shorten, add px prefixes, remove query strings, or invent variants:"
     );
     lines.push(...verifiedImageLines);
+    lines.push(
+      "- Strict image allowlist: every external <img src> in the artifact must exactly match one URL in the verified list above. Source-page URLs, snippets, and model knowledge are not image authorization."
+    );
   } else if (context.queries.some((query) => asksForVisualResources(query))) {
     lines.push("");
     lines.push(
-      "No verified direct image URLs were available. Do not render broken <img> tags; use source links or explain that verified images were not available."
+      "No verified direct image URLs were available. Do not emit any external <img> element or image URL. Use a complete text-led layout with source links and explain that verified images were not available; do not leave an empty hero or media frame."
     );
   }
 

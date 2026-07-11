@@ -254,6 +254,20 @@ export function buildSandboxStyles(theme: IframeThemeTokens): string {
       border: 0;
       border-radius: 6px;
     }
+    .streamui-image-fallback {
+      display: grid;
+      width: 100%;
+      min-height: 120px;
+      place-items: center;
+      padding: 20px;
+      border: 1px dashed var(--streamui-secondary-border);
+      border-radius: 6px;
+      color: var(--streamui-muted);
+      background: color-mix(in srgb, var(--streamui-page-bg) 92%, var(--streamui-text) 8%);
+      font-size: 13px;
+      line-height: 1.4;
+      text-align: center;
+    }
     .streamui-resource figcaption,
     .streamui-sources {
       margin-top: 6px;

@@ -85,9 +85,12 @@ export async function searchTavily(
       body: JSON.stringify({
         api_key: apiKey,
         query,
+        topic: "general",
+        search_depth: "basic",
         max_results: config.searchMaxResults,
         include_answer: false,
-        include_raw_content: false
+        include_raw_content: false,
+        include_images: false
       })
     },
     config.timeoutMs,
