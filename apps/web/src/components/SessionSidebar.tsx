@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Bug,
   LogIn,
@@ -17,6 +17,7 @@ import type { ProfileSettings } from "../core/profileSettings";
 import type { RuntimeSettingsSummary } from "../core/runtimeSettings";
 import type { SearchSettings } from "../core/searchSettings";
 import type { SettingsSection } from "../features/settings/settingsDialogModel";
+import { isEscapeDismissKey, isTargetOutside } from "./dismissalModel";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { SettingsDialog } from "./SettingsDialog";
 
@@ -98,8 +99,12 @@ export function SessionSidebar({
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("profile");
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
+  const openSessionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const openSessionMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const shouldShowSignIn =
-    cloudEnabled && !authUser && accountMode !== "local" && onLoginRequest;
+    cloudEnabled && !authUser && Boolean(onLoginRequest);
+  const shouldShowPersonalSettings =
+    !shouldShowSignIn || accountMode === "local";
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(COMPACT_SIDEBAR_QUERY);
@@ -123,6 +128,37 @@ export function SessionSidebar({
       setOpenSessionMenuId(null);
     }
   }, [isSending]);
+
+  useEffect(() => {
+    if (!openSessionMenuId) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        isTargetOutside(openSessionMenuButtonRef.current, target) &&
+        isTargetOutside(openSessionMenuPopoverRef.current, target)
+      ) {
+        setOpenSessionMenuId(null);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEscapeDismissKey(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      setOpenSessionMenuId(null);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openSessionMenuId]);
 
   useEffect(() => {
     if (providerSettingsRequestVersion <= 0) {
@@ -179,17 +215,21 @@ export function SessionSidebar({
               >
                 <LogIn size={18} strokeWidth={2.1} aria-hidden="true" />
               </button>
-            ) : (
+            ) : null}
+            {shouldShowPersonalSettings ? (
               <button
                 className="sidebar-profile-button is-collapsed"
                 type="button"
                 aria-label="Open personal settings"
                 title="Personal settings"
-                onClick={() => setIsSettingsOpen(true)}
+                onClick={() => {
+                  setSettingsSection("profile");
+                  setIsSettingsOpen(true);
+                }}
               >
                 <ProfileAvatar avatarDataUrl={profileSettings.avatarDataUrl} />
               </button>
-            )}
+            ) : null}
             <button
               className="collapsed-sidebar-button"
               type="button"
@@ -260,6 +300,11 @@ export function SessionSidebar({
                   <span className="session-title">{session.title}</span>
                 </button>
                 <button
+                  ref={
+                    openSessionMenuId === session.id
+                      ? openSessionMenuButtonRef
+                      : undefined
+                  }
                   className="session-actions-button"
                   type="button"
                   disabled={isSending}
@@ -274,7 +319,11 @@ export function SessionSidebar({
                   <MoreHorizontal size={17} strokeWidth={2.1} aria-hidden="true" />
                 </button>
                 {openSessionMenuId === session.id ? (
-                  <div className="session-menu-popover" role="menu">
+                  <div
+                    ref={openSessionMenuPopoverRef}
+                    className="session-menu-popover"
+                    role="menu"
+                  >
                     <button
                       className="session-menu-item is-danger"
                       type="button"
@@ -295,43 +344,47 @@ export function SessionSidebar({
           </nav>
 
           <div className="sidebar-footer">
-            {shouldShowSignIn ? (
-              <button
-                className="sidebar-sign-in-button"
-                type="button"
-                aria-label="Sign in to ChatHTML"
-                onClick={onLoginRequest}
-              >
-                <LogIn size={16} strokeWidth={2.1} aria-hidden="true" />
-                <span>Sign in</span>
-              </button>
-            ) : (
-              <div className="sidebar-account-entry">
+            <div className="sidebar-account-entry">
+              {shouldShowSignIn ? (
+                <button
+                  className="sidebar-sign-in-button"
+                  type="button"
+                  aria-label="Sign in to ChatHTML"
+                  onClick={onLoginRequest}
+                >
+                  <LogIn size={16} strokeWidth={2.1} aria-hidden="true" />
+                  <span>Sign in</span>
+                </button>
+              ) : null}
+              {shouldShowPersonalSettings ? (
                 <button
                   className="sidebar-profile-button"
                   type="button"
                   aria-label="Open personal settings"
                   title={authUser?.email || "Personal settings"}
-                  onClick={() => setIsSettingsOpen(true)}
+                  onClick={() => {
+                    setSettingsSection("profile");
+                    setIsSettingsOpen(true);
+                  }}
                 >
                   <ProfileAvatar avatarDataUrl={profileSettings.avatarDataUrl} />
                 </button>
-                {cloudEnabled && authUser ? (
-                  <button
-                    className="sidebar-account-label"
-                    type="button"
-                    title={authUser.email}
-                    aria-label={`Open account settings for ${authUser.email}`}
-                    onClick={() => {
-                      setSettingsSection("profile");
-                      setIsSettingsOpen(true);
-                    }}
-                  >
-                    {authUser.email}
-                  </button>
-                ) : null}
-              </div>
-            )}
+              ) : null}
+              {cloudEnabled && authUser ? (
+                <button
+                  className="sidebar-account-label"
+                  type="button"
+                  title={authUser.email}
+                  aria-label={`Open account settings for ${authUser.email}`}
+                  onClick={() => {
+                    setSettingsSection("profile");
+                    setIsSettingsOpen(true);
+                  }}
+                >
+                  {authUser.email}
+                </button>
+              ) : null}
+            </div>
             <button
               className="sidebar-icon-button"
               type="button"

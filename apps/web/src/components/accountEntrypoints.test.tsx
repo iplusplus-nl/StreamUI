@@ -86,11 +86,13 @@ describe("account entry points", () => {
     assert.doesNotMatch(settings, /user@example\.com/);
   });
 
-  it("replaces sign-in actions with only the avatar after choosing local mode", () => {
+  it("keeps both sign-in and personal settings available in cloud-enabled local mode", () => {
     const sidebar = renderSidebar(false, "local");
     const settings = renderNavigation();
 
-    assert.doesNotMatch(sidebar, /aria-label="Sign in to ChatHTML"/);
+    assert.match(sidebar, /aria-label="Sign in to ChatHTML"/);
+    assert.match(sidebar, />Sign in</);
+    assert.match(sidebar, /aria-label="Open personal settings"/);
     assert.doesNotMatch(settings, />Sign in</);
     assert.match(sidebar, /profile-avatar/);
     assert.doesNotMatch(sidebar, />Local profile</);
@@ -104,6 +106,8 @@ describe("account entry points", () => {
     const settings = renderNavigation();
 
     assert.match(sidebar, /profile-avatar/);
+    assert.doesNotMatch(sidebar, /aria-label="Sign in to ChatHTML"/);
+    assert.doesNotMatch(sidebar, />Sign in</);
     assert.doesNotMatch(sidebar, />Local profile</);
     assert.doesNotMatch(settings, /profile-avatar/);
     assert.doesNotMatch(settings, />Local profile</);

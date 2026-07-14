@@ -6,7 +6,11 @@ import { DEFAULT_PROFILE_SETTINGS } from "../../core/profileSettings";
 import { DEFAULT_SEARCH_SETTINGS } from "../../core/searchSettings";
 import {
   commitSettingsDrafts,
-  getSettingsSectionTitle
+  createCleanSettingsDraftState,
+  getSettingsEscapeTarget,
+  getSettingsSectionTitle,
+  syncApiSettingsDraft,
+  syncSettingsDraft
 } from "./settingsDialogModel";
 
 describe("settings dialog model", () => {
@@ -39,5 +43,104 @@ describe("settings dialog model", () => {
       ["display", drafts.display],
       ["profile", drafts.profile]
     ]);
+  });
+
+  it("accepts background settings for clean categories without replacing dirty drafts", () => {
+    const clean = createCleanSettingsDraftState();
+    const dirtyApi = { ...clean, api: true };
+    const dirtyProfile = { ...clean, profile: true };
+    const currentApi = {
+      ...DEFAULT_API_SETTINGS,
+      apiKey: "unsaved-key",
+      userPreferencePrompt: "unsaved preference",
+      memoryItems: [{ id: "unsaved", text: "Unsaved memory" }]
+    };
+    const incomingApi = {
+      ...DEFAULT_API_SETTINGS,
+      apiKey: "loaded-key",
+      userPreferencePrompt: "loaded preference",
+      memoryItems: [{ id: "loaded", text: "Loaded memory" }]
+    };
+    const currentProfile = {
+      ...DEFAULT_PROFILE_SETTINGS,
+      avatarDataUrl: "data:image/png;base64,unsaved"
+    };
+    const incomingProfile = {
+      ...DEFAULT_PROFILE_SETTINGS,
+      avatarDataUrl: "data:image/png;base64,loaded"
+    };
+
+    assert.deepEqual(syncApiSettingsDraft(currentApi, incomingApi, clean), incomingApi);
+    assert.deepEqual(syncApiSettingsDraft(currentApi, incomingApi, dirtyApi), {
+      ...currentApi,
+      userPreferencePrompt: incomingApi.userPreferencePrompt,
+      memoryItems: incomingApi.memoryItems
+    });
+    assert.equal(
+      syncSettingsDraft(currentProfile, incomingProfile, dirtyProfile.profile),
+      currentProfile
+    );
+
+    const currentSearch = { ...DEFAULT_SEARCH_SETTINGS, apiKey: "unsaved" };
+    const incomingSearch = { ...DEFAULT_SEARCH_SETTINGS, apiKey: "loaded" };
+    const currentDisplay = {
+      ...DEFAULT_DISPLAY_SETTINGS,
+      showRawStream: true
+    };
+    const incomingDisplay = {
+      ...DEFAULT_DISPLAY_SETTINGS,
+      showRawStream: false
+    };
+
+    assert.equal(
+      syncSettingsDraft(currentSearch, incomingSearch, true),
+      currentSearch
+    );
+    assert.equal(
+      syncSettingsDraft(currentDisplay, incomingDisplay, true),
+      currentDisplay
+    );
+  });
+
+  it("merges background provider data without erasing dirty Personal fields", () => {
+    const clean = createCleanSettingsDraftState();
+    const current = {
+      ...DEFAULT_API_SETTINGS,
+      apiKey: "draft-key",
+      userPreferencePrompt: "draft preference",
+      memoryItems: [{ id: "draft", text: "Draft memory" }]
+    };
+    const incoming = {
+      ...DEFAULT_API_SETTINGS,
+      model: "loaded-model",
+      apiKey: "loaded-key",
+      userPreferencePrompt: "loaded preference",
+      memoryItems: [{ id: "loaded", text: "Loaded memory" }]
+    };
+
+    assert.deepEqual(
+      syncApiSettingsDraft(current, incoming, {
+        ...clean,
+        personalApi: true
+      }),
+      {
+        ...incoming,
+        userPreferencePrompt: current.userPreferencePrompt,
+        memoryItems: current.memoryItems
+      }
+    );
+    assert.deepEqual(
+      syncApiSettingsDraft(current, incoming, {
+        ...clean,
+        api: true,
+        personalApi: true
+      }),
+      current
+    );
+  });
+
+  it("dismisses the nested model importer before the settings dialog", () => {
+    assert.equal(getSettingsEscapeTarget(true), "model-import");
+    assert.equal(getSettingsEscapeTarget(false), "settings");
   });
 });

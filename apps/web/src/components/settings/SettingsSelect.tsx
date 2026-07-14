@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
+import { consumeEscapeDismissal } from "../dismissalModel";
 
 export type SettingsSelectOption = {
   value: string;
@@ -91,10 +92,11 @@ export function SettingsSelect({
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsOpen(false);
-        buttonRef.current?.focus();
+      if (!consumeEscapeDismissal(event)) {
+        return;
       }
+      setIsOpen(false);
+      buttonRef.current?.focus();
     };
 
     updatePosition();

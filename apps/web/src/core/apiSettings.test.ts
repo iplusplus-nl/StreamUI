@@ -76,6 +76,38 @@ describe("apiSettings", () => {
     ]);
   });
 
+  it("excludes non-OpenAI vendor models from OpenAI selectable options", () => {
+    const normalized = normalizeApiSettings({
+      providerId: "openai",
+      model: "gpt-4.1",
+      modelOptions: [
+        "google/gemini-custom",
+        "ANTHROPIC/CLAUDE-CUSTOM",
+        "z-ai/glm-custom",
+        "gpt-4o"
+      ]
+    });
+
+    assert.deepEqual(getSelectableModelOptions(normalized), [
+      "openai/gpt-5.5",
+      "gpt-4.1",
+      "gpt-4o"
+    ]);
+  });
+
+  it("keeps the OpenRouter shortlist and active model selectable", () => {
+    const normalized = normalizeApiSettings({
+      providerId: "openrouter",
+      model: "vendor/active-model",
+      modelOptions: []
+    });
+
+    assert.deepEqual(getSelectableModelOptions(normalized), [
+      ...REQUIRED_MODEL_OPTIONS,
+      "vendor/active-model"
+    ]);
+  });
+
   it("deduplicates model options case-insensitively", () => {
     const normalized = normalizeApiSettings({
       providerId: "openrouter",

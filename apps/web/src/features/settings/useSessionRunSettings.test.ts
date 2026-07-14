@@ -66,3 +66,23 @@ test("normalizes requested session models without accepting blank input", () => 
   assert.equal(normalizeRequestedSessionModel("  custom/model  "), "custom/model");
   assert.equal(normalizeRequestedSessionModel("   "), null);
 });
+
+test("uses provider-filtered selectable models for OpenAI sessions", () => {
+  const settings = deriveSessionRunSettings(session, {
+    ...apiSettings,
+    providerId: "openai",
+    model: "gpt-4.1",
+    modelOptions: [
+      "google/gemini-custom",
+      "anthropic/claude-custom",
+      "z-ai/glm-custom",
+      "gpt-4o"
+    ]
+  });
+
+  assert.deepEqual(settings.selectableModels, [
+    "openai/gpt-5.5",
+    "gpt-4.1",
+    "gpt-4o"
+  ]);
+});

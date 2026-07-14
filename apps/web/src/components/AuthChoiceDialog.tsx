@@ -1,5 +1,10 @@
 import { Laptop, LogIn, X } from "lucide-react";
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import {
+  isDirectOverlayInteraction,
+  isEscapeDismissKey
+} from "./dismissalModel";
 
 export type AuthChoiceDialogProps = {
   themeMode: "day" | "night";
@@ -74,6 +79,19 @@ export function AuthChoiceDialog({
   onSignIn,
   onContinueLocal
 }: AuthChoiceDialogProps) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEscapeDismissKey(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      onClose();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   if (typeof document === "undefined") {
     return null;
   }
@@ -83,8 +101,8 @@ export function AuthChoiceDialog({
       className="auth-choice-overlay"
       data-theme={themeMode}
       role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
+      onPointerDown={(event) => {
+        if (isDirectOverlayInteraction(event.target, event.currentTarget)) {
           onClose();
         }
       }}

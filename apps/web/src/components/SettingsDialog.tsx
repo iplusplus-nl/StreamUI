@@ -34,9 +34,17 @@ import {
 } from "../features/settings/settingsDraftModel";
 import {
   commitSettingsDrafts,
+  createCleanSettingsDraftState,
+  getSettingsEscapeTarget,
   getSettingsSectionTitle,
+  syncApiSettingsDraft,
+  syncSettingsDraft,
   type SettingsSection
 } from "../features/settings/settingsDialogModel";
+import {
+  consumeEscapeDismissal,
+  isDirectOverlayInteraction
+} from "./dismissalModel";
 import { ModelImportDialog } from "./ModelImportDialog";
 import { ApiSettingsSection } from "./settings/ApiSettingsSection";
 import { DisplaySettingsSection } from "./settings/DisplaySettingsSection";
@@ -101,24 +109,99 @@ export function SettingsDialog({
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const preferenceFileInputRef = useRef<HTMLInputElement>(null);
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
+  const dirtyDraftsRef = useRef(createCleanSettingsDraftState());
 
   useEffect(() => {
-    setDraftApiSettings(apiSettings);
-    setDraftSearchSettings(searchSettings);
-    setDraftDisplaySettings(displaySettings);
-    setDraftProfileSettings(profileSettings);
-    setPreferenceImportError(null);
-    setAvatarError(null);
-  }, [apiSettings, displaySettings, profileSettings, searchSettings]);
+    setDraftApiSettings((current) =>
+      syncApiSettingsDraft(current, apiSettings, dirtyDraftsRef.current)
+    );
+  }, [apiSettings]);
+
+  useEffect(() => {
+    setDraftSearchSettings((current) =>
+      syncSettingsDraft(current, searchSettings, dirtyDraftsRef.current.search)
+    );
+  }, [searchSettings]);
+
+  useEffect(() => {
+    setDraftDisplaySettings((current) =>
+      syncSettingsDraft(
+        current,
+        displaySettings,
+        dirtyDraftsRef.current.display
+      )
+    );
+  }, [displaySettings]);
+
+  useEffect(() => {
+    setDraftProfileSettings((current) =>
+      syncSettingsDraft(
+        current,
+        profileSettings,
+        dirtyDraftsRef.current.profile
+      )
+    );
+  }, [profileSettings]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!consumeEscapeDismissal(event)) {
+        return;
+      }
+      if (getSettingsEscapeTarget(isModelImportOpen) === "model-import") {
+        setIsModelImportOpen(false);
+        return;
+      }
+      onClose();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isModelImportOpen, onClose]);
+
+  const updateApiSettingsDraft = (
+    update: (current: ApiSettings) => ApiSettings
+  ) => {
+    dirtyDraftsRef.current.api = true;
+    setDraftApiSettings(update);
+  };
+
+  const updatePersonalApiSettingsDraft = (
+    update: (current: ApiSettings) => ApiSettings
+  ) => {
+    dirtyDraftsRef.current.personalApi = true;
+    setDraftApiSettings(update);
+  };
+
+  const updateSearchSettingsDraft = (
+    update: (current: SearchSettings) => SearchSettings
+  ) => {
+    dirtyDraftsRef.current.search = true;
+    setDraftSearchSettings(update);
+  };
+
+  const updateDisplaySettingsDraft = (
+    update: (current: DisplaySettings) => DisplaySettings
+  ) => {
+    dirtyDraftsRef.current.display = true;
+    setDraftDisplaySettings(update);
+  };
+
+  const updateProfileSettingsDraft = (
+    update: (current: ProfileSettings) => ProfileSettings
+  ) => {
+    dirtyDraftsRef.current.profile = true;
+    setDraftProfileSettings(update);
+  };
 
   const updateApiDraft = (patch: Partial<ApiSettings>) => {
-    setDraftApiSettings((current) =>
+    updateApiSettingsDraft((current) =>
       normalizeApiSettings({ ...current, ...patch })
     );
   };
 
   const updateSearchDraft = (patch: Partial<SearchSettings>) => {
-    setDraftSearchSettings((current) =>
+    updateSearchSettingsDraft((current) =>
       normalizeSearchSettings({ ...current, ...patch })
     );
   };
@@ -136,7 +219,7 @@ export function SettingsDialog({
       if (!normalized.avatarDataUrl) {
         throw new Error("This image could not be used.");
       }
-      setDraftProfileSettings(normalized);
+      updateProfileSettingsDraft(() => normalized);
     } catch (error) {
       setAvatarError(
         error instanceof Error ? error.message : "This image could not be used."
@@ -149,7 +232,7 @@ export function SettingsDialog({
       id: createMemoryItemId(),
       text: "New memory item"
     };
-    setDraftApiSettings((current) => ({
+    updatePersonalApiSettingsDraft((current) => ({
       ...current,
       memoryItems: [...current.memoryItems, item]
     }));
@@ -201,7 +284,7 @@ export function SettingsDialog({
 
     try {
       const parsed = JSON.parse(await file.text()) as unknown;
-      setDraftApiSettings((current) =>
+      updatePersonalApiSettingsDraft((current) =>
         applyImportedUserPreferences(current, parsed)
       );
       setPreferenceImportError(null);
@@ -237,8 +320,8 @@ export function SettingsDialog({
       className="settings-overlay"
       data-theme={themeMode}
       role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
+      onPointerDown={(event) => {
+        if (isDirectOverlayInteraction(event.target, event.currentTarget)) {
           onClose();
         }
       }}
@@ -275,18 +358,18 @@ export function SettingsDialog({
                 isModelImportLoading={isModelImportLoading}
                 onSettingsChange={updateApiDraft}
                 onProviderChange={(providerId: ApiProviderId) =>
-                  setDraftApiSettings((current) =>
+                  updateApiSettingsDraft((current) =>
                     changeSettingsProvider(current, providerId)
                   )
                 }
                 onBaseUrlChange={(baseUrl) =>
-                  setDraftApiSettings((current) =>
+                  updateApiSettingsDraft((current) =>
                     changeSettingsBaseUrl(current, baseUrl)
                   )
                 }
                 onFetchModels={() => void handleFetchModels()}
                 onRemoveModel={(modelId) =>
-                  setDraftApiSettings((current) =>
+                  updateApiSettingsDraft((current) =>
                     removeSettingsModelOption(current, modelId)
                   )
                 }
@@ -304,11 +387,11 @@ export function SettingsDialog({
                 preferenceFileInputRef={preferenceFileInputRef}
                 onAvatarChange={handleAvatarChange}
                 onRemoveAvatar={() => {
-                  setDraftProfileSettings({ avatarDataUrl: "" });
+                  updateProfileSettingsDraft(() => ({ avatarDataUrl: "" }));
                   setAvatarError(null);
                 }}
                 onUserPreferencePromptChange={(value) =>
-                  setDraftApiSettings((current) =>
+                  updatePersonalApiSettingsDraft((current) =>
                     normalizeApiSettings({
                       ...current,
                       userPreferencePrompt: value
@@ -316,7 +399,7 @@ export function SettingsDialog({
                   )
                 }
                 onMemoryItemChange={(id, text) =>
-                  setDraftApiSettings((current) => ({
+                  updatePersonalApiSettingsDraft((current) => ({
                     ...current,
                     memoryItems: current.memoryItems.map((item) =>
                       item.id === id ? { ...item, text } : item
@@ -325,7 +408,7 @@ export function SettingsDialog({
                 }
                 onAddMemoryItem={handleAddMemoryItem}
                 onDeleteMemoryItem={(id) =>
-                  setDraftApiSettings((current) => ({
+                  updatePersonalApiSettingsDraft((current) => ({
                     ...current,
                     memoryItems: current.memoryItems.filter(
                       (item) => item.id !== id
@@ -337,7 +420,7 @@ export function SettingsDialog({
                 }
                 onExportPreferences={handleExportPreferences}
                 onClearPreferences={() => {
-                  setDraftApiSettings((current) => ({
+                  updatePersonalApiSettingsDraft((current) => ({
                     ...current,
                     userPreferencePrompt: "",
                     memoryItems: []
@@ -350,7 +433,7 @@ export function SettingsDialog({
               <DisplaySettingsSection
                 settings={draftDisplaySettings}
                 onSettingsChange={(patch) =>
-                  setDraftDisplaySettings((current) => ({
+                  updateDisplaySettingsDraft((current) => ({
                     ...current,
                     ...patch
                   }))
@@ -399,7 +482,7 @@ export function SettingsDialog({
             if (!selectedFetchedModels.length) {
               return;
             }
-            setDraftApiSettings((current) =>
+            updateApiSettingsDraft((current) =>
               addSettingsModelOptions(current, selectedFetchedModels)
             );
             setIsModelImportOpen(false);

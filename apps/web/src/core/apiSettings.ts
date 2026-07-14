@@ -156,6 +156,12 @@ const REQUIRED_MODEL_OPTION_KEYS = new Set(
   REQUIRED_MODEL_OPTIONS.map((model) => model.toLowerCase())
 );
 
+const OPENAI_INCOMPATIBLE_MODEL_PREFIXES = [
+  "google/",
+  "anthropic/",
+  "z-ai/"
+] as const;
+
 function isProviderId(value: unknown): value is ApiProviderId {
   return API_PROVIDER_PRESETS.some((preset) => preset.id === value);
 }
@@ -271,7 +277,21 @@ export function isRequiredModelOption(modelId: string): boolean {
 }
 
 export function getSelectableModelOptions(settings: ApiSettings): string[] {
-  return normalizeModelOptions([settings.model, ...settings.modelOptions]);
+  const options = normalizeModelOptions([
+    settings.model,
+    ...settings.modelOptions
+  ]);
+
+  if (settings.providerId !== "openai") {
+    return options;
+  }
+
+  return options.filter((modelId) => {
+    const normalizedModelId = modelId.trim().toLowerCase();
+    return !OPENAI_INCOMPATIBLE_MODEL_PREFIXES.some((prefix) =>
+      normalizedModelId.startsWith(prefix)
+    );
+  });
 }
 
 export function getProviderPreset(id: ApiProviderId): ApiProviderPreset {

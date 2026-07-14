@@ -16,6 +16,49 @@ export type SettingsDrafts = {
   profile: ProfileSettings;
 };
 
+export type SettingsDraftDirtyState = Record<keyof SettingsDrafts, boolean> & {
+  personalApi: boolean;
+};
+
+export function createCleanSettingsDraftState(): SettingsDraftDirtyState {
+  return {
+    api: false,
+    personalApi: false,
+    search: false,
+    display: false,
+    profile: false
+  };
+}
+
+export function syncApiSettingsDraft(
+  currentDraft: ApiSettings,
+  incomingSettings: ApiSettings,
+  dirty: Pick<SettingsDraftDirtyState, "api" | "personalApi">
+): ApiSettings {
+  const base = dirty.api ? currentDraft : incomingSettings;
+  const personal = dirty.personalApi ? currentDraft : incomingSettings;
+
+  return {
+    ...base,
+    userPreferencePrompt: personal.userPreferencePrompt,
+    memoryItems: personal.memoryItems
+  };
+}
+
+export function syncSettingsDraft<T>(
+  currentDraft: T,
+  incomingSettings: T,
+  isDirty: boolean
+): T {
+  return isDirty ? currentDraft : incomingSettings;
+}
+
+export function getSettingsEscapeTarget(
+  isModelImportOpen: boolean
+): "model-import" | "settings" {
+  return isModelImportOpen ? "model-import" : "settings";
+}
+
 export type SettingsCommitters = {
   onApiSettingsChange(settings: ApiSettings): void;
   onSearchSettingsChange(settings: SearchSettings): void;

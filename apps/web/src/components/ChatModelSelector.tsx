@@ -11,6 +11,12 @@ import {
   getUiComplexityLevel,
   type ReasoningEffort
 } from "../core/apiSettings";
+import {
+  CHAT_REASONING_OPTIONS,
+  getChatReasoningIndex,
+  getChatReasoningLabel
+} from "./chatModelSelectorModel";
+import { isEscapeDismissKey } from "./dismissalModel";
 
 type ChatModelSelectorProps = {
   model: string;
@@ -23,17 +29,7 @@ type ChatModelSelectorProps = {
   onUiComplexityChange(uiComplexity: number): void;
 };
 
-const REASONING_OPTIONS: Array<{
-  value: ReasoningEffort;
-  label: string;
-}> = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Ultra" }
-];
-
-const REASONING_MAX_INDEX = REASONING_OPTIONS.length - 1;
+const REASONING_MAX_INDEX = CHAT_REASONING_OPTIONS.length - 1;
 const UI_COMPLEXITY_MAX_INDEX = UI_COMPLEXITY_LEVEL_OPTIONS.length - 1;
 
 function getDisplayModelName(model: string): string {
@@ -41,20 +37,6 @@ function getDisplayModelName(model: string): string {
   const lastSegment = trimmed.split("/").filter(Boolean).pop();
 
   return lastSegment || trimmed || "Model";
-}
-
-function getReasoningLabel(reasoningEffort: ReasoningEffort): string {
-  return (
-    REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ??
-    ""
-  );
-}
-
-function getReasoningIndex(reasoningEffort: ReasoningEffort): number {
-  const index = REASONING_OPTIONS.findIndex(
-    (option) => option.value === reasoningEffort
-  );
-  return index >= 0 ? index : 0;
 }
 
 function clampSliderIndex(value: string, maxIndex: number): number {
@@ -95,8 +77,8 @@ export function ChatModelSelector({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const closeModelMenuTimeoutRef = useRef<number | null>(null);
   const normalizedQuery = query.trim().toLowerCase();
-  const reasoningLabel = getReasoningLabel(reasoningEffort);
-  const reasoningIndex = getReasoningIndex(reasoningEffort);
+  const reasoningLabel = getChatReasoningLabel(reasoningEffort);
+  const reasoningIndex = getChatReasoningIndex(reasoningEffort);
   const uiComplexityLevel = getUiComplexityLevel(uiComplexity);
   const uiComplexityIndex = UI_COMPLEXITY_LEVEL_OPTIONS.indexOf(uiComplexityLevel);
   const parameterLabel = [reasoningLabel, `UI ${uiComplexityLevel.label}`]
@@ -138,10 +120,20 @@ export function ChatModelSelector({
         setIsModelMenuOpen(false);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEscapeDismissKey(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      setIsOpen(false);
+      setIsModelMenuOpen(false);
+    };
 
     window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
       clearModelMenuCloseTimeout();
     };
   }, [isOpen]);
@@ -222,7 +214,7 @@ export function ChatModelSelector({
                 style={getSliderStyle(reasoningIndex, 0, REASONING_MAX_INDEX)}
               >
                 <div className="chat-model-slider-ticks" aria-hidden="true">
-                  {REASONING_OPTIONS.map((option) => (
+                  {CHAT_REASONING_OPTIONS.map((option) => (
                     <span key={option.value} />
                   ))}
                 </div>
@@ -240,7 +232,9 @@ export function ChatModelSelector({
                       event.target.value,
                       REASONING_MAX_INDEX
                     );
-                    onReasoningEffortChange(REASONING_OPTIONS[nextIndex].value);
+                    onReasoningEffortChange(
+                      CHAT_REASONING_OPTIONS[nextIndex].value
+                    );
                   }}
                 />
                 <span className="chat-model-slider-thumb" aria-hidden="true">

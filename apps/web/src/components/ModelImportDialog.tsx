@@ -1,4 +1,9 @@
 import { Check, Search, X } from "lucide-react";
+import { useEffect } from "react";
+import {
+  isDirectOverlayInteraction,
+  isEscapeDismissKey
+} from "./dismissalModel";
 
 type ModelImportDialogProps = {
   models: string[];
@@ -25,6 +30,19 @@ export function ModelImportDialog({
   onClose,
   onAddSelected
 }: ModelImportDialogProps) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEscapeDismissKey(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      onClose();
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   const normalizedQuery = query.trim().toLowerCase();
   const requiredSet = new Set(requiredModels.map((model) => model.toLowerCase()));
   const selectedSet = new Set(
@@ -35,7 +53,15 @@ export function ModelImportDialog({
     : models;
 
   return (
-    <div className="model-import-overlay" role="presentation">
+    <div
+      className="model-import-overlay"
+      role="presentation"
+      onPointerDown={(event) => {
+        if (isDirectOverlayInteraction(event.target, event.currentTarget)) {
+          onClose();
+        }
+      }}
+    >
       <section
         className="model-import-dialog"
         role="dialog"
