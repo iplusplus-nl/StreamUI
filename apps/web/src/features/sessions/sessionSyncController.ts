@@ -47,6 +47,7 @@ export type InitialSessionLoadInput = {
   onApplied?(): void;
   getDeletedSessionIds(): Iterable<string>;
   getTransientEmptySessionId(): string | null;
+  getProtectedEmptySessionIds?(): Iterable<string>;
   hasActiveRuns?(): boolean;
   hasRecentCancellations?(): boolean;
   hasAttachmentDrafts?(): boolean;
@@ -93,7 +94,8 @@ export async function runInitialSessionLoad(
       serverState,
       legacyState,
       deletedSessionIds: input.getDeletedSessionIds(),
-      transientEmptySessionId: input.getTransientEmptySessionId()
+      transientEmptySessionId: input.getTransientEmptySessionId(),
+      protectedEmptySessionIds: input.getProtectedEmptySessionIds?.()
     })
   );
   input.onApplied?.();
@@ -162,6 +164,7 @@ export type PollSessionStateInput = {
   onApplied?(): void;
   getDeletedSessionIds(): Iterable<string>;
   getTransientEmptySessionId(): string | null;
+  getProtectedEmptySessionIds?(): Iterable<string>;
   hasActiveRuns(): boolean;
   hasRecentCancellations(): boolean;
   hasAttachmentDrafts?(): boolean;
@@ -216,7 +219,8 @@ export async function runSessionPoll(
       current,
       serverState,
       clientId: input.clientId,
-      deletedSessionIds: input.getDeletedSessionIds()
+      deletedSessionIds: input.getDeletedSessionIds(),
+      protectedEmptySessionIds: input.getProtectedEmptySessionIds?.()
     })
   );
   input.onApplied?.();

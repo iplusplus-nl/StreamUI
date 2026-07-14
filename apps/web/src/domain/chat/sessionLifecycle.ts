@@ -100,18 +100,24 @@ export function sortSessions(sessions: ChatSession[]): ChatSession[] {
 
 export function compactEmptySessions(
   state: SessionState,
-  options: { preserveActiveEmpty?: boolean } = {}
+  options: {
+    preserveActiveEmpty?: boolean;
+    preserveEmptySessionIds?: Iterable<string>;
+  } = {}
 ): SessionState {
   const activeSession = state.sessions.find(
     (session) => session.id === state.activeSessionId
   );
+  const preservedEmptyIds = new Set(options.preserveEmptySessionIds ?? []);
   const nonEmptySessions = state.sessions.filter(
     (session) => !isSessionEmpty(session)
   );
-  const preservedActiveEmpty =
-    options.preserveActiveEmpty && activeSession && isSessionEmpty(activeSession)
-      ? activeSession
-      : null;
+  const preservedEmptySessions = state.sessions.filter(
+    (session) =>
+      isSessionEmpty(session) &&
+      (preservedEmptyIds.has(session.id) ||
+        (options.preserveActiveEmpty && session.id === activeSession?.id))
+  );
 
   if (!nonEmptySessions.length) {
     const fallback = activeSession ?? state.sessions[0];
@@ -119,15 +125,22 @@ export function compactEmptySessions(
       return createInitialSessionState();
     }
 
+    const sessions = sortSessions(
+      preservedEmptySessions.length ? preservedEmptySessions : [fallback]
+    );
     return {
-      sessions: [fallback],
-      activeSessionId: fallback.id
+      sessions,
+      activeSessionId: sessions.some(
+        (session) => session.id === state.activeSessionId
+      )
+        ? state.activeSessionId
+        : sessions[0].id
     };
   }
 
   const sessionsById = new Map<string, ChatSession>();
-  if (preservedActiveEmpty) {
-    sessionsById.set(preservedActiveEmpty.id, preservedActiveEmpty);
+  for (const session of preservedEmptySessions) {
+    sessionsById.set(session.id, session);
   }
   for (const session of nonEmptySessions) {
     sessionsById.set(session.id, session);

@@ -152,6 +152,25 @@ describe("session CRUD model", () => {
     assert.deepEqual(result.state.sessions, [created, active]);
   });
 
+  it("creates a distinct session without compacting an empty session that owns a composer draft", () => {
+    const draftOwner = session("draft-owner", 3, { empty: true });
+    const saved = session("saved", 2);
+    const created = session("created", 4, { empty: true });
+
+    const result = createNewSessionState(
+      state(draftOwner.id, [draftOwner, saved]),
+      () => created,
+      [draftOwner.id]
+    );
+
+    assert.equal(result.outcome, "created");
+    assert.equal(result.state.activeSessionId, created.id);
+    assert.deepEqual(
+      result.state.sessions.map((item) => item.id),
+      ["created", "draft-owner", "saved"]
+    );
+  });
+
   it("treats files as content when deciding whether to reuse an empty session", () => {
     const withFile = session("file-session", 1, { withFile: true });
     const created = session("created", 2, { empty: true });
@@ -200,6 +219,22 @@ describe("session CRUD model", () => {
     assert.equal(missing.state, input);
   });
 
+  it("preserves an inactive empty draft owner while selecting another session", () => {
+    const draftOwner = session("draft-owner", 3, { empty: true });
+    const target = session("target", 2);
+    const result = selectSessionInState(
+      state(draftOwner.id, [draftOwner, target]),
+      target.id,
+      [draftOwner.id]
+    );
+
+    assert.equal(result.state.activeSessionId, target.id);
+    assert.deepEqual(
+      result.state.sessions.map((item) => item.id),
+      ["draft-owner", "target"]
+    );
+  });
+
   it("deletes the active session using the first remaining id before compaction", () => {
     const removed = session("removed", 5);
     const firstRemaining = session("kept-empty", 1, { empty: true });
@@ -229,6 +264,23 @@ describe("session CRUD model", () => {
 
     assert.equal(result.activeSessionId, active.id);
     assert.deepEqual(result.sessions, [active]);
+  });
+
+  it("does not compact another session's empty composer draft during deletion", () => {
+    const active = session("active", 4);
+    const removed = session("removed", 3);
+    const draftOwner = session("draft-owner", 2, { empty: true });
+    const result = deleteSessionInState(
+      state(active.id, [active, removed, draftOwner]),
+      removed.id,
+      () => session("unused", 5, { empty: true }),
+      [draftOwner.id]
+    );
+
+    assert.deepEqual(
+      result.sessions.map((item) => item.id),
+      ["active", "draft-owner"]
+    );
   });
 
   it("creates the injected fallback after deleting the last session", () => {

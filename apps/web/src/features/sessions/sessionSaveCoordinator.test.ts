@@ -8,7 +8,8 @@ import {
   createSessionSaveCoordinator,
   type SessionSaveCoordinator,
   type SessionSaveDependencies,
-  type SessionSaveScheduler
+  type SessionSaveScheduler,
+  type SessionSaveStatus
 } from "./sessionSaveCoordinator";
 import {
   nextSessionSaveRevision,
@@ -91,6 +92,7 @@ function createHarness(options: {
   }> = [];
   const flushCalls: Array<{ payload: string; clientId: string }> = [];
   const warnings: unknown[] = [];
+  const statuses: SessionSaveStatus[] = [];
   const controllers: AbortController[] = [];
   let clearLegacyCount = 0;
   let revision = 0;
@@ -135,6 +137,7 @@ function createHarness(options: {
         clearLegacyCount += 1;
       },
       warn: (error) => warnings.push(error),
+      onStatusChange: (status) => statuses.push(status),
       scheduler: fakeScheduler(tasks),
       persistTimeoutMs: options.persistTimeoutMs ?? 15_000,
       createAbortController: () => {
@@ -151,6 +154,7 @@ function createHarness(options: {
     persistCalls,
     flushCalls,
     warnings,
+    statuses,
     controllers,
     deletedIds,
     setLoaded: (value: boolean) => {
@@ -196,6 +200,7 @@ describe("session save coordinator", () => {
 
     assert.equal(await harness.coordinator.saveNow(), "saved");
     assert.equal(JSON.parse(harness.persistCalls[0].payload).saveRevision, 700001);
+    assert.deepEqual(harness.statuses, ["saving", "saved"]);
   });
 
   it("debounces a captured render snapshot while saveNow reads the latest refs", async () => {
@@ -280,6 +285,7 @@ describe("session save coordinator", () => {
 
     assert.equal(harness.warnings.length, 1);
     assert.match(String(harness.warnings[0]), /Session save failed with HTTP 500/);
+    assert.deepEqual(harness.statuses, ["pending", "saving", "failed"]);
     assert.equal(harness.getClearLegacyCount(), 0);
     assert.equal(
       harness.coordinator.getDebugState().lastSavedPayload,

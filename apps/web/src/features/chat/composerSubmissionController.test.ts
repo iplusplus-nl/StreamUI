@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { ArtifactSelection } from "../../core/artifactSelection";
 import type { ImageAttachment } from "../../core/imageAttachments";
 import {
+  getArtifactEditSubmissionError,
   submitComposerMessage,
   type ComposerSubmissionPorts
 } from "./composerSubmissionController";
@@ -32,6 +33,7 @@ function harness(started = true) {
     getSelections: () => [selection],
     runSourceEdit: async () => {
       calls.push("source-edit");
+      return "completed";
     },
     startArtifactGeneration: () => {
       calls.push("artifact-generation");
@@ -51,9 +53,9 @@ describe("composer submission routing", () => {
   it("routes a selected artifact with an image through multimodal generation", async () => {
     const test = harness();
 
-    assert.equal(
+    assert.deepEqual(
       await submitComposerMessage("Match this reference", [attachment], test.ports),
-      "artifact-generation"
+      { kind: "artifact-generation" }
     );
     assert.deepEqual(test.calls, ["artifact-generation"]);
   });
@@ -61,9 +63,9 @@ describe("composer submission routing", () => {
   it("falls back to a chat request when a selected artifact is stale", async () => {
     const test = harness(false);
 
-    assert.equal(
+    assert.deepEqual(
       await submitComposerMessage("Keep the image", [attachment], test.ports),
-      "chat"
+      { kind: "chat" }
     );
     assert.deepEqual(test.calls, ["artifact-generation", "chat"]);
   });
@@ -76,9 +78,9 @@ describe("composer submission routing", () => {
       return false;
     };
 
-    assert.equal(
+    assert.deepEqual(
       await submitComposerMessage("Keep the image", [attachment], test.ports),
-      "chat"
+      { kind: "chat" }
     );
     assert.deepEqual(test.calls, ["artifact-generation", "chat"]);
   });
@@ -86,10 +88,33 @@ describe("composer submission routing", () => {
   it("keeps attachment-free artifact edits on the source-edit path", async () => {
     const test = harness();
 
-    assert.equal(
+    assert.deepEqual(
       await submitComposerMessage("Change the heading", [], test.ports),
-      "artifact-edit"
+      { kind: "artifact-edit", editOutcome: "completed" }
     );
     assert.deepEqual(test.calls, ["source-edit"]);
+  });
+
+  it("surfaces rejected source edits so the composer can restore its draft", async () => {
+    const test = harness();
+    test.ports.runSourceEdit = async () => {
+      test.calls.push("source-edit");
+      return "busy";
+    };
+
+    const outcome = await submitComposerMessage(
+      "Change the heading",
+      [],
+      test.ports
+    );
+    assert.deepEqual(outcome, { kind: "artifact-edit", editOutcome: "busy" });
+    assert.equal(outcome.kind, "artifact-edit");
+    if (outcome.kind !== "artifact-edit") {
+      assert.fail("expected an artifact-edit outcome");
+    }
+    const message = getArtifactEditSubmissionError(outcome.editOutcome);
+    assert.notEqual(message, null);
+    assert.match(message ?? "", /draft was restored/i);
+    assert.equal(getArtifactEditSubmissionError("completed"), null);
   });
 });

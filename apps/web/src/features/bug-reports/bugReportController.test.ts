@@ -390,6 +390,38 @@ describe("bug report controller open and drafts", () => {
     );
   });
 
+  it("discards a saved draft only when explicitly requested", async () => {
+    const test = harness({
+      sessions: [
+        session("session-a", {
+          draft: draft("discard this", [image("captured", { captured: true })])
+        })
+      ]
+    });
+    await test.controller.open();
+
+    assert.equal(test.controller.discard(), true);
+    assert.equal(test.sessions.get("session-a")?.bugReportDraft, undefined);
+    assert.equal(test.controller.getState().phase, "closed");
+    assert.equal(test.saveCount, 1);
+    assert.equal(test.controller.discard(), false);
+  });
+
+  it("invalidates a pending capture when its draft is discarded", async () => {
+    const capture = deferred<Blob>();
+    const test = harness({ capturePage: () => capture.promise });
+    const opening = test.controller.open();
+
+    assert.equal(test.controller.getState().phase, "capturing");
+    assert.equal(test.controller.discard(), true);
+    capture.resolve(new Blob(["late"]));
+
+    assert.equal(await opening, "cancelled");
+    assert.equal(test.sessions.get("session-a")?.bugReportDraft, undefined);
+    assert.equal(test.controller.getState().phase, "closed");
+    assert.equal(test.saveCount, 1);
+  });
+
   it("changes only the locked session draft and normalizes it", async () => {
     const first = session("session-a", { draft: draft("existing", [], 2) });
     const second = session("session-b", { draft: draft("other", [], 2) });

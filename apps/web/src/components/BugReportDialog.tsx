@@ -27,6 +27,7 @@ import {
   type BugReportImage
 } from "../domain/chat/sessionModel";
 import type { ThemeMode } from "./SessionSidebar";
+import { useModalFocusTrap } from "./useModalFocusTrap";
 
 const MAX_BUG_REPORT_IMAGE_BYTES = 12 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set([
@@ -41,10 +42,12 @@ type BugReportDialogProps = {
   themeMode: ThemeMode;
   captureError?: string | null;
   submitError?: string | null;
+  isCapturing?: boolean;
   isSubmitting?: boolean;
   isSubmitted?: boolean;
   onChange(draft: BugReportDraft): void;
   onClose(): void;
+  onDiscard(): void;
   onSubmit(): void;
 };
 
@@ -132,26 +135,29 @@ export function BugReportDialog({
   themeMode,
   captureError,
   submitError,
+  isCapturing = false,
   isSubmitting = false,
   isSubmitted = false,
   onChange,
   onClose,
+  onDiscard,
   onSubmit
 }: BugReportDialogProps) {
   const [localError, setLocalError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
   const draftRef = useRef(draft);
+
+  useModalFocusTrap({
+    dialogRef,
+    initialFocusRef: isCapturing ? undefined : textAreaRef
+  });
 
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
-
-  useEffect(() => {
-    const id = window.setTimeout(() => textAreaRef.current?.focus(), 80);
-    return () => window.clearTimeout(id);
-  }, []);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -181,7 +187,7 @@ export function BugReportDialog({
   };
 
   const addFiles = async (files: File[]) => {
-    if (isSubmitting || isSubmitted) {
+    if (isCapturing || isSubmitting || isSubmitted) {
       return;
     }
 
@@ -224,7 +230,7 @@ export function BugReportDialog({
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLElement>) => {
-    if (isSubmitting || isSubmitted) {
+    if (isCapturing || isSubmitting || isSubmitted) {
       return;
     }
 
@@ -240,7 +246,7 @@ export function BugReportDialog({
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>) => {
-    if (isSubmitting || isSubmitted) {
+    if (isCapturing || isSubmitting || isSubmitted) {
       return;
     }
 
@@ -253,7 +259,7 @@ export function BugReportDialog({
   };
 
   const handleDrop = (event: DragEvent<HTMLElement>) => {
-    if (isSubmitting || isSubmitted) {
+    if (isCapturing || isSubmitting || isSubmitted) {
       return;
     }
 
@@ -270,7 +276,9 @@ export function BugReportDialog({
   };
 
   const hasContent = draft.text.trim().length > 0 || draft.images.length > 0;
-  const statusText = `${draft.images.length}/${MAX_BUG_REPORT_IMAGES} images`;
+  const statusText = isCapturing
+    ? "Capturing screenshot…"
+    : `${draft.images.length}/${MAX_BUG_REPORT_IMAGES} images`;
 
   if (typeof document === "undefined") {
     return null;
@@ -279,6 +287,7 @@ export function BugReportDialog({
   return createPortal(
     <div
       className="bug-report-overlay"
+      data-screenshot-exclude=""
       data-theme={themeMode}
       role="presentation"
       onMouseDown={(event) => {
@@ -288,10 +297,12 @@ export function BugReportDialog({
       }}
     >
       <section
+        ref={dialogRef}
         className="bug-report-panel"
         role="dialog"
         aria-modal="true"
         aria-labelledby="bug-report-title"
+        aria-busy={isCapturing || isSubmitting ? "true" : undefined}
         onPaste={handlePaste}
         onDragOver={handleDragOver}
         onDragLeave={() => setIsDragging(false)}
@@ -314,6 +325,17 @@ export function BugReportDialog({
         </header>
 
         <div className="bug-report-content">
+          {isCapturing ? (
+            <div className="bug-report-capture-status" role="status">
+              <LoaderCircle
+                className="bug-report-spinner"
+                size={16}
+                strokeWidth={2.1}
+                aria-hidden="true"
+              />
+              <span>Capturing screenshot…</span>
+            </div>
+          ) : null}
           <div
             className={`bug-report-image-area ${isDragging ? "is-dragging" : ""}`}
           >
@@ -327,7 +349,7 @@ export function BugReportDialog({
                       <button
                         type="button"
                         aria-label={`Remove ${image.name}`}
-                        disabled={isSubmitting || isSubmitted}
+                        disabled={isCapturing || isSubmitting || isSubmitted}
                         onClick={() =>
                           emitDraft((current) => ({
                             ...current,
@@ -358,6 +380,7 @@ export function BugReportDialog({
               className="bug-report-upload-button"
               type="button"
               disabled={
+                isCapturing ||
                 isSubmitting ||
                 isSubmitted ||
                 draft.images.length >= MAX_BUG_REPORT_IMAGES
@@ -385,7 +408,7 @@ export function BugReportDialog({
               rows={7}
               maxLength={MAX_BUG_REPORT_TEXT_LENGTH}
               placeholder="What happened?"
-              disabled={isSubmitting || isSubmitted}
+              disabled={isCapturing || isSubmitting || isSubmitted}
               onChange={(event) => {
                 const value = event.target.value;
                 emitDraft((current) => ({
@@ -407,19 +430,29 @@ export function BugReportDialog({
           <span>{statusText}</span>
           <div className="bug-report-actions">
             <button
+              className="bug-report-secondary-button is-danger"
+              type="button"
+              disabled={isSubmitted}
+              onClick={onDiscard}
+            >
+              Discard
+            </button>
+            <button
               className="bug-report-secondary-button"
               type="button"
               disabled={isSubmitted}
               onClick={onClose}
             >
-              Cancel
+              Close
             </button>
             <button
               className={`bug-report-primary-button ${
                 isSubmitted ? "is-success" : ""
               }`}
               type="button"
-              disabled={!hasContent || isSubmitting || isSubmitted}
+              disabled={
+                isCapturing || !hasContent || isSubmitting || isSubmitted
+              }
               onClick={onSubmit}
             >
               {isSubmitted ? (

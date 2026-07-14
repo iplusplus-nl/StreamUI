@@ -120,6 +120,36 @@ describe("session sync policy", () => {
     );
   });
 
+  it("preserves draft-owned empty sessions during initial load and polling", () => {
+    const draft = session("draft", 5);
+    const saved = session("saved", 4, "Saved");
+    const current = state("saved", [draft, saved]);
+    const server = state("saved", [session("saved", 6, "Updated")]);
+
+    const loaded = resolveInitialSessionState({
+      current,
+      serverState: server,
+      legacyState: null,
+      protectedEmptySessionIds: [draft.id]
+    });
+    assert.deepEqual(
+      loaded.sessions.map((item) => item.id),
+      ["saved", "draft"]
+    );
+
+    const polled = mergePolledSessionState({
+      current,
+      serverState: server,
+      clientId: "client-1",
+      protectedEmptySessionIds: [draft.id]
+    });
+    assert.deepEqual(
+      polled.sessions.map((item) => item.id),
+      ["saved", "draft"]
+    );
+    assert.equal(polled.sessions[0].messages[0].content, "Updated");
+  });
+
   it("blocks polling for active runs, cancellations, attachments, and the active transient draft", () => {
     const populated = state("saved", [session("saved", 1, "Saved")]);
     const empty = state("draft", [session("draft", 1)]);

@@ -17,6 +17,7 @@ export type UseSessionActionsInput = {
   isNewOrDeleteBlockedRef: ValueRef<boolean>;
   isSelectionBlockedRef: ValueRef<boolean>;
   transientEmptySessionIdRef: ValueRef<string | null>;
+  protectedEmptySessionIdsRef?: ValueRef<ReadonlySet<string>>;
   deletedSessionIdsRef: ValueRef<Set<string>>;
   replaceState(state: SessionState): void;
   saveNow(): void;
@@ -31,6 +32,7 @@ export function useSessionActions({
   isNewOrDeleteBlockedRef,
   isSelectionBlockedRef,
   transientEmptySessionIdRef,
+  protectedEmptySessionIdsRef,
   deletedSessionIdsRef,
   replaceState,
   saveNow,
@@ -51,6 +53,8 @@ export function useSessionActions({
         setTransientEmptySessionId: (sessionId) => {
           transientEmptySessionIdRef.current = sessionId;
         },
+        getProtectedEmptySessionIds: () =>
+          protectedEmptySessionIdsRef?.current ?? [],
         markSessionDeleted: (sessionId) => {
           deletedSessionIdsRef.current.add(sessionId);
         },
@@ -74,6 +78,7 @@ export function useSessionActions({
       deletedSessionIdsRef,
       isNewOrDeleteBlockedRef,
       isSelectionBlockedRef,
+      protectedEmptySessionIdsRef,
       replaceState,
       saveNow,
       sessionStateRef,

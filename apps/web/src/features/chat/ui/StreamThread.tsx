@@ -45,6 +45,10 @@ export type StreamThreadProps = {
   model: string;
   modelOptions: string[];
   reasoningEffort: ReasoningEffort;
+  reasoningSupported: boolean;
+  composerSubmissionError?: string | null;
+  composerAttachmentSafetyBlocked?: boolean;
+  composerAttachmentSafetyError?: string | null;
   uiComplexity: number;
   artifactSelectionClearVersion: number;
   artifactSelectionClearMessageId?: string;
@@ -63,6 +67,8 @@ export type StreamThreadProps = {
   onArtifactSelectionsChange(selections: ArtifactSelection[]): void;
   onModelChange(model: string): void;
   onReasoningEffortChange(reasoningEffort: ReasoningEffort): void;
+  onDismissComposerSubmissionError?(): void;
+  onRetryComposerAttachmentCleanup?(): void;
   onUiComplexityChange(uiComplexity: number): void;
 };
 
@@ -120,6 +126,10 @@ export function StreamThread({
   model,
   modelOptions,
   reasoningEffort,
+  reasoningSupported,
+  composerSubmissionError,
+  composerAttachmentSafetyBlocked,
+  composerAttachmentSafetyError,
   uiComplexity,
   artifactSelectionClearVersion,
   artifactSelectionClearMessageId,
@@ -134,6 +144,8 @@ export function StreamThread({
   onArtifactSelectionsChange,
   onModelChange,
   onReasoningEffortChange,
+  onDismissComposerSubmissionError,
+  onRetryComposerAttachmentCleanup,
   onUiComplexityChange
 }: StreamThreadProps) {
   const isNewChat = useAuiState((state) => state.thread.messages.length === 0);
@@ -481,12 +493,18 @@ export function StreamThread({
             model={model}
             modelOptions={modelOptions}
             reasoningEffort={reasoningEffort}
+            reasoningSupported={reasoningSupported}
+            submissionError={composerSubmissionError}
+            attachmentSafetyBlocked={composerAttachmentSafetyBlocked}
+            attachmentSafetyError={composerAttachmentSafetyError}
             uiComplexity={uiComplexity}
             artifactSelections={artifactSelection.selections}
             onRemoveArtifactSelection={artifactSelection.remove}
             onClearArtifactSelections={artifactSelection.clear}
             onModelChange={onModelChange}
             onReasoningEffortChange={onReasoningEffortChange}
+            onDismissSubmissionError={onDismissComposerSubmissionError}
+            onRetryAttachmentCleanup={onRetryComposerAttachmentCleanup}
             onUiComplexityChange={onUiComplexityChange}
           />
         </ThreadPrimitive.ViewportFooter>

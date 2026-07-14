@@ -13,12 +13,14 @@ import {
 import { ChatShell } from "./components/ChatShell";
 import { AuthChoiceDialog } from "./components/AuthChoiceDialog";
 import { BugReportDialog } from "./components/BugReportDialog";
+import { SessionPersistenceStatus } from "./components/SessionPersistenceStatus";
 import { SessionSidebar } from "./components/SessionSidebar";
 import {
   loadAccountMode,
   saveAccountMode,
   type AccountMode
 } from "./core/accountMode";
+import { providerSupportsReasoning } from "./core/apiSettings";
 import { createId } from "./domain/chat/sessionModel";
 import { useChatRunCancellation } from "./features/chat/useChatRunCancellation";
 import { createChatRunReconnectScheduler } from "./features/chat/chatRunReconnectScheduler";
@@ -47,7 +49,10 @@ import {
   getAssistantForUserTurn,
   getVisibleSessionMessages
 } from "./features/chat/branching";
-import { submitComposerMessage } from "./features/chat/composerSubmissionController";
+import {
+  getArtifactEditSubmissionError,
+  submitComposerMessage
+} from "./features/chat/composerSubmissionController";
 import {
   loadSessionClientId
 } from "./features/sessions/sessionPersistence";
@@ -56,7 +61,7 @@ import { useSessionSave } from "./features/sessions/useSessionSave";
 import { useSessionIndex } from "./features/sessions/useSessionIndex";
 import { useSessionActions } from "./features/sessions/useSessionActions";
 import { createDeferredSessionSelectionController } from "./features/sessions/deferredSessionSelection";
-import { discardComposerAttachmentsAndRun } from "./features/sessions/composerAttachmentNavigation";
+import { useComposerSessionDrafts } from "./features/sessions/useComposerSessionDrafts";
 import { useSessionAttachmentController } from "./features/sessions/useSessionAttachmentController";
 import { useSessionStateController } from "./features/sessions/useSessionStateController";
 import { useSessionMessageMutations } from "./features/sessions/useSessionMessageMutations";
@@ -84,7 +89,9 @@ import type { ArtifactEditTarget } from "./features/artifacts/artifactEditContro
 import { useAppSettings } from "./features/settings/useAppSettings";
 import { usePersistentThemeMode } from "./features/settings/usePersistentThemeMode";
 import { useSessionRunSettings } from "./features/settings/useSessionRunSettings";
+import { selectContinueLocalApiSettings } from "./features/settings/settingsDraftModel";
 import { useCloudAuthController } from "./features/auth/useCloudAuthController";
+import type { SessionSaveStatus } from "./features/sessions/sessionSaveCoordinator";
 import type {
   RenderSnapshot,
   StreamingRenderer
@@ -134,10 +141,34 @@ export default function App() {
   const [isAuthChoiceOpen, setIsAuthChoiceOpen] = useState(false);
   const [providerSettingsRequestVersion, setProviderSettingsRequestVersion] =
     useState(0);
+  const [sessionSaveStatus, setSessionSaveStatus] =
+    useState<SessionSaveStatus>("idle");
+  const [sessionSyncError, setSessionSyncError] = useState<string | null>(null);
+  const [sessionSyncRetryVersion, setSessionSyncRetryVersion] = useState(0);
   const openAuthChoice = useCallback(() => {
     setIsAuthChoiceOpen(true);
   }, []);
   const [isSending, setIsSending] = useState(false);
+  const [composerSubmissionError, setComposerSubmissionError] = useState<
+    string | null
+  >(null);
+  const [composerAttachmentSafetyBlocked, setComposerAttachmentSafetyBlocked] =
+    useState(false);
+  const [composerAttachmentSafetyError, setComposerAttachmentSafetyError] =
+    useState<string | null>(null);
+  const handleSessionSyncError = useCallback(
+    (phase: "load" | "sync") => {
+      setSessionSyncError(
+        phase === "load"
+          ? "Sessions could not be loaded."
+          : "Sessions could not sync."
+      );
+    },
+    []
+  );
+  const handleSessionSyncSuccess = useCallback(() => {
+    setSessionSyncError(null);
+  }, []);
   const {
     activeSession,
     messages,
@@ -147,10 +178,14 @@ export default function App() {
     isActiveSessionSending
   } = useSessionViewModel(sessionState);
   const sessionClientIdRef = useRef(loadSessionClientId());
+  const composerRuntimeRef = useRef<{ setText(text: string): void } | null>(null);
   const isSendingRef = useRef(isSending);
   const sessionNewOrDeleteBlockedRef = useRef(isSending);
   const sessionSelectionBlockedRef = useRef(false);
   const attachmentDraftsRef = useRef(false);
+  const composerDraftSessionIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const composerAttachmentSafetyBlockedRef = useRef(false);
+  const sessionSaveReadyRef = useRef(sessionsLoaded && sessionsHydrated);
   const renderersRef = useRef<Map<string, StreamingRenderer>>(new Map());
   const runConnectionsRef = useRef<Map<string, AbortController>>(new Map());
   const cancelledRunIdsRef = useRef<Set<string>>(new Set());
@@ -194,6 +229,7 @@ export default function App() {
     sessionClientIdRef
   });
   attachmentDraftsRef.current = hasComposerAttachmentDrafts;
+  sessionSaveReadyRef.current = sessionsLoaded && sessionsHydrated;
   sessionNewOrDeleteBlockedRef.current = isSending;
   sessionSelectionBlockedRef.current = false;
   const handleAuthOverlayRequest = useCallback(() => {
@@ -215,8 +251,16 @@ export default function App() {
     pendingVisualRepairSlot.clear();
     setAccountMode("local");
     saveAccountMode("local");
+    updateApiSettings((current) =>
+      selectContinueLocalApiSettings(current, runtimeSettings)
+    );
     setProviderSettingsRequestVersion((current) => current + 1);
-  }, [pendingManagedRequestSlot, pendingVisualRepairSlot]);
+  }, [
+    pendingManagedRequestSlot,
+    pendingVisualRepairSlot,
+    runtimeSettings,
+    updateApiSettings
+  ]);
   const handleLogout = useCallback(async () => {
     try {
       await logoutCloudAccount();
@@ -229,6 +273,10 @@ export default function App() {
   useEffect(() => {
     isSendingRef.current = isSending;
   }, [isSending]);
+
+  useEffect(() => {
+    setComposerSubmissionError(null);
+  }, [sessionState.activeSessionId]);
 
   useEffect(() => {
     restoredRunReconnectScheduler.activate();
@@ -264,25 +312,35 @@ export default function App() {
     sessionsHydratedRef,
     deletedSessionIdsRef,
     transientEmptySessionIdRef,
+    protectedEmptySessionIdsRef: composerDraftSessionIdsRef,
     runConnectionsRef,
     cancelledRunIdsRef,
     attachmentDraftsRef,
     updateState: setSessionStateAndRef,
     setSessionsLoaded,
-    setSessionsHydrated
+    setSessionsHydrated,
+    retryVersion: sessionSyncRetryVersion,
+    onError: handleSessionSyncError,
+    onSuccess: handleSessionSyncSuccess
   });
 
   useStaleArtifactEditSweep(sessionsLoaded, setSessionStateAndRef);
 
   const saveCurrentSessionStateNow = useSessionSave({
     sessionState,
-    sessionsLoaded,
+    sessionsLoaded: sessionsLoaded && sessionsHydrated,
     debounceMs: SESSION_SAVE_DEBOUNCE_MS,
     sessionStateRef,
-    sessionsLoadedRef,
+    sessionsLoadedRef: sessionSaveReadyRef,
     sessionClientIdRef,
-    deletedSessionIdsRef
+    deletedSessionIdsRef,
+    onStatusChange: setSessionSaveStatus
   });
+  const handleSessionPersistenceRetry = useCallback(() => {
+    setSessionSyncError(null);
+    setSessionSyncRetryVersion((current) => current + 1);
+    void saveCurrentSessionStateNow();
+  }, [saveCurrentSessionStateNow]);
 
   useGeneratedArtifactBatchRecovery({
     sessions: sessionState.sessions,
@@ -305,6 +363,7 @@ export default function App() {
     isNewOrDeleteBlockedRef: sessionNewOrDeleteBlockedRef,
     isSelectionBlockedRef: sessionSelectionBlockedRef,
     transientEmptySessionIdRef,
+    protectedEmptySessionIdsRef: composerDraftSessionIdsRef,
     deletedSessionIdsRef,
     replaceState: setSessionStateAndRef,
     saveNow: saveCurrentSessionStateNow,
@@ -362,6 +421,7 @@ export default function App() {
     session: bugReportSession,
     draft: bugReportDraft,
     isOpen: isBugReportOpen,
+    isCapturing: isBugReportCapturing,
     isSubmitting: isBugReportSubmitting,
     isSubmitted: isBugReportSubmitted,
     captureError: bugReportCaptureError,
@@ -369,6 +429,7 @@ export default function App() {
     open: handleBugReportOpen,
     changeDraft: handleBugReportDraftChange,
     close: handleBugReportClose,
+    discard: handleBugReportDiscard,
     submit: handleBugReportSubmit
   } = useBugReportController({
     sessionState,
@@ -699,14 +760,18 @@ export default function App() {
   const handleNewMessage = useCallback(
     async (message: AppendMessage) => {
       if (
-        isAttachmentSendBlocked
+        isAttachmentSendBlocked ||
+        composerAttachmentSafetyBlockedRef.current
       ) {
+        setComposerAttachmentSafetyError(
+          "Attachments are still switching between sessions. Retry cleanup before sending."
+        );
         return;
       }
 
       const text = getAppendMessageText(message);
       const attachments = getAppendMessageImages(message);
-      await submitComposerMessage(text, attachments, {
+      const submission = await submitComposerMessage(text, attachments, {
         getSelections: getArtifactSelections,
         runSourceEdit: runArtifactSourceEdit,
         startArtifactGeneration: async (
@@ -764,6 +829,15 @@ export default function App() {
           return sendStreamUiRequest(chatText, chatAttachments);
         }
       });
+      if (submission.kind === "artifact-edit") {
+        const error = getArtifactEditSubmissionError(submission.editOutcome);
+        setComposerSubmissionError(error);
+        if (error) {
+          composerRuntimeRef.current?.setText(text);
+        }
+        return;
+      }
+      setComposerSubmissionError(null);
     },
     [
       activeSessionIdRef,
@@ -785,7 +859,8 @@ export default function App() {
       isVisualRepairRunning,
     isSendDisabled:
       isSending ||
-      isAttachmentSendBlocked,
+      isAttachmentSendBlocked ||
+      composerAttachmentSafetyBlocked,
     convertMessage,
     onNew: handleNewMessage,
     onCancel: handleCancelRun,
@@ -794,56 +869,45 @@ export default function App() {
     }
   });
 
-  const discardComposerAttachmentsForSessionAction = useCallback(
-    (action: () => void) => {
-      attachmentDraftsRef.current = false;
-      discardComposerAttachmentsAndRun(
-        {
-          clearAttachments: () => runtime.thread.composer.clearAttachments(),
-          onClearError: (error) =>
-            console.warn("Could not clear composer attachments.", error)
-        },
-        action
-      );
+  const composerSessionDrafts = useComposerSessionDrafts({
+    composer: runtime.thread.composer,
+    activeSessionId: sessionState.activeSessionId,
+    onError: (message, error) => {
+      console.warn(message, error);
+      setComposerAttachmentSafetyError(message);
     },
-    [attachmentDraftsRef, runtime]
-  );
+    onAttachmentSafetyChange: (blocked) => {
+      composerAttachmentSafetyBlockedRef.current = blocked;
+      setComposerAttachmentSafetyBlocked(blocked);
+      if (!blocked) {
+        setComposerAttachmentSafetyError(null);
+      }
+    },
+    onDraftSessionIdsChange: (sessionIds) => {
+      composerDraftSessionIdsRef.current = sessionIds;
+    }
+  });
+  composerRuntimeRef.current = runtime.thread.composer;
   const handleSidebarNewSession = useCallback(() => {
-    discardComposerAttachmentsForSessionAction(() => {
-      handleNewSession();
-    });
-  }, [discardComposerAttachmentsForSessionAction, handleNewSession]);
+    composerSessionDrafts.capture();
+    handleNewSession();
+  }, [composerSessionDrafts, handleNewSession]);
   const handleSidebarSelectSession = useCallback(
     (sessionId: string) => {
-      if (sessionId === activeSessionIdRef.current) {
-        requestSidebarSessionSelection(sessionId);
-        return;
-      }
-      discardComposerAttachmentsForSessionAction(() => {
-        requestSidebarSessionSelection(sessionId);
-      });
+      composerSessionDrafts.capture();
+      requestSidebarSessionSelection(sessionId);
     },
-    [
-      activeSessionIdRef,
-      discardComposerAttachmentsForSessionAction,
-      requestSidebarSessionSelection
-    ]
+    [composerSessionDrafts, requestSidebarSessionSelection]
   );
   const handleSidebarDeleteSession = useCallback(
     (sessionId: string) => {
-      if (sessionId !== activeSessionIdRef.current) {
-        handleDeleteSession(sessionId);
-        return;
+      composerSessionDrafts.capture();
+      const outcome = handleDeleteSession(sessionId);
+      if (outcome === "deleted" || outcome === "tombstoned-only") {
+        composerSessionDrafts.discardSession(sessionId);
       }
-      discardComposerAttachmentsForSessionAction(() => {
-        handleDeleteSession(sessionId);
-      });
     },
-    [
-      activeSessionIdRef,
-      discardComposerAttachmentsForSessionAction,
-      handleDeleteSession
-    ]
+    [composerSessionDrafts, handleDeleteSession]
   );
 
   const sidebarPreview =
@@ -857,6 +921,13 @@ export default function App() {
         <ChatShell
           themeMode={themeMode}
           onThemeModeChange={setThemeMode}
+          workspaceStatus={
+            <SessionPersistenceStatus
+              saveStatus={sessionSaveStatus}
+              syncError={sessionSyncError}
+              onRetry={handleSessionPersistenceRetry}
+            />
+          }
           sidebar={
             <SessionSidebar
               sessions={sidebarSessionItems}
@@ -882,6 +953,7 @@ export default function App() {
               onLoginRequest={handleAuthOverlayRequest}
               onLogout={handleLogout}
               onBugReportOpen={() => void handleBugReportOpen()}
+              isBugReportCapturing={isBugReportCapturing}
               providerSettingsRequestVersion={providerSettingsRequestVersion}
             />
           }
@@ -899,6 +971,10 @@ export default function App() {
             model={activeSessionModel}
             modelOptions={selectableModels}
             reasoningEffort={activeSessionReasoningEffort}
+            reasoningSupported={providerSupportsReasoning(apiSettings.providerId)}
+            composerSubmissionError={composerSubmissionError}
+            composerAttachmentSafetyBlocked={composerAttachmentSafetyBlocked}
+            composerAttachmentSafetyError={composerAttachmentSafetyError}
             uiComplexity={activeSessionUiComplexity}
             artifactSelectionClearVersion={artifactSelectionClearVersion}
             artifactSelectionClearMessageId={artifactSelectionClearMessageId}
@@ -913,6 +989,12 @@ export default function App() {
             onArtifactSelectionsChange={handleArtifactSelectionsChange}
             onModelChange={handleModelChange}
             onReasoningEffortChange={handleReasoningEffortChange}
+            onDismissComposerSubmissionError={() =>
+              setComposerSubmissionError(null)
+            }
+            onRetryComposerAttachmentCleanup={() =>
+              composerSessionDrafts.retryAttachmentCleanup()
+            }
             onUiComplexityChange={handleUiComplexityChange}
           />
         </ChatShell>
@@ -931,10 +1013,12 @@ export default function App() {
           themeMode={themeMode}
           captureError={bugReportCaptureError}
           submitError={bugReportSubmitError}
+          isCapturing={isBugReportCapturing}
           isSubmitting={isBugReportSubmitting}
           isSubmitted={isBugReportSubmitted}
           onChange={handleBugReportDraftChange}
           onClose={handleBugReportClose}
+          onDiscard={handleBugReportDiscard}
           onSubmit={() => void handleBugReportSubmit()}
         />
       ) : null}

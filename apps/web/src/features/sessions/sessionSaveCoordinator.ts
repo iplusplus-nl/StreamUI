@@ -45,6 +45,7 @@ export type SessionSaveDependencies = {
   flush(serializedState: string, clientId: string): void;
   clearLegacy(): void;
   warn(error: unknown): void;
+  onStatusChange(status: SessionSaveStatus): void;
   scheduler: SessionSaveScheduler;
   persistTimeoutMs: number;
   createAbortController(): AbortController;
@@ -52,6 +53,12 @@ export type SessionSaveDependencies = {
 
 export type SessionSaveOutcome = "saved" | "failed" | "skipped";
 export type SessionFlushOutcome = "flushed" | "skipped";
+export type SessionSaveStatus =
+  | "idle"
+  | "pending"
+  | "saving"
+  | "saved"
+  | "failed";
 
 export type SessionSaveCoordinator = {
   scheduleAutosave(stateSnapshot: SessionState, loaded: boolean): () => void;
@@ -99,6 +106,7 @@ const defaultDependencies: SessionSaveDependencies = {
   flush: saveSessionStateOnPageExit,
   clearLegacy: clearLegacyLocalSessions,
   warn: (error) => console.warn("Could not save ChatHTML sessions.", error),
+  onStatusChange: () => undefined,
   scheduler: {
     schedule: (delayMs, task) => {
       const timeoutId = window.setTimeout(() => void task(), delayMs);
@@ -312,6 +320,7 @@ export function createSessionSaveCoordinator(
     if (signal?.aborted) {
       return "skipped";
     }
+    dependencies.onStatusChange("saving");
     try {
       const response = await requestPersistResponse(snapshot, signal);
       if (!response.ok) {
@@ -330,17 +339,20 @@ export function createSessionSaveCoordinator(
           dependencies.observeRevision(snapshot.clientId, currentSaveRevision);
           advanceRevisionFloor(snapshot.clientId, currentSaveRevision);
         }
+        dependencies.onStatusChange("failed");
         return "stale";
       }
 
       confirmPersisted(snapshot);
       dependencies.clearLegacy();
+      dependencies.onStatusChange("saved");
       return "saved";
     } catch (error) {
       if (suppressAbortWarning && isAbortError(error)) {
         return "skipped";
       }
       dependencies.warn(error);
+      dependencies.onStatusChange("failed");
       return "failed";
     }
   };
@@ -394,6 +406,9 @@ export function createSessionSaveCoordinator(
       (!active &&
         isConfirmed(prepared))
     ) {
+      if (!active) {
+        dependencies.onStatusChange("saved");
+      }
       return () => undefined;
     }
 
@@ -417,6 +432,7 @@ export function createSessionSaveCoordinator(
     });
     handle.cancelTimer = cancelTimer;
     autosave = handle;
+    dependencies.onStatusChange("pending");
 
     return () => {
       handle.cancelTimer?.();
@@ -444,6 +460,7 @@ export function createSessionSaveCoordinator(
       !active &&
       isConfirmed(prepared)
     ) {
+      dependencies.onStatusChange("saved");
       return "skipped";
     }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Bug,
   LogIn,
+  LoaderCircle,
   Menu,
   MoreHorizontal,
   PanelLeftOpen,
@@ -16,6 +17,7 @@ import type { DisplaySettings } from "../core/displaySettings";
 import type { ProfileSettings } from "../core/profileSettings";
 import type { RuntimeSettingsSummary } from "../core/runtimeSettings";
 import type { SearchSettings } from "../core/searchSettings";
+import { requestSessionDeletion } from "../features/sessions/sessionDeletionModel";
 import type { SettingsSection } from "../features/settings/settingsDialogModel";
 import { isEscapeDismissKey, isTargetOutside } from "./dismissalModel";
 import { ProfileAvatar } from "./ProfileAvatar";
@@ -62,6 +64,8 @@ type SessionSidebarProps = {
   onLoginRequest?(): void;
   onLogout?(): void;
   onBugReportOpen(): void;
+  isBugReportCapturing?: boolean;
+  confirmDeleteSession?(message: string): boolean;
   providerSettingsRequestVersion?: number;
 };
 
@@ -89,6 +93,8 @@ export function SessionSidebar({
   onLoginRequest,
   onLogout,
   onBugReportOpen,
+  isBugReportCapturing = false,
+  confirmDeleteSession = (message) => window.confirm(message),
   providerSettingsRequestVersion = 0
 }: SessionSidebarProps) {
   const [isCompactSidebar, setIsCompactSidebar] = useState(
@@ -101,6 +107,9 @@ export function SessionSidebar({
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
   const openSessionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const openSessionMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const compactOpenButtonRef = useRef<HTMLButtonElement | null>(null);
+  const compactCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const shouldShowSignIn =
     cloudEnabled && !authUser && Boolean(onLoginRequest);
   const shouldShowPersonalSettings =
@@ -160,6 +169,45 @@ export function SessionSidebar({
     };
   }, [openSessionMenuId]);
 
+  const isCompactDrawerOpen = isCompactSidebar && !isCollapsed;
+
+  useEffect(() => {
+    if (!isCompactDrawerOpen) {
+      return undefined;
+    }
+
+    const workspace = document.querySelector<HTMLElement>(".chat-workspace");
+    const workspaceWasInert = workspace?.hasAttribute("inert") ?? false;
+    workspace?.setAttribute("inert", "");
+    compactCloseButtonRef.current?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEscapeDismissKey(event.key) || event.defaultPrevented) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest('[aria-modal="true"]') !== sidebarRef.current
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      setOpenSessionMenuId(null);
+      setIsCollapsed(true);
+      window.setTimeout(() => compactOpenButtonRef.current?.focus());
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (workspace && !workspaceWasInert) {
+        workspace.removeAttribute("inert");
+      }
+    };
+  }, [isCompactDrawerOpen]);
+
   useEffect(() => {
     if (providerSettingsRequestVersion <= 0) {
       return;
@@ -169,14 +217,32 @@ export function SessionSidebar({
   }, [providerSettingsRequestVersion]);
 
   return (
+    <>
+      {isCompactDrawerOpen ? (
+        <button
+          className="session-drawer-backdrop"
+          type="button"
+          tabIndex={-1}
+          aria-label="Close session drawer"
+          onClick={() => {
+            setOpenSessionMenuId(null);
+            setIsCollapsed(true);
+            window.setTimeout(() => compactOpenButtonRef.current?.focus());
+          }}
+        />
+      ) : null}
     <aside
+      ref={sidebarRef}
       className={`history-sidebar ${isCollapsed ? "is-collapsed" : ""}`}
       aria-label="Session history"
+      role={isCompactDrawerOpen ? "dialog" : undefined}
+      aria-modal={isCompactDrawerOpen ? "true" : undefined}
     >
       {isCollapsed ? (
         <>
           <div className="collapsed-sidebar-top">
             <button
+              ref={isCompactSidebar ? compactOpenButtonRef : undefined}
               className="collapsed-sidebar-button"
               type="button"
               aria-label="Expand sidebar"
@@ -234,10 +300,21 @@ export function SessionSidebar({
               className="collapsed-sidebar-button"
               type="button"
               aria-label="Bug Report"
-              title="Bug Report"
+              title={
+                isBugReportCapturing ? "Capturing screenshot…" : "Bug Report"
+              }
+              disabled={isBugReportCapturing}
               onClick={onBugReportOpen}
             >
-              <Bug size={21} strokeWidth={2} aria-hidden="true" />
+              {isBugReportCapturing ? (
+                <LoaderCircle
+                  className="bug-report-spinner"
+                  size={21}
+                  aria-hidden="true"
+                />
+              ) : (
+                <Bug size={21} strokeWidth={2} aria-hidden="true" />
+              )}
             </button>
           </div>
         </>
@@ -247,6 +324,7 @@ export function SessionSidebar({
             <div className="sidebar-brand-row">
               <span className="sidebar-brand">ChatHTML</span>
               <button
+                ref={isCompactSidebar ? compactCloseButtonRef : undefined}
                 className="sidebar-collapse-button"
                 type="button"
                 aria-label="Collapse sidebar"
@@ -331,7 +409,11 @@ export function SessionSidebar({
                       disabled={isSending}
                       onClick={() => {
                         setOpenSessionMenuId(null);
-                        onDeleteSession(session.id);
+                        requestSessionDeletion(
+                          session,
+                          confirmDeleteSession,
+                          onDeleteSession
+                        );
                       }}
                     >
                       <Trash2 size={16} strokeWidth={2.1} aria-hidden="true" />
@@ -389,10 +471,21 @@ export function SessionSidebar({
               className="sidebar-icon-button"
               type="button"
               aria-label="Bug Report"
-              title="Bug Report"
+              title={
+                isBugReportCapturing ? "Capturing screenshot…" : "Bug Report"
+              }
+              disabled={isBugReportCapturing}
               onClick={onBugReportOpen}
             >
-              <Bug size={17} strokeWidth={2.1} aria-hidden="true" />
+              {isBugReportCapturing ? (
+                <LoaderCircle
+                  className="bug-report-spinner"
+                  size={17}
+                  aria-hidden="true"
+                />
+              ) : (
+                <Bug size={17} strokeWidth={2.1} aria-hidden="true" />
+              )}
             </button>
           </div>
         </>
@@ -420,5 +513,6 @@ export function SessionSidebar({
         />
       ) : null}
     </aside>
+    </>
   );
 }

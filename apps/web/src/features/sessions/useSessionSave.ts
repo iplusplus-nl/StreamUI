@@ -3,6 +3,7 @@ import type { SessionState } from "../../domain/chat/sessionModel";
 import {
   createSessionSaveCoordinator,
   type SessionSaveOutcome,
+  type SessionSaveStatus,
   type SessionSaveCoordinator,
   type SessionSaveDependencies
 } from "./sessionSaveCoordinator";
@@ -17,6 +18,7 @@ export type UseSessionSaveInput = {
   sessionsLoadedRef: ValueRef<boolean>;
   sessionClientIdRef: ValueRef<string>;
   deletedSessionIdsRef: ValueRef<ReadonlySet<string>>;
+  onStatusChange?(status: SessionSaveStatus): void;
   dependencies?: Partial<SessionSaveDependencies>;
 };
 
@@ -28,8 +30,11 @@ export function useSessionSave({
   sessionsLoadedRef,
   sessionClientIdRef,
   deletedSessionIdsRef,
+  onStatusChange,
   dependencies
 }: UseSessionSaveInput): () => Promise<SessionSaveOutcome> {
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
   const coordinatorRef = useRef<SessionSaveCoordinator | null>(null);
   if (!coordinatorRef.current) {
     coordinatorRef.current = createSessionSaveCoordinator(
@@ -40,7 +45,10 @@ export function useSessionSave({
         getDeletedSessionIds: () => deletedSessionIdsRef.current
       },
       debounceMs,
-      dependencies
+      {
+        ...dependencies,
+        onStatusChange: (status) => onStatusChangeRef.current?.(status)
+      }
     );
   }
   const coordinator = coordinatorRef.current;

@@ -46,15 +46,22 @@ export type NewSessionResult = {
 
 export function createNewSessionState(
   state: SessionState,
-  createSession: () => ChatSession
+  createSession: () => ChatSession,
+  protectedEmptySessionIds: Iterable<string> = []
 ): NewSessionResult {
+  const protectedIds = new Set(protectedEmptySessionIds);
   const compacted = compactEmptySessions(state, {
-    preserveActiveEmpty: true
+    preserveActiveEmpty: true,
+    preserveEmptySessionIds: protectedIds
   });
   const active = compacted.sessions.find(
     (session) => session.id === compacted.activeSessionId
   );
-  if (active && isSessionEmpty(active)) {
+  if (
+    active &&
+    isSessionEmpty(active) &&
+    !protectedIds.has(active.id)
+  ) {
     return {
       state: compacted,
       transientEmptySessionId: active.id,
@@ -80,7 +87,8 @@ export type SelectSessionResult = {
 
 export function selectSessionInState(
   state: SessionState,
-  sessionId: string
+  sessionId: string,
+  protectedEmptySessionIds: Iterable<string> = []
 ): SelectSessionResult {
   const target = state.sessions.find((session) => session.id === sessionId);
   if (!target) {
@@ -93,7 +101,10 @@ export function selectSessionInState(
         ...state,
         activeSessionId: sessionId
       },
-      { preserveActiveEmpty: isSessionEmpty(target) }
+      {
+        preserveActiveEmpty: isSessionEmpty(target),
+        preserveEmptySessionIds: protectedEmptySessionIds
+      }
     ),
     targetFound: true
   };
@@ -102,7 +113,8 @@ export function selectSessionInState(
 export function deleteSessionInState(
   state: SessionState,
   sessionId: string,
-  createSession: () => ChatSession
+  createSession: () => ChatSession,
+  protectedEmptySessionIds: Iterable<string> = []
 ): SessionState {
   const remaining = state.sessions.filter((session) => session.id !== sessionId);
   if (!remaining.length) {
@@ -127,7 +139,8 @@ export function deleteSessionInState(
       preserveActiveEmpty: remaining.some(
         (session) =>
           session.id === activeSessionId && isSessionEmpty(session)
-      )
+      ),
+      preserveEmptySessionIds: protectedEmptySessionIds
     }
   );
 }

@@ -20,12 +20,16 @@ export type UseSessionSyncInput = {
   sessionsHydratedRef: ValueRef<boolean>;
   deletedSessionIdsRef: ValueRef<ReadonlySet<string>>;
   transientEmptySessionIdRef: ValueRef<string | null>;
+  protectedEmptySessionIdsRef?: ValueRef<ReadonlySet<string>>;
   runConnectionsRef: ValueRef<SizeLike>;
   cancelledRunIdsRef: ValueRef<SizeLike>;
   attachmentDraftsRef: ValueRef<boolean>;
   updateState: SessionStateUpdater;
   setSessionsLoaded(loaded: boolean): void;
   setSessionsHydrated(hydrated: boolean): void;
+  retryVersion?: number;
+  onError?(phase: "load" | "sync", error: unknown): void;
+  onSuccess?(phase: "load" | "sync"): void;
   dependencies?: Partial<SessionSyncDependencies>;
 };
 
@@ -38,12 +42,16 @@ export function useSessionSync({
   sessionsHydratedRef,
   deletedSessionIdsRef,
   transientEmptySessionIdRef,
+  protectedEmptySessionIdsRef,
   runConnectionsRef,
   cancelledRunIdsRef,
   attachmentDraftsRef,
   updateState,
   setSessionsLoaded,
   setSessionsHydrated,
+  retryVersion = 0,
+  onError,
+  onSuccess,
   dependencies
 }: UseSessionSyncInput): void {
   const markSessionsHydrated = useCallback(() => {
@@ -65,6 +73,8 @@ export function useSessionSync({
         onApplied: markSessionsHydrated,
         getDeletedSessionIds: () => deletedSessionIdsRef.current,
         getTransientEmptySessionId: () => transientEmptySessionIdRef.current,
+        getProtectedEmptySessionIds: () =>
+          protectedEmptySessionIdsRef?.current ?? [],
         hasActiveRuns: () => runConnectionsRef.current.size > 0,
         hasRecentCancellations: () =>
           cancelledRunIdsRef.current.size > 0,
@@ -72,9 +82,15 @@ export function useSessionSync({
       },
       dependencies
     )
+      .then((outcome) => {
+        if (!cancelled && outcome === "applied") {
+          onSuccess?.("load");
+        }
+      })
       .catch((error) => {
         if (!cancelled) {
           console.warn("Could not load ChatHTML sessions.", error);
+          onError?.("load", error);
         }
       })
       .finally(() => {
@@ -94,6 +110,9 @@ export function useSessionSync({
     dependencies,
     sessionClientIdRef,
     markSessionsHydrated,
+    onError,
+    onSuccess,
+    protectedEmptySessionIdsRef,
     runConnectionsRef,
     sessionsLoadedRef,
     setSessionsLoaded,
@@ -109,7 +128,7 @@ export function useSessionSync({
     let cancelled = false;
     const poll = createSingleFlightSessionPoll(
       async () => {
-        await runSessionPoll(
+        const outcome = await runSessionPoll(
           {
             clientId: sessionClientIdRef.current,
             isCancelled: () => cancelled,
@@ -119,6 +138,8 @@ export function useSessionSync({
             getDeletedSessionIds: () => deletedSessionIdsRef.current,
             getTransientEmptySessionId: () =>
               transientEmptySessionIdRef.current,
+            getProtectedEmptySessionIds: () =>
+              protectedEmptySessionIdsRef?.current ?? [],
             hasActiveRuns: () => runConnectionsRef.current.size > 0,
             hasRecentCancellations: () =>
               cancelledRunIdsRef.current.size > 0,
@@ -126,10 +147,14 @@ export function useSessionSync({
           },
           dependencies
         );
+        if (!cancelled && outcome === "applied") {
+          onSuccess?.("sync");
+        }
       },
       (error) => {
         if (!cancelled) {
           console.warn("Could not sync ChatHTML sessions.", error);
+          onError?.("sync", error);
         }
       }
     );
@@ -149,6 +174,10 @@ export function useSessionSync({
     dependencies,
     intervalMs,
     markSessionsHydrated,
+    onError,
+    onSuccess,
+    protectedEmptySessionIdsRef,
+    retryVersion,
     runConnectionsRef,
     sessionClientIdRef,
     sessionStateRef,

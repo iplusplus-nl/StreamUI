@@ -180,8 +180,48 @@ function preserveLocalArtifactEditSessions(
 export function mergeSyncedSessionState(
   current: SessionState,
   serverState: SessionState,
-  deletedSessionIds: Iterable<string> = []
+  deletedSessionIds: Iterable<string> = [],
+  protectedEmptySessionIds: Iterable<string> = []
 ): SessionState {
+  const deletedIds = new Set(deletedSessionIds);
+  const protectedIds = new Set(protectedEmptySessionIds);
+  const protectedEmptySessions = current.sessions.filter(
+    (session) =>
+      protectedIds.has(session.id) &&
+      !deletedIds.has(session.id) &&
+      isSessionEmpty(session)
+  );
+  const preserveProtectedEmptySessions = (next: SessionState): SessionState => {
+    const sessionsById = new Map(
+      next.sessions.map((session) => [session.id, session])
+    );
+    for (const session of protectedEmptySessions) {
+      if (!sessionsById.has(session.id)) {
+        sessionsById.set(session.id, session);
+      }
+    }
+
+    const activeSessionId =
+      protectedIds.has(current.activeSessionId) &&
+      sessionsById.has(current.activeSessionId)
+        ? current.activeSessionId
+        : next.activeSessionId;
+    const activeSession = sessionsById.get(activeSessionId);
+
+    return compactEmptySessions(
+      {
+        sessions: Array.from(sessionsById.values()),
+        activeSessionId
+      },
+      {
+        preserveActiveEmpty: Boolean(
+          activeSession && isSessionEmpty(activeSession)
+        ),
+        preserveEmptySessionIds: protectedIds
+      }
+    );
+  };
+
   current = filterDeletedSessionState(current, deletedSessionIds);
   serverState = filterDeletedSessionState(
     serverState,
@@ -201,13 +241,15 @@ export function mergeSyncedSessionState(
     shouldPreserveLocalStreamingSession(currentActive, serverActive)
   ) {
     const activeId = currentActive.id;
-    return compactEmptySessions({
-      sessions: sortSessions([
-        currentActive,
-        ...serverState.sessions.filter((session) => session.id !== activeId)
-      ]),
-      activeSessionId: activeId
-    });
+    return preserveProtectedEmptySessions(
+      compactEmptySessions({
+        sessions: sortSessions([
+          currentActive,
+          ...serverState.sessions.filter((session) => session.id !== activeId)
+        ]),
+        activeSessionId: activeId
+      })
+    );
   }
 
   if (
@@ -216,17 +258,19 @@ export function mergeSyncedSessionState(
     (!serverActive || isSessionEmpty(serverActive))
   ) {
     const activeId = currentActive.id;
-    return compactEmptySessions(
-      {
-        sessions: [
-          currentActive,
-          ...serverState.sessions.filter(
-            (session) => session.id !== activeId
-          )
-        ],
-        activeSessionId: activeId
-      },
-      { preserveActiveEmpty: true }
+    return preserveProtectedEmptySessions(
+      compactEmptySessions(
+        {
+          sessions: [
+            currentActive,
+            ...serverState.sessions.filter(
+              (session) => session.id !== activeId
+            )
+          ],
+          activeSessionId: activeId
+        },
+        { preserveActiveEmpty: true }
+      )
     );
   }
 
@@ -238,8 +282,10 @@ export function mergeSyncedSessionState(
 
   const mergedServerState = preserveLocalArtifactEditSessions(current, serverState);
 
-  return compactEmptySessions({
-    ...mergedServerState,
-    activeSessionId
-  });
+  return preserveProtectedEmptySessions(
+    compactEmptySessions({
+      ...mergedServerState,
+      activeSessionId
+    })
+  );
 }

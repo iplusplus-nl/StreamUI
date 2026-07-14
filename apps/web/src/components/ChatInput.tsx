@@ -10,6 +10,10 @@ import { X } from "lucide-react";
 import type { ArtifactSelection } from "../core/artifactSelection";
 import { MAX_IMAGE_ATTACHMENTS } from "../core/assistantAttachments";
 import type { ReasoningEffort } from "../core/apiSettings";
+import {
+  findImageInputCapableModel,
+  modelLikelySupportsImageInput
+} from "../core/modelCapabilities";
 import { getComposerAttachmentPresentation } from "./chatInputAttachmentModel";
 import { ChatModelSelector } from "./ChatModelSelector";
 
@@ -76,12 +80,18 @@ type ChatInputProps = {
   model: string;
   modelOptions: string[];
   reasoningEffort: ReasoningEffort;
+  reasoningSupported: boolean;
+  submissionError?: string | null;
+  attachmentSafetyBlocked?: boolean;
+  attachmentSafetyError?: string | null;
   uiComplexity: number;
   artifactSelections?: ArtifactSelection[];
   onRemoveArtifactSelection?(id: string): void;
   onClearArtifactSelections?(): void;
   onModelChange(model: string): void;
   onReasoningEffortChange(reasoningEffort: ReasoningEffort): void;
+  onDismissSubmissionError?(): void;
+  onRetryAttachmentCleanup?(): void;
   onUiComplexityChange(uiComplexity: number): void;
 };
 
@@ -143,12 +153,18 @@ export function ChatInput({
   model,
   modelOptions,
   reasoningEffort,
+  reasoningSupported,
+  submissionError,
+  attachmentSafetyBlocked = false,
+  attachmentSafetyError,
   uiComplexity,
   artifactSelections = [],
   onRemoveArtifactSelection,
   onClearArtifactSelections,
   onModelChange,
   onReasoningEffortChange,
+  onDismissSubmissionError,
+  onRetryAttachmentCleanup,
   onUiComplexityChange
 }: ChatInputProps) {
   const attachments = useAuiState((state) => state.composer.attachments);
@@ -162,9 +178,32 @@ export function ChatInput({
     (attachment) => attachment.status.type === "incomplete"
   );
   const reachedAttachmentLimit = attachmentCount >= MAX_IMAGE_ATTACHMENTS;
+  const imageInputMayBeUnsupported =
+    attachmentCount > 0 && !modelLikelySupportsImageInput(model);
+  const recommendedImageModel = imageInputMayBeUnsupported
+    ? findImageInputCapableModel(modelOptions)
+    : undefined;
 
   return (
-    <ComposerPrimitive.Root className="chat-input-bar">
+    <ComposerPrimitive.Root
+      className="chat-input-bar"
+      onSubmitCapture={(event) => {
+        if (attachmentSafetyBlocked) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+      onKeyDownCapture={(event) => {
+        if (
+          attachmentSafetyBlocked &&
+          event.key === "Enter" &&
+          !event.shiftKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
       <ComposerPrimitive.AttachmentDropzone className="chat-input-dropzone">
         <ArtifactSelectionTray
           selections={artifactSelections}
@@ -183,6 +222,43 @@ export function ChatInput({
             </ComposerPrimitive.Attachments>
           </div>
         ) : null}
+        {imageInputMayBeUnsupported ? (
+          <div className="attachment-capability-warning" role="status">
+            <span>
+              <strong>{model}</strong> may not support image input. Pixel-level
+              analysis could fail or use only file metadata.
+            </span>
+            {recommendedImageModel ? (
+              <button
+                type="button"
+                onClick={() => onModelChange(recommendedImageModel)}
+              >
+                Use {recommendedImageModel}
+              </button>
+            ) : (
+              <span>Choose an image-capable model before sending.</span>
+            )}
+          </div>
+        ) : null}
+        {submissionError ? (
+          <div className="composer-submission-error" role="alert">
+            <span>{submissionError}</span>
+            <button type="button" onClick={onDismissSubmissionError}>
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+        {attachmentSafetyBlocked ? (
+          <div className="composer-submission-error" role="alert">
+            <span>
+              {attachmentSafetyError ??
+                "Attachments are still switching between sessions. Sending is blocked to protect your draft."}
+            </span>
+            <button type="button" onClick={onRetryAttachmentCleanup}>
+              Retry cleanup
+            </button>
+          </div>
+        ) : null}
         <ComposerPrimitive.Input
           className="chat-input-textarea"
           rows={1}
@@ -196,7 +272,11 @@ export function ChatInput({
               className="attach-button"
               type="button"
               multiple={false}
-              disabled={reachedAttachmentLimit || isUploadingAttachment}
+              disabled={
+                attachmentSafetyBlocked ||
+                reachedAttachmentLimit ||
+                isUploadingAttachment
+              }
               aria-label="Attach image"
               title={
                 isUploadingAttachment
@@ -214,6 +294,7 @@ export function ChatInput({
               model={model}
               modelOptions={modelOptions}
               reasoningEffort={reasoningEffort}
+              reasoningSupported={reasoningSupported}
               uiComplexity={uiComplexity}
               disabled={isRunning}
               onModelChange={onModelChange}
@@ -224,7 +305,7 @@ export function ChatInput({
               <ComposerPrimitive.Send
                 className="send-button"
                 type="submit"
-                disabled={!canSend}
+                disabled={!canSend || attachmentSafetyBlocked}
                 aria-label="Send message"
                 title={
                   isUploadingAttachment

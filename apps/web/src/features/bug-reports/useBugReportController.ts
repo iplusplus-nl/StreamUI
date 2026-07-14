@@ -46,6 +46,7 @@ export type BugReportViewController = {
   open(): Promise<BugReportOpenOutcome>;
   changeDraft(draft: BugReportDraft): boolean;
   close(): void;
+  discard(): boolean;
   submit(): Promise<BugReportSubmitOutcome>;
 };
 
@@ -122,6 +123,7 @@ export function useBugReportController({
     [session]
   );
   const isOpen =
+    viewState.phase === "capturing" ||
     viewState.phase === "editing" ||
     viewState.phase === "submitting" ||
     viewState.phase === "submitted";
@@ -139,6 +141,7 @@ export function useBugReportController({
     open: controller.open,
     changeDraft: controller.changeDraft,
     close: controller.close,
+    discard: controller.discard,
     submit: controller.submit
   };
 }

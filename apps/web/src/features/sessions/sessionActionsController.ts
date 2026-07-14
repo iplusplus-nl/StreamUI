@@ -18,6 +18,7 @@ export type SessionActionsDependencies = {
   replaceState(state: SessionState): void;
   getTransientEmptySessionId(): string | null;
   setTransientEmptySessionId(sessionId: string | null): void;
+  getProtectedEmptySessionIds?(): Iterable<string>;
   markSessionDeleted(sessionId: string): void;
   createSession(): ChatSession;
   saveNow(): void;
@@ -64,7 +65,8 @@ export function createSessionActionsController(
 
       const result = createNewSessionState(
         dependencies.getState(),
-        dependencies.createSession
+        dependencies.createSession,
+        dependencies.getProtectedEmptySessionIds?.()
       );
       dependencies.setTransientEmptySessionId(
         result.transientEmptySessionId
@@ -80,7 +82,8 @@ export function createSessionActionsController(
 
       const result = selectSessionInState(
         dependencies.getState(),
-        sessionId
+        sessionId,
+        dependencies.getProtectedEmptySessionIds?.()
       );
       if (!result.targetFound) {
         return "not-found";
@@ -110,7 +113,8 @@ export function createSessionActionsController(
       const next = deleteSessionInState(
         current,
         sessionId,
-        dependencies.createSession
+        dependencies.createSession,
+        dependencies.getProtectedEmptySessionIds?.()
       );
       dependencies.replaceState(next);
       dependencies.saveNow();

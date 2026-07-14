@@ -84,6 +84,7 @@ export type BugReportController = {
   open(): Promise<BugReportOpenOutcome>;
   changeDraft(draft: BugReportDraft): boolean;
   close(): void;
+  discard(): boolean;
   submit(): Promise<BugReportSubmitOutcome>;
   dispose(): void;
 };
@@ -275,6 +276,25 @@ export function createBugReportController(
     ports.saveNow();
   };
 
+  const discard = (): boolean => {
+    const targetSessionId = state.sessionId;
+    if (!targetSessionId) {
+      return false;
+    }
+
+    invalidateOperations();
+    const updated = ports.updateSession(targetSessionId, (session) => ({
+      ...session,
+      updatedAt: dependencies.now(),
+      bugReportDraft: undefined
+    }));
+    resetClosed();
+    if (updated) {
+      ports.saveNow();
+    }
+    return updated;
+  };
+
   const submit = async (): Promise<BugReportSubmitOutcome> => {
     if (activeCaptureToken !== null || activeSubmitToken !== null) {
       return "busy";
@@ -389,6 +409,7 @@ export function createBugReportController(
     open,
     changeDraft,
     close,
+    discard,
     submit,
     dispose
   };

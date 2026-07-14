@@ -4,6 +4,7 @@ import { Moon, Sun } from "lucide-react";
 type ChatShellProps = {
   children: ReactNode;
   sidebar?: ReactNode;
+  workspaceStatus?: ReactNode;
   themeMode?: "day" | "night";
   onThemeModeChange?(mode: "day" | "night"): void;
 };
@@ -11,6 +12,7 @@ type ChatShellProps = {
 export function ChatShell({
   children,
   sidebar,
+  workspaceStatus,
   themeMode = "night",
   onThemeModeChange
 }: ChatShellProps) {
@@ -21,19 +23,22 @@ export function ChatShell({
       <div className="app-body">
         {sidebar}
         <section className="chat-workspace">
-          {onThemeModeChange ? (
+          {workspaceStatus || onThemeModeChange ? (
             <div className="workspace-toolbar">
-              <button
-                className="app-theme-button"
-                type="button"
-                data-mode={themeMode}
-                aria-label={`Use ${nextThemeMode} theme`}
-                title={`Use ${nextThemeMode} theme`}
-                onClick={() => onThemeModeChange(nextThemeMode)}
-              >
-                <Sun className="app-theme-icon is-sun" size={18} aria-hidden="true" />
-                <Moon className="app-theme-icon is-moon" size={18} aria-hidden="true" />
-              </button>
+              {workspaceStatus}
+              {onThemeModeChange ? (
+                <button
+                  className="app-theme-button"
+                  type="button"
+                  data-mode={themeMode}
+                  aria-label={`Use ${nextThemeMode} theme`}
+                  title={`Use ${nextThemeMode} theme`}
+                  onClick={() => onThemeModeChange(nextThemeMode)}
+                >
+                  <Sun className="app-theme-icon is-sun" size={18} aria-hidden="true" />
+                  <Moon className="app-theme-icon is-moon" size={18} aria-hidden="true" />
+                </button>
+              ) : null}
             </div>
           ) : null}
           {children}

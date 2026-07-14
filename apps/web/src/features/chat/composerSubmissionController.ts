@@ -1,10 +1,11 @@
 import type { ArtifactSelection } from "../../core/artifactSelection";
 import type { ImageAttachment } from "../../core/imageAttachments";
+import type { ArtifactEditRunOutcome } from "../artifacts/artifactEditController";
 
 export type ComposerSubmissionOutcome =
-  | "artifact-edit"
-  | "artifact-generation"
-  | "chat";
+  | { kind: "artifact-edit"; editOutcome: ArtifactEditRunOutcome }
+  | { kind: "artifact-generation" }
+  | { kind: "chat" };
 
 export type ComposerSubmissionPorts = {
   getSelections(): ArtifactSelection[];
@@ -12,7 +13,7 @@ export type ComposerSubmissionPorts = {
     text: string,
     selections: ArtifactSelection[],
     attachments: ImageAttachment[]
-  ): Promise<unknown>;
+  ): Promise<ArtifactEditRunOutcome>;
   startArtifactGeneration(
     text: string,
     selections: ArtifactSelection[],
@@ -35,20 +36,48 @@ export async function submitComposerMessage(
   const selections = ports.getSelections();
   if (selections.length > 0 && attachments.length > 0) {
     if (await ports.startArtifactGeneration(text, selections, attachments)) {
-      return "artifact-generation";
+      return { kind: "artifact-generation" };
     }
 
     // A stale selection must not consume the composer without producing a
     // request. Fall back to an ordinary multimodal turn instead.
     await ports.sendChat(text, attachments);
-    return "chat";
+    return { kind: "chat" };
   }
 
   if (selections.length > 0) {
-    await ports.runSourceEdit(text, selections, attachments);
-    return "artifact-edit";
+    return {
+      kind: "artifact-edit",
+      editOutcome: await ports.runSourceEdit(text, selections, attachments)
+    };
   }
 
   await ports.sendChat(text, attachments);
-  return "chat";
+  return { kind: "chat" };
+}
+
+export function getArtifactEditSubmissionError(
+  outcome: ArtifactEditRunOutcome
+): string | null {
+  switch (outcome) {
+    case "completed":
+      return null;
+    case "busy":
+      return "Another edit is already running. Your draft was restored; retry when it finishes.";
+    case "missing":
+    case "stale":
+      return "That artifact or selection is no longer available. Your draft was restored; select the region again and retry.";
+    case "invalid":
+      return "The selected region could not be edited. Your draft was restored; refresh the selection and retry.";
+    case "unsupported-attachments":
+      return "This source edit cannot use attachments. Your draft was restored; remove the attachment or start a new artifact request.";
+    case "authentication-required":
+      return "Sign in or choose a configured provider, then retry the restored edit draft.";
+    case "pending":
+      return "That artifact edit is still pending. Your draft was restored so you can retry after it finishes.";
+    case "cancelled":
+      return "The artifact edit was cancelled. Your draft was restored.";
+    case "failed":
+      return "The artifact edit failed. Your draft was restored so you can retry.";
+  }
 }

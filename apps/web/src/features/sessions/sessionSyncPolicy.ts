@@ -13,6 +13,7 @@ export type ResolveInitialSessionStateInput = {
   legacyState: SessionState | null;
   deletedSessionIds?: Iterable<string>;
   transientEmptySessionId?: string | null;
+  protectedEmptySessionIds?: Iterable<string>;
 };
 
 export function resolveInitialSessionState({
@@ -20,9 +21,11 @@ export function resolveInitialSessionState({
   serverState,
   legacyState,
   deletedSessionIds = [],
-  transientEmptySessionId
+  transientEmptySessionId,
+  protectedEmptySessionIds = []
 }: ResolveInitialSessionStateInput): SessionState {
   const deletedIds = Array.from(deletedSessionIds);
+  const protectedIds = Array.from(protectedEmptySessionIds);
   const loadedState =
     !hasPersistedMessages(serverState) &&
     legacyState &&
@@ -38,10 +41,16 @@ export function resolveInitialSessionState({
     (session) => session.id === current.activeSessionId
   );
 
-  return transientEmptySessionId &&
-    active?.id === transientEmptySessionId &&
-    isSessionEmpty(active)
-    ? mergeSyncedSessionState(current, filteredLoadedState, deletedIds)
+  return protectedIds.length > 0 ||
+    (transientEmptySessionId &&
+      active?.id === transientEmptySessionId &&
+      isSessionEmpty(active))
+    ? mergeSyncedSessionState(
+        current,
+        filteredLoadedState,
+        deletedIds,
+        protectedIds
+      )
     : filteredLoadedState;
 }
 
@@ -80,16 +89,23 @@ export type MergePolledSessionStateInput = {
   serverState: SessionState;
   clientId: string;
   deletedSessionIds?: Iterable<string>;
+  protectedEmptySessionIds?: Iterable<string>;
 };
 
 export function mergePolledSessionState({
   current,
   serverState,
   clientId,
-  deletedSessionIds = []
+  deletedSessionIds = [],
+  protectedEmptySessionIds = []
 }: MergePolledSessionStateInput): SessionState {
   const deletedIds = Array.from(deletedSessionIds);
-  const next = mergeSyncedSessionState(current, serverState, deletedIds);
+  const next = mergeSyncedSessionState(
+    current,
+    serverState,
+    deletedIds,
+    protectedEmptySessionIds
+  );
   const currentPayload = serializeSessionStateForSave(
     current,
     clientId,
