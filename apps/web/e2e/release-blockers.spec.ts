@@ -1,0 +1,654 @@
+import { expect, test, type Page, type Route } from "playwright/test";
+
+const MODELS = Array.from(
+  { length: 12 },
+  (_, index) => `e2e/model-${String(index + 1).padStart(2, "0")}`
+);
+
+const SESSION_ID = "e2e-session";
+const NOW = 1_700_000_000_000;
+const TRANSPARENT_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64"
+);
+
+type MockSessionState = {
+  activeSessionId: string;
+  sessions: Array<Record<string, unknown>>;
+};
+
+type FixtureOptions = {
+  artifactWithSessionImage?: boolean;
+  artifactWithPositionedBody?: boolean;
+};
+
+type ApiTraffic = {
+  mediaProxyRequests: number;
+  sessionFileRequests: number;
+};
+
+function initialSessionState(options: FixtureOptions = {}): MockSessionState {
+  const messages: Array<Record<string, unknown>> = [
+    {
+      id: "e2e-message",
+      role: "user",
+      content: "Browser release gate fixture"
+    }
+  ];
+  if (options.artifactWithSessionImage) {
+    messages.push({
+      id: "e2e-assistant-artifact",
+      role: "assistant",
+      content: "",
+      rawStream:
+        '<chat></chat><streamui><main><img id="e2e-session-image" alt="Tokenized session image" src="/api/files/e2e-image/content?token=e2e-token"></main></streamui>',
+      hasStreamUi: true,
+      streamUiComplete: true,
+      status: "complete",
+      generationOutcome: "complete"
+    });
+  }
+  if (options.artifactWithPositionedBody) {
+    messages.push({
+      id: "e2e-assistant-positioned-body",
+      role: "assistant",
+      content: "",
+      rawStream:
+        '<chat></chat><streamui><style>body{position:relative!important;height:0!important;min-height:0!important;padding:0!important}#positioned-content{position:absolute;inset:0 auto auto 0;width:120px;height:472px;background:#16a34a}</style><div id="positioned-content" aria-label="Positioned content"></div></streamui>',
+      hasStreamUi: true,
+      streamUiComplete: true,
+      status: "complete",
+      generationOutcome: "complete"
+    });
+  }
+
+  return {
+    activeSessionId: SESSION_ID,
+    sessions: [
+      {
+        id: SESSION_ID,
+        title: "Release gate",
+        createdAt: NOW,
+        updatedAt: NOW,
+        model: MODELS[0],
+        messages,
+        files: []
+      }
+    ]
+  };
+}
+
+function runtimeSettings() {
+  return {
+    api: {
+      defaults: {
+        providerId: "openrouter",
+        model: MODELS[0],
+        modelOptions: MODELS
+      },
+      environmentKeys: []
+    },
+    cloud: {
+      enabled: false,
+      authRequired: false,
+      billingEnabled: false,
+      managedProviderEnabled: false,
+      brandName: "ChatHTML"
+    },
+    search: {
+      environmentKeys: [],
+      defaultProvider: "none",
+      defaultBrowserEngine: "fetch",
+      providers: [],
+      browserEngines: []
+    }
+  };
+}
+
+async function fulfillJson(route: Route, body: unknown, status = 200) {
+  await route.fulfill({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify(body)
+  });
+}
+
+async function installDeterministicApi(
+  page: Page,
+  options: FixtureOptions = {}
+): Promise<ApiTraffic> {
+  let sessionState = initialSessionState(options);
+  const traffic: ApiTraffic = {
+    mediaProxyRequests: 0,
+    sessionFileRequests: 0
+  };
+
+  await page.addInitScript((models) => {
+    Object.defineProperty(window.navigator, "sendBeacon", {
+      configurable: true,
+      value: () => true
+    });
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      "streamui.apiSettings.v1",
+      JSON.stringify({
+        providerId: "openrouter",
+        model: models[0],
+        modelOptions: models
+      })
+    );
+    window.localStorage.setItem("streamui.theme.v1", "day");
+    window.localStorage.setItem("streamui.accountMode.v1", "local");
+  }, MODELS);
+
+  await page.context().route("**/*", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+
+    if (!path.startsWith("/api/")) {
+      await route.continue();
+      return;
+    }
+
+    if (path === "/api/settings") {
+      await fulfillJson(route, runtimeSettings());
+      return;
+    }
+
+    if (path === "/api/sessions/index") {
+      await fulfillJson(route, {
+        activeSessionId: sessionState.activeSessionId,
+        sessions: sessionState.sessions.map((session) => ({
+          id: session.id,
+          title: session.title
+        }))
+      });
+      return;
+    }
+
+    if (path === "/api/sessions") {
+      if (request.method() === "PUT") {
+        const payload = request.postDataJSON() as MockSessionState & {
+          saveRevision?: number;
+        };
+        sessionState = {
+          activeSessionId: payload.activeSessionId,
+          sessions: payload.sessions
+        };
+        await fulfillJson(route, {
+          applied: true,
+          currentSaveRevision: payload.saveRevision
+        });
+        return;
+      }
+
+      await fulfillJson(route, sessionState);
+      return;
+    }
+
+    if (path === "/api/export-resource") {
+      await route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: TRANSPARENT_PNG
+      });
+      return;
+    }
+
+    if (path === "/api/files/e2e-image/content") {
+      traffic.sessionFileRequests += 1;
+      if (url.searchParams.get("token") !== "e2e-token") {
+        await fulfillJson(route, { error: "Invalid fixture token" }, 403);
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: TRANSPARENT_PNG
+      });
+      return;
+    }
+
+    if (path === "/api/media-image") {
+      traffic.mediaProxyRequests += 1;
+      await fulfillJson(route, { error: "Media proxy fallback is unexpected" }, 500);
+      return;
+    }
+
+    if (path === "/api/bug-reports") {
+      await fulfillJson(route, { id: "e2e-bug-report" }, 201);
+      return;
+    }
+
+    await fulfillJson(route, { error: `Unexpected test request: ${path}` }, 404);
+  });
+
+  return traffic;
+}
+
+async function openApp(
+  page: Page,
+  viewport: { width: number; height: number },
+  options: FixtureOptions = {}
+): Promise<ApiTraffic> {
+  await page.setViewportSize(viewport);
+  const traffic = await installDeterministicApi(page, options);
+  await page.goto("/");
+  await expect(page.getByPlaceholder("Send a message...")).toBeVisible();
+  await expect(
+    page.getByRole("paragraph").filter({
+      hasText: /^Browser release gate fixture$/
+    })
+  ).toBeVisible();
+  return traffic;
+}
+
+async function capturePagePixel(
+  page: Page,
+  point: { x: number; y: number }
+): Promise<{ height: number; rgba: number[]; width: number }> {
+  return page.evaluate(async ({ x, y }) => {
+    const { captureCurrentPageScreenshotBlob } = await import(
+      "/src/core/pageScreenshot.ts"
+    );
+    const blob = await captureCurrentPageScreenshotBlob();
+    const url = URL.createObjectURL(blob);
+    try {
+      const image = new Image();
+      const loaded = new Promise<void>((resolve, reject) => {
+        image.addEventListener("load", () => resolve(), { once: true });
+        image.addEventListener(
+          "error",
+          () => reject(new Error("Could not decode captured screenshot.")),
+          { once: true }
+        );
+      });
+      image.src = url;
+      await loaded;
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        throw new Error("Could not inspect captured screenshot pixels.");
+      }
+      context.drawImage(image, 0, 0);
+      const sampleX = Math.min(
+        canvas.width - 1,
+        Math.max(0, Math.round(x * (canvas.width / window.innerWidth)))
+      );
+      const sampleY = Math.min(
+        canvas.height - 1,
+        Math.max(0, Math.round(y * (canvas.height / window.innerHeight)))
+      );
+      return {
+        height: canvas.height,
+        rgba: Array.from(context.getImageData(sampleX, sampleY, 1, 1).data),
+        width: canvas.width
+      };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }, point);
+}
+
+test("same-origin screenshot images retain their real color", async ({ page }) => {
+  let exportProxyRequests = 0;
+  await page.context().route("**/api/export-resource**", async (route) => {
+    exportProxyRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: TRANSPARENT_PNG
+    });
+  });
+  await page.setViewportSize({ width: 240, height: 180 });
+  await page.goto("/e2e/capture-fixture.html");
+  await page.evaluate(async () => {
+    document.body.innerHTML =
+      '<img id="same-origin-color" alt="Solid red fixture" src="/e2e/fixtures/solid-red.svg">';
+    const image = document.querySelector<HTMLImageElement>("#same-origin-color");
+    if (!image) {
+      throw new Error("Missing same-origin image fixture.");
+    }
+    image.style.cssText =
+      "position:absolute;left:24px;top:24px;width:80px;height:80px;display:block";
+    if (!image.complete || !image.naturalWidth) {
+      await new Promise<void>((resolve, reject) => {
+        image.addEventListener("load", () => resolve(), { once: true });
+        image.addEventListener("error", () => reject(new Error("Fixture failed to load.")), {
+          once: true
+        });
+      });
+    }
+  });
+
+  const capture = await capturePagePixel(page, { x: 64, y: 64 });
+  expect(capture.rgba[0]).toBeGreaterThan(220);
+  expect(capture.rgba[1]).toBeLessThan(70);
+  expect(capture.rgba[2]).toBeLessThan(100);
+  expect(capture.rgba[3]).toBe(255);
+  expect(exportProxyRequests).toBe(0);
+});
+
+test("scrolled iframe screenshot overlay captures the visible band", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 240, height: 180 });
+  await page.goto("/e2e/capture-fixture.html");
+  await page.evaluate(async () => {
+    const iframe = document.createElement("iframe");
+    iframe.id = "scrolled-capture-frame";
+    iframe.style.cssText =
+      "position:absolute;left:24px;top:24px;width:120px;height:100px;border:0";
+    iframe.srcdoc = `<!doctype html><html><head><style>
+      html,body{margin:0;width:120px;height:300px;overflow:auto}
+      .band{width:120px;height:100px}
+    </style></head><body>
+      <div class="band" style="background:rgb(240,20,20)"></div>
+      <div class="band" style="background:rgb(20,200,80)"></div>
+      <div class="band" style="background:rgb(20,40,230)"></div>
+    </body></html>`;
+    const loaded = new Promise<void>((resolve, reject) => {
+      iframe.addEventListener("load", () => resolve(), { once: true });
+      iframe.addEventListener("error", () => reject(new Error("Iframe failed to load.")), {
+        once: true
+      });
+    });
+    document.body.appendChild(iframe);
+    await loaded;
+    iframe.contentWindow?.scrollTo(0, 100);
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+    if (iframe.contentWindow?.scrollY !== 100) {
+      throw new Error(`Expected iframe scrollY 100, received ${iframe.contentWindow?.scrollY}.`);
+    }
+  });
+
+  const capture = await capturePagePixel(page, { x: 84, y: 74 });
+  expect(capture.rgba[0]).toBeLessThan(70);
+  expect(capture.rgba[1]).toBeGreaterThan(170);
+  expect(capture.rgba[2]).toBeLessThan(120);
+  expect(capture.rgba[3]).toBe(255);
+});
+
+test("mobile model submenu stays inside a 320x568 viewport", async ({ page }) => {
+  const viewport = { width: 320, height: 568 };
+  await openApp(page, viewport);
+
+  await page.getByRole("button", { name: "Choose model" }).click();
+  const controls = page.getByRole("menu", { name: "Model controls" });
+  await expect(controls).toBeVisible();
+  await controls.getByRole("menuitem").focus();
+  await page.keyboard.press("Enter");
+
+  const submenu = page.getByRole("listbox", { name: "Choose model" });
+  await expect(submenu).toBeVisible();
+  await expect(submenu.getByPlaceholder("Search models")).toBeFocused();
+
+  const bounds = await submenu.boundingBox();
+  expect(bounds, "model submenu should have layout bounds").not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+  expect(bounds!.y).toBeGreaterThanOrEqual(-1);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height + 1);
+});
+
+test("SettingsSelect portal remains keyboard-operable inside the modal", async ({
+  page
+}) => {
+  await openApp(page, { width: 1024, height: 768 });
+
+  await page.getByRole("button", { name: "Open personal settings" }).click();
+  const personalDialog = page.getByRole("dialog", { name: "Personal" });
+  await expect(personalDialog).toBeVisible();
+  await personalDialog.getByRole("button", { name: "Providers" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Providers" });
+  await expect(dialog).toBeVisible();
+  const trigger = dialog.getByRole("button", {
+    name: "Provider",
+    exact: true
+  });
+  await trigger.focus();
+  await page.keyboard.press("ArrowDown");
+
+  const listbox = page.getByRole("listbox", { name: "Provider" });
+  await expect(listbox).toBeVisible();
+  await expect(listbox.getByRole("option", { selected: true })).toBeFocused();
+  expect(
+    await page.locator(":focus").evaluate((element) =>
+      Boolean(element.closest("[data-modal-focus-portal]"))
+    )
+  ).toBe(true);
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(listbox).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toContainText("OpenAI");
+  expect(
+    await page.locator(":focus").evaluate((element) =>
+      Boolean(element.closest('[role="dialog"][aria-modal="true"]'))
+    )
+  ).toBe(true);
+});
+
+test("mobile drawer closes with Escape and its real backdrop", async ({ page }) => {
+  const viewport = { width: 320, height: 568 };
+  await openApp(page, viewport);
+
+  const openButton = page.getByRole("button", { name: "Expand sidebar" });
+  await openButton.click();
+  const drawer = page.getByRole("dialog", { name: "Session history" });
+  const backdrop = page.getByRole("button", { name: "Close session drawer" });
+  await expect(drawer).toBeVisible();
+  await expect(backdrop).toBeVisible();
+  await expect(page.locator(".chat-workspace")).toHaveAttribute("inert", "");
+  await expect(drawer.getByRole("button", { name: "Collapse sidebar" })).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+  await expect(backdrop).toBeHidden();
+  await expect(page.locator(".chat-workspace")).not.toHaveAttribute("inert", "");
+  await expect(openButton).toBeFocused();
+
+  await openButton.click();
+  await expect(backdrop).toBeVisible();
+  await page.mouse.click(viewport.width - 8, Math.round(viewport.height / 2));
+  await expect(drawer).toBeHidden();
+  await expect(backdrop).toBeHidden();
+  await expect(openButton).toBeFocused();
+});
+
+test("opaque artifact preview loads a tokenized same-origin session image", async ({
+  page
+}) => {
+  const traffic = await openApp(
+    page,
+    { width: 1024, height: 768 },
+    { artifactWithSessionImage: true }
+  );
+
+  const preview = page.frameLocator(
+    'iframe[title="ChatHTML artifact preview"]'
+  );
+  const image = preview.getByRole("img", { name: "Tokenized session image" });
+  await expect(image).toBeVisible();
+  await expect
+    .poll(() =>
+      image.evaluate((element) => {
+        const imageElement = element as HTMLImageElement;
+        return {
+          complete: imageElement.complete,
+          failed: imageElement.dataset.streamuiImageFailed ?? "",
+          naturalWidth: imageElement.naturalWidth,
+          proxied: imageElement.dataset.streamuiImageProxied ?? "",
+          source: imageElement.getAttribute("src")
+        };
+      })
+    )
+    .toEqual({
+      complete: true,
+      failed: "",
+      naturalWidth: 1,
+      proxied: "",
+      source: "/api/files/e2e-image/content?token=e2e-token"
+    });
+
+  expect(traffic.sessionFileRequests).toBeGreaterThan(0);
+  expect(traffic.mediaProxyRequests).toBe(0);
+});
+
+test("positioned-body absolute content reports its full artifact height", async ({
+  page
+}) => {
+  await openApp(
+    page,
+    { width: 1024, height: 768 },
+    { artifactWithPositionedBody: true }
+  );
+
+  const preview = page.locator('iframe[title="ChatHTML artifact preview"]');
+  await expect(preview).toBeVisible();
+  await expect
+    .poll(() =>
+      preview.evaluate((element) =>
+        Number.parseFloat((element as HTMLIFrameElement).style.height)
+      )
+    )
+    .toBeGreaterThanOrEqual(490);
+  const measuredHeight = await preview.evaluate((element) =>
+    Number.parseFloat((element as HTMLIFrameElement).style.height)
+  );
+  expect(measuredHeight).toBeLessThanOrEqual(510);
+});
+
+test("Bug Report capture opens, reports progress, and attaches a screenshot", async ({
+  page
+}) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  const nonActionablePageErrors = new Set([
+    "ResizeObserver loop completed with undelivered notifications."
+  ]);
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      consoleErrors.push(message.text());
+    }
+  });
+  page.on("pageerror", (error) => {
+    if (!nonActionablePageErrors.has(error.message)) {
+      pageErrors.push(error.message);
+    }
+  });
+
+  await openApp(page, { width: 1024, height: 768 });
+  await page.addStyleTag({
+    content: `
+      .bug-report-overlay[data-screenshot-exclude] {
+        background: rgb(255, 0, 255) !important;
+      }
+      .bug-report-overlay[data-screenshot-exclude] .bug-report-panel {
+        background: rgb(255, 0, 255) !important;
+      }
+    `
+  });
+  await page.evaluate(() => {
+    const state = window as typeof window & { __sawCaptureProgress?: boolean };
+    state.__sawCaptureProgress = false;
+    const observer = new MutationObserver(() => {
+      if (
+        document.querySelector(".bug-report-capture-status") ||
+        document.querySelector('.bug-report-panel[aria-busy="true"]')
+      ) {
+        state.__sawCaptureProgress = true;
+      }
+    });
+    observer.observe(document.body, {
+      attributes: true,
+      childList: true,
+      subtree: true
+    });
+  });
+
+  await page.getByRole("button", { name: "Bug Report" }).click();
+  const dialog = page.getByRole("dialog", { name: "Bug Report" });
+  await expect(dialog).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Boolean(
+          (window as typeof window & { __sawCaptureProgress?: boolean })
+            .__sawCaptureProgress
+        )
+      )
+    )
+    .toBe(true);
+
+  const screenshot = dialog.getByRole("img", { name: "page-screenshot.png" });
+  await expect(screenshot).toBeVisible({ timeout: 30_000 });
+  await expect(dialog.getByText("Screenshot", { exact: true })).toBeVisible();
+  await expect(page.locator(".bug-report-overlay")).toHaveCSS(
+    "background-color",
+    "rgb(255, 0, 255)"
+  );
+  await expect(
+    dialog.getByText(
+      "Could not capture the page screenshot. You can still add images manually."
+    )
+  ).toHaveCount(0);
+
+  const screenshotPixels = await screenshot.evaluate(async (element) => {
+    if (!(element instanceof HTMLImageElement)) {
+      throw new Error("Expected the captured screenshot to be an image.");
+    }
+    if (!element.complete || !element.naturalWidth) {
+      await element.decode();
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = element.naturalWidth;
+    canvas.height = element.naturalHeight;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Could not inspect bug report screenshot pixels.");
+    }
+    context.drawImage(element, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let magenta = 0;
+    let sampled = 0;
+    for (let y = 0; y < canvas.height; y += 8) {
+      for (let x = 0; x < canvas.width; x += 8) {
+        const index = (y * canvas.width + x) * 4;
+        sampled += 1;
+        if (
+          pixels[index] > 245 &&
+          pixels[index + 1] < 10 &&
+          pixels[index + 2] > 245 &&
+          pixels[index + 3] > 245
+        ) {
+          magenta += 1;
+        }
+      }
+    }
+    const centerIndex =
+      (Math.floor(canvas.height / 2) * canvas.width +
+        Math.floor(canvas.width / 2)) *
+      4;
+    return {
+      center: Array.from(pixels.slice(centerIndex, centerIndex + 4)),
+      magentaRatio: magenta / sampled
+    };
+  });
+  expect(screenshotPixels.magentaRatio).toBeLessThan(0.0001);
+  expect(
+    screenshotPixels.center[0] > 245 &&
+      screenshotPixels.center[1] < 10 &&
+      screenshotPixels.center[2] > 245
+  ).toBe(false);
+
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});

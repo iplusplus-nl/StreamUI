@@ -17,6 +17,7 @@
     "build:webdemo": "npm --workspace @chathtml/webdemo run build",
     "preview": "npm --workspace @chathtml/web run preview",
     "test": "npm --workspace @chathtml/web run test",
+    "test:e2e": "npm --workspace @chathtml/web run test:e2e",
     "test:webdemo": "npm --workspace @chathtml/webdemo run test",
     "wait:deploy-idle": "node scripts/wait-for-deploy-idle.mjs"
   }

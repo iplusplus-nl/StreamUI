@@ -17,6 +17,39 @@ export default defineConfig({
   define: {
     __APP_COMMIT__: JSON.stringify(appCommit)
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalizedId = id.replace(/\\/g, "/");
+          if (!normalizedId.includes("/node_modules/")) {
+            return undefined;
+          }
+          if (normalizedId.includes("/node_modules/@assistant-ui/")) {
+            return "assistant-ui";
+          }
+          if (
+            /\/node_modules\/(?:react|react-dom|scheduler)\//.test(
+              normalizedId
+            )
+          ) {
+            return "react-vendor";
+          }
+          if (normalizedId.includes("/node_modules/lucide-react/")) {
+            return "icons";
+          }
+          if (
+            /\/node_modules\/(?:dom-to-svg|postcss|postcss-value-parser|source-map-js)\//.test(
+              normalizedId
+            )
+          ) {
+            return "artifact-export";
+          }
+          return "vendor";
+        }
+      }
+    }
+  },
   server: {
     port: 5173,
     proxy: {
