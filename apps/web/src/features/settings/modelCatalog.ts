@@ -3,6 +3,10 @@ import {
   type ApiSettings
 } from "../../core/apiSettings";
 import { apiUrl } from "../../api/appUrl";
+import {
+  fetchBrowserDirectModelCatalog,
+  usesBrowserDirectProvider
+} from "../providers/browserDirectProvider";
 
 type ModelsResponse = {
   models?: unknown;
@@ -12,6 +16,10 @@ type ModelsResponse = {
 export async function fetchModelCatalog(
   apiSettings: ApiSettings
 ): Promise<string[]> {
+  if (usesBrowserDirectProvider(apiSettings)) {
+    return fetchBrowserDirectModelCatalog(apiSettings);
+  }
+
   const response = await fetch(apiUrl("/models"), {
     method: "POST",
     headers: {

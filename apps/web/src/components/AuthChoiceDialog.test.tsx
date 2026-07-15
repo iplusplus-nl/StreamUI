@@ -18,12 +18,12 @@ describe("authentication choice dialog", () => {
 
     assert.match(markup, /Choose how to use ChatHTML/);
     assert.match(markup, />Sign in</);
-    assert.match(markup, />Continue locally</);
-    assert.match(markup, /OpenRouter, OpenAI, local/);
+    assert.match(markup, />Use your own API key</);
+    assert.match(markup, /never pass[\s\S]*ChatHTML server/);
     assert.doesNotMatch(markup, /accessToken|code_verifier/);
   });
 
-  it("does not offer a local bypass when account isolation is required", () => {
+  it("offers browser-direct BYO mode when cloud account isolation is required", () => {
     const markup = renderToStaticMarkup(
       <AuthChoiceDialogContent
         required
@@ -33,8 +33,10 @@ describe("authentication choice dialog", () => {
       />
     );
 
-    assert.match(markup, /Sign in to ChatHTML/);
-    assert.match(markup, /private to you/);
-    assert.doesNotMatch(markup, /Continue locally|auth-choice-close/);
+    assert.match(markup, /Choose how to use ChatHTML/);
+    assert.match(markup, />Sign in</);
+    assert.match(markup, />Use your own API key</);
+    assert.match(markup, /provider requests stay in this browser/);
+    assert.doesNotMatch(markup, /auth-choice-close/);
   });
 });

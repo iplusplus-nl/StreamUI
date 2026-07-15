@@ -84,6 +84,48 @@ describe("artifact edit API", () => {
     assert.deepEqual(JSON.parse(String(calls[0].init?.body)), request);
   });
 
+  it("sends manual-key artifact edits directly to the provider", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const result = await requestArtifactEdit(
+      {
+        source,
+        prompt: "Change the copy",
+        references: [],
+        apiSettings: {
+          providerId: "openrouter",
+          apiKeySource: "manual",
+          apiKey: "sk-private",
+          model: "vendor/model"
+        }
+      },
+      "client-1",
+      new AbortController().signal,
+      async (input, init) => {
+        calls.push({ input, init });
+        return Response.json({
+          output: [
+            {
+              content: [
+                {
+                  type: "output_text",
+                  text: "<streamui><p>After</p></streamui>"
+                }
+              ]
+            }
+          ]
+        });
+      }
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(String(calls[0].input), "https://openrouter.ai/api/v1/responses");
+    assert.equal(
+      (calls[0].init?.headers as Record<string, string>).Authorization,
+      "Bearer sk-private"
+    );
+    assert.doesNotMatch(String(calls[0].init?.body), /sk-private/);
+    assert.equal(result.rawStream, updated);
+  });
+
   it("rejects unchanged source and sanitized HTTP failures", async () => {
     const unchangedFetch: typeof fetch = async () =>
       Response.json({ rawStream: ` ${source} ` });

@@ -60,6 +60,7 @@ type ApiSettingsSectionProps = {
   settings: ApiSettings;
   runtimeSettings: RuntimeSettingsSummary | null;
   cloudEnabled: boolean;
+  browserOnly?: boolean;
   isModelImportLoading: boolean;
   onSettingsChange(patch: Partial<ApiSettings>): void;
   onProviderChange(providerId: ApiProviderId): void;
@@ -72,6 +73,7 @@ export function ApiSettingsSection({
   settings,
   runtimeSettings,
   cloudEnabled,
+  browserOnly = false,
   isModelImportLoading,
   onSettingsChange,
   onProviderChange,
@@ -89,12 +91,15 @@ export function ApiSettingsSection({
   const isManagedProvider = settings.apiKeySource === "managed";
   const apiKeySourceOptions = isManagedProvider
     ? [{ value: "managed" as ApiKeySource, label: "Managed by ChatHTML Cloud" }]
-    : API_KEY_SOURCE_OPTIONS;
+    : browserOnly
+      ? API_KEY_SOURCE_OPTIONS.filter((option) => option.value === "manual")
+      : API_KEY_SOURCE_OPTIONS;
   const providerPresets = API_PROVIDER_PRESETS.filter(
     (preset) =>
-      preset.apiKeySource !== "managed" ||
-      cloudEnabled ||
-      preset.id === settings.providerId
+      (!browserOnly || preset.apiKeySource !== "managed") &&
+      (preset.apiKeySource !== "managed" ||
+        cloudEnabled ||
+        preset.id === settings.providerId)
   );
   const selectableModels = getSelectableModelOptions(settings);
   const allowsManualModelId =
@@ -113,6 +118,13 @@ export function ApiSettingsSection({
 
   return (
     <>
+      {browserOnly ? (
+        <div className="settings-provider-guidance" role="status">
+          Browser-direct mode: your key is stored on this device. Model and
+          model-list requests go straight to the provider and cannot fall back
+          through the ChatHTML server.
+        </div>
+      ) : null}
       <div className="settings-row">
         <span>Provider</span>
         <SettingsSelect
@@ -156,7 +168,7 @@ export function ApiSettingsSection({
                 ...option,
                 description:
                   option.value === "manual"
-                    ? "Store a provider key in this browser"
+                    ? "Send requests directly from this browser"
                     : option.value === "environment"
                       ? "Read the key from the ChatHTML server"
                       : "Use the authenticated managed service"

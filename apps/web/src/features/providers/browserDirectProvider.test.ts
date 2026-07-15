@@ -1,0 +1,165 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { normalizeApiSettings } from "../../core/apiSettings";
+import {
+  fetchBrowserDirectModelCatalog,
+  startBrowserDirectChatRun,
+  usesBrowserDirectProvider
+} from "./browserDirectProvider";
+
+function manualSettings() {
+  return normalizeApiSettings({
+    providerId: "openrouter",
+    providerName: "OpenRouter",
+    baseUrl: "https://provider.example/v1",
+    modelsEndpoint: "https://provider.example/v1/models",
+    apiKeySource: "manual",
+    apiKey: "sk-private-browser-key",
+    model: "vendor/model",
+    reasoningEffort: "none"
+  });
+}
+
+describe("browser-direct provider transport", () => {
+  it("recognizes manual keys as browser-direct only", () => {
+    assert.equal(usesBrowserDirectProvider(manualSettings()), true);
+    assert.equal(
+      usesBrowserDirectProvider(
+        normalizeApiSettings({
+          ...manualSettings(),
+          apiKeySource: "environment"
+        })
+      ),
+      false
+    );
+  });
+
+  it("streams chat from the provider without putting the key in the body", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      calls.push({ input, init });
+      return new Response(
+        [
+          'data: {"type":"response.output_text.delta","delta":"<chat>Hello"}',
+          "",
+          'data: {"type":"response.output_text.delta","delta":"</chat>"}',
+          "",
+          'data: {"type":"response.completed","response":{"output":[]}}',
+          ""
+        ].join("\n"),
+        { headers: { "Content-Type": "text/event-stream" } }
+      );
+    };
+
+    const response = await startBrowserDirectChatRun(
+      {
+        runId: "run-direct",
+        messages: [{ role: "user", content: "Hello" }],
+        files: [],
+        apiSettings: manualSettings()
+      },
+      "client-ignored",
+      new AbortController().signal,
+      fetchImpl
+    );
+
+    assert.equal(calls.length, 1);
+    assert.equal(String(calls[0].input), "https://provider.example/v1/responses");
+    assert.equal(calls[0].init?.method, "POST");
+    assert.equal(calls[0].init?.credentials, "omit");
+    assert.equal(calls[0].init?.redirect, "error");
+    assert.equal(calls[0].init?.referrerPolicy, "no-referrer");
+    const headers = calls[0].init?.headers as Record<string, string>;
+    assert.equal(headers.Authorization, "Bearer sk-private-browser-key");
+    const body = String(calls[0].init?.body);
+    assert.doesNotMatch(body, /sk-private-browser-key/);
+    assert.match(body, /vendor\/model/);
+
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(
+      events.map((event) => [event.type, event.text, event.status]),
+      [
+        ["content", "<chat>Hello", undefined],
+        ["content", "</chat>", undefined],
+        ["done", undefined, "complete"]
+      ]
+    );
+    assert.equal(events.every((event) => event.runId === "run-direct"), true);
+  });
+
+  it("fetches models directly with the key only in provider authorization", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const models = await fetchBrowserDirectModelCatalog(
+      manualSettings(),
+      async (input, init) => {
+        calls.push({ input, init });
+        return Response.json({
+          data: [{ id: "vendor/a" }, { id: "vendor/b" }]
+        });
+      }
+    );
+
+    assert.deepEqual(models, ["vendor/a", "vendor/b"]);
+    assert.equal(String(calls[0].input), "https://provider.example/v1/models");
+    assert.equal(calls[0].init?.method, "GET");
+    assert.equal(
+      (calls[0].init?.headers as Record<string, string>).Authorization,
+      "Bearer sk-private-browser-key"
+    );
+  });
+
+  it("does not duplicate done-only provider text at completion", async () => {
+    const response = await startBrowserDirectChatRun(
+      {
+        runId: "run-done-only",
+        messages: [{ role: "user", content: "Hello" }],
+        apiSettings: manualSettings()
+      },
+      "client",
+      new AbortController().signal,
+      async () =>
+        new Response(
+          [
+            'data: {"type":"response.output_text.done","text":"Only once"}',
+            "",
+            'data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":"Only once"}]}]}}',
+            ""
+          ].join("\n")
+        )
+    );
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; text?: string });
+    assert.deepEqual(
+      events.filter((event) => event.type === "content").map((event) => event.text),
+      ["Only once"]
+    );
+  });
+
+  it("refuses to send a key over remote plain HTTP", async () => {
+    let called = false;
+    await assert.rejects(
+      startBrowserDirectChatRun(
+        {
+          messages: [{ role: "user", content: "Hello" }],
+          apiSettings: normalizeApiSettings({
+            ...manualSettings(),
+            baseUrl: "http://provider.example/v1"
+          })
+        },
+        "client",
+        new AbortController().signal,
+        async () => {
+          called = true;
+          return Response.json({});
+        }
+      ),
+      /must use HTTPS/
+    );
+    assert.equal(called, false);
+  });
+});

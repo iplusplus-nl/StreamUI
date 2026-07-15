@@ -56,6 +56,7 @@ export type UseChatRunCancellationOptions = {
   cancelActiveArtifactEdit(): boolean;
   cancelActiveVisualRepair(): boolean;
   getActiveVisualRepairRun(): ChatRunCancellationTarget | undefined;
+  browserDirect?: boolean;
   warn?(message: string, error: unknown): void;
 };
 
@@ -74,6 +75,7 @@ export function useChatRunCancellation({
   cancelActiveArtifactEdit,
   cancelActiveVisualRepair,
   getActiveVisualRepairRun,
+  browserDirect = false,
   warn = (message, error) => console.warn(message, error)
 }: UseChatRunCancellationOptions): () => Promise<void> {
   const settle = useCallback<ChatRunCancellationControllerOptions["settle"]>(
@@ -180,6 +182,13 @@ export function useChatRunCancellation({
       return;
     }
 
+    if (browserDirect) {
+      targets.forEach((target) => {
+        runConnectionsRef.current.get(target.runId)?.abort();
+      });
+      return;
+    }
+
     targets.forEach((target) => cancelledRunIdsRef.current.add(target.runId));
     try {
       await Promise.all(targets.map((target) => controller.cancel(target)));
@@ -190,11 +199,13 @@ export function useChatRunCancellation({
     }
   }, [
     activeSessionIdRef,
+    browserDirect,
     cancelActiveArtifactEdit,
     cancelActiveVisualRepair,
     cancelledRunIdsRef,
     controller,
     getActiveVisualRepairRun,
+    runConnectionsRef,
     sessionStateRef
   ]);
 }

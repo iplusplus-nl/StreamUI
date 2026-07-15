@@ -29,7 +29,7 @@ STREAMUI_RETRIEVAL=true
 STREAMUI_SEARCH_PROVIDER=auto
 ```
 
-The default model is `google/gemini-3.1-pro-preview` when `OPENROUTER_MODEL` is not set. Reasoning effort defaults to `low` to keep the reasoning disclosure responsive. ChatHTML calls OpenRouter's Responses API directly and gives the model native tools for retrieval, session files, and memory updates before continuing the same response. The backend loads `.env` from the repo root and can also read an overriding `apps/web/.env`.
+The default model is `google/gemini-3.1-pro-preview` when `OPENROUTER_MODEL` is not set. Reasoning effort defaults to `low` to keep the reasoning disclosure responsive. In server-managed mode, the ChatHTML backend calls OpenRouter's Responses API and gives the model native tools for retrieval, session files, and memory updates before continuing the same response. The backend loads `.env` from the repo root and can also read an overriding `apps/web/.env`.
 
 ## Run
 
@@ -39,7 +39,7 @@ npm run dev
 
 The root script delegates to `@chathtml/web`. The Vite app runs at `http://127.0.0.1:5173`, and the Express proxy runs at `http://127.0.0.1:8787`.
 
-The browser calls the local backend at `POST /api/chat`; the backend reads `OPENROUTER_API_KEY` from `.env` and forwards the request to OpenRouter's `/responses` endpoint. The API key is never sent to the browser. The backend streams newline-delimited JSON events with separate `reasoning`, `content`, and memory-update chunks.
+Environment and managed credentials use `POST /api/chat`; the backend reads the key from server configuration and never sends it to the browser. A user-selected Manual key uses a separate browser-direct transport instead: chat, model-list, and artifact-edit requests go from the browser to the configured provider and cannot fall back through the ChatHTML server. Manual keys are stored in that browser's local storage, so this mode requires a provider with browser CORS support. Plain HTTP provider URLs are rejected except for loopback development endpoints.
 
 ## HTML Hosting
 
@@ -56,6 +56,9 @@ web app only after those proxy routes are configured.
 This repository is the single public source tree for ChatHTML. Hosted
 production deployments require an account by default; local development stays
 account-optional unless `CHATHTML_AUTH_REQUIRED=true` is configured.
+The required-account dialog also offers a signed-out “Use your own API key”
+path. That path keeps its workspace in a separate browser-only storage key and
+does not call the authenticated session API.
 
 The optional hosted backend can report `cloud.enabled: true` from
 `GET /api/settings` to expose account, billing, and managed-provider surfaces.
@@ -74,7 +77,8 @@ Chat sessions are keyed by the immutable authenticated user id. Session,
 upload, model-tool, active-run, run-event, and cancellation operations all use
 that server-derived key; a browser-supplied client id is never trusted for
 ownership. Hosted account mode also disables and clears browser-side session
-preview and legacy-session caches.
+preview and legacy-session caches. Signed-out browser-direct mode starts with a
+new, separate local workspace; it does not import the legacy shared cache.
 
 PostgreSQL is recommended for production. Updates are atomic, updates for the
 same user are serialized with a row lock, and different users can read and

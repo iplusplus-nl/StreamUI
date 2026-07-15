@@ -359,6 +359,7 @@ export function SettingsDialog({
                 settings={draftApiSettings}
                 runtimeSettings={runtimeSettings}
                 cloudEnabled={cloudEnabled}
+                browserOnly={accountMode === "local" && !authUser}
                 isModelImportLoading={isModelImportLoading}
                 onSettingsChange={updateApiDraft}
                 onProviderChange={(providerId: ApiProviderId) =>

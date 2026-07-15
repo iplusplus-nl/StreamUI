@@ -55,9 +55,23 @@ import {
 } from "./features/chat/composerSubmissionController";
 import {
   clearLegacyLocalSessions,
+  loadLegacyLocalSessionState,
   loadSessionClientId,
   saveCachedSessionListPreview
 } from "./features/sessions/sessionPersistence";
+import {
+  deleteSessionFile,
+  requestSessions,
+  saveSerializedSessionState,
+  saveSessionStateOnPageExit,
+  uploadSessionFile
+} from "./features/sessions/sessionApi";
+import {
+  createBrowserLocalSessionFile,
+  flushBrowserLocalWorkspace,
+  requestBrowserLocalWorkspace,
+  saveBrowserLocalWorkspace
+} from "./features/sessions/browserLocalWorkspace";
 import { useSessionSync } from "./features/sessions/useSessionSync";
 import { useSessionSave } from "./features/sessions/useSessionSave";
 import { useSessionIndex } from "./features/sessions/useSessionIndex";
@@ -73,6 +87,7 @@ import {
   useStaleArtifactEditSweep
 } from "./features/sessions/useSessionMaintenance";
 import { useFreshChatRunSender } from "./features/chat/useFreshChatRunSender";
+import { usesBrowserDirectProvider } from "./features/providers/browserDirectProvider";
 import { useRestoredChatRuns } from "./features/chat/useRestoredChatRuns";
 import { useArtifactSelections } from "./features/artifacts/useArtifactSelections";
 import { isArtifactSelectionTargetActive } from "./features/artifacts/artifactSelectionController";
@@ -142,11 +157,18 @@ export default function App() {
     refresh: refreshAuthSummary,
     logout: logoutCloudAccount
   } = useCloudAuthController({ cloudEnabled });
+  const [accountMode, setAccountMode] = useState<AccountMode>(loadAccountMode);
+  const browserLocalWorkspace =
+    accountMode === "local" &&
+    !authenticatedUser &&
+    apiSettings.apiKeySource === "manual";
+  const browserDirectProvider = usesBrowserDirectProvider(apiSettings);
   const sessionAccessEnabled = Boolean(
     runtimeSettings &&
-      (!authRequired || (authLoaded && authenticatedUser))
+      (browserLocalWorkspace ||
+        !authRequired ||
+        (authLoaded && authenticatedUser))
   );
-  const [accountMode, setAccountMode] = useState<AccountMode>(loadAccountMode);
   const [isAuthChoiceOpen, setIsAuthChoiceOpen] = useState(false);
   const [providerSettingsRequestVersion, setProviderSettingsRequestVersion] =
     useState(0);
@@ -187,6 +209,58 @@ export default function App() {
     isActiveSessionSending
   } = useSessionViewModel(sessionState);
   const sessionClientIdRef = useRef(loadSessionClientId());
+  const browserLocalWorkspaceRef = useRef(browserLocalWorkspace);
+  browserLocalWorkspaceRef.current = browserLocalWorkspace;
+  const sessionSyncDependencies = useMemo(
+    () => ({
+      requestSessions: (clientId: string) =>
+        browserLocalWorkspaceRef.current
+          ? requestBrowserLocalWorkspace()
+          : requestSessions(clientId),
+      loadLegacyState: () =>
+        browserLocalWorkspaceRef.current
+          ? null
+          : loadLegacyLocalSessionState()
+    }),
+    []
+  );
+  const sessionSaveDependencies = useMemo(
+    () => ({
+      persist: (
+        serializedState: string,
+        clientId: string,
+        signal?: AbortSignal
+      ) =>
+        browserLocalWorkspaceRef.current
+          ? saveBrowserLocalWorkspace(serializedState)
+          : saveSerializedSessionState(serializedState, clientId, signal),
+      flush: (serializedState: string, clientId: string) => {
+        if (browserLocalWorkspaceRef.current) {
+          flushBrowserLocalWorkspace(serializedState);
+          return;
+        }
+        saveSessionStateOnPageExit(serializedState, clientId);
+      }
+    }),
+    []
+  );
+  const attachmentDependencies = useMemo(
+    () => ({
+      uploadFile: async (
+        sessionId: string,
+        input: Parameters<typeof uploadSessionFile>[1],
+        clientId: string
+      ) =>
+        browserLocalWorkspaceRef.current
+          ? createBrowserLocalSessionFile(input)
+          : uploadSessionFile(sessionId, input, clientId),
+      deleteFile: (sessionId: string, fileId: string, clientId: string) =>
+        browserLocalWorkspaceRef.current
+          ? Promise.resolve()
+          : deleteSessionFile(sessionId, fileId, clientId)
+    }),
+    []
+  );
   const composerRuntimeRef = useRef<{ setText(text: string): void } | null>(null);
   const isSendingRef = useRef(isSending);
   const sessionNewOrDeleteBlockedRef = useRef(isSending);
@@ -235,7 +309,8 @@ export default function App() {
     hasComposerDrafts: hasComposerAttachmentDrafts
   } = useSessionAttachmentController({
     activeSessionIdRef,
-    sessionClientIdRef
+    sessionClientIdRef,
+    dependencies: attachmentDependencies
   });
   attachmentDraftsRef.current = hasComposerAttachmentDrafts;
   sessionSaveReadyRef.current = sessionsLoaded && sessionsHydrated;
@@ -252,12 +327,15 @@ export default function App() {
   }, [pendingManagedRequestSlot, pendingVisualRepairSlot]);
   const handleAuthChoiceSignIn = useCallback(() => {
     setIsAuthChoiceOpen(false);
+    setAccountMode("unselected");
+    saveAccountMode("unselected");
     startOAuthAuthentication();
   }, [startOAuthAuthentication]);
   const handleContinueLocal = useCallback(() => {
     setIsAuthChoiceOpen(false);
     pendingManagedRequestSlot.clear();
     pendingVisualRepairSlot.clear();
+    resetSessionState();
     setAccountMode("local");
     saveAccountMode("local");
     updateApiSettings((current) =>
@@ -267,6 +345,7 @@ export default function App() {
   }, [
     pendingManagedRequestSlot,
     pendingVisualRepairSlot,
+    resetSessionState,
     runtimeSettings,
     updateApiSettings
   ]);
@@ -295,10 +374,15 @@ export default function App() {
   }, [authenticatedUser?.id, resetSessionState]);
 
   useEffect(() => {
-    if (authRequired && authLoaded && !authenticatedUser) {
+    if (
+      authRequired &&
+      authLoaded &&
+      !authenticatedUser &&
+      !browserLocalWorkspace
+    ) {
       setIsAuthChoiceOpen(true);
     }
-  }, [authLoaded, authRequired, authenticatedUser]);
+  }, [authLoaded, authRequired, authenticatedUser, browserLocalWorkspace]);
 
   useEffect(() => {
     if (!authRequired) {
@@ -335,7 +419,7 @@ export default function App() {
   }, [cloudEnabled, pendingManagedRequestSlot, pendingVisualRepairSlot]);
 
   const sessionListPreview = useSessionIndex({
-    enabled: sessionAccessEnabled,
+    enabled: sessionAccessEnabled && !browserLocalWorkspace,
     cacheEnabled: Boolean(runtimeSettings && !authRequired),
     sessionState,
     sessionsHydrated,
@@ -362,7 +446,8 @@ export default function App() {
     setSessionsHydrated,
     retryVersion: sessionSyncRetryVersion,
     onError: handleSessionSyncError,
-    onSuccess: handleSessionSyncSuccess
+    onSuccess: handleSessionSyncSuccess,
+    dependencies: sessionSyncDependencies
   });
 
   useStaleArtifactEditSweep(
@@ -379,7 +464,8 @@ export default function App() {
     sessionsLoadedRef: sessionSaveReadyRef,
     sessionClientIdRef,
     deletedSessionIdsRef,
-    onStatusChange: setSessionSaveStatus
+    onStatusChange: setSessionSaveStatus,
+    dependencies: sessionSaveDependencies
   });
   const handleSessionPersistenceRetry = useCallback(() => {
     setSessionSyncError(null);
@@ -716,7 +802,8 @@ export default function App() {
     saveNow: saveCurrentSessionStateNow,
     cancelActiveArtifactEdit,
     cancelActiveVisualRepair,
-    getActiveVisualRepairRun
+    getActiveVisualRepairRun,
+    browserDirect: browserDirectProvider
   });
 
   const messageRevisionController = useMemo(
@@ -756,7 +843,7 @@ export default function App() {
   });
 
   useRestoredChatRuns({
-    sessionsLoaded,
+    sessionsLoaded: sessionsLoaded && !browserLocalWorkspace,
     sessions: sessionState.sessions,
     sessionStateRef,
     sessionClientIdRef,

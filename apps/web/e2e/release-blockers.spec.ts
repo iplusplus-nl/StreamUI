@@ -138,7 +138,7 @@ async function installDeterministicApi(
       })
     );
     window.localStorage.setItem("streamui.theme.v1", "day");
-    window.localStorage.setItem("streamui.accountMode.v1", "local");
+    window.localStorage.setItem("streamui.accountMode.v1", "unselected");
   }, MODELS);
 
   await page.context().route("**/*", async (route) => {
@@ -653,10 +653,14 @@ test("Bug Report capture opens, reports progress, and attaches a screenshot", as
   expect(consoleErrors).toEqual([]);
 });
 
-test("required account mode clears legacy history and never loads sessions anonymously", async ({
+test("required account mode offers browser-direct BYO without leaking keys or loading anonymous sessions", async ({
   page
 }) => {
   let sessionRequests = 0;
+  let chatProxyRequests = 0;
+  let providerRequests = 0;
+  let providerAuthorization = "";
+  let providerBody = "";
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
@@ -685,7 +689,24 @@ test("required account mode clears legacy history and never loads sessions anony
     );
   });
   await page.context().route("**/api/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (url.hostname === "openrouter.ai" && path === "/api/v1/responses") {
+      providerRequests += 1;
+      providerAuthorization = route.request().headers().authorization ?? "";
+      providerBody = route.request().postData() ?? "";
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          'data: {"type":"response.output_text.delta","delta":"<sessiontitle>Direct test</sessiontitle><chat>Browser direct verified</chat>"}',
+          "",
+          'data: {"type":"response.completed","response":{"output":[]}}',
+          ""
+        ].join("\n")
+      });
+      return;
+    }
     if (!path.startsWith("/api/")) {
       await route.continue();
       return;
@@ -709,12 +730,21 @@ test("required account mode clears legacy history and never loads sessions anony
       await fulfillJson(route, { error: "Anonymous session request" }, 401);
       return;
     }
+    if (path === "/api/chat") {
+      chatProxyRequests += 1;
+      await fulfillJson(route, { error: "Chat proxy must not be used" }, 500);
+      return;
+    }
     await fulfillJson(route, { error: `Unexpected test request: ${path}` }, 404);
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Sign in to ChatHTML" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue locally" })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Choose how to use ChatHTML" })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Use your own API key" })
+  ).toBeVisible();
   await expect(page.getByText("Old machine private task")).toHaveCount(0);
   await expect(page.getByText("cached secret")).toHaveCount(0);
   await expect
@@ -727,4 +757,29 @@ test("required account mode clears legacy history and never loads sessions anony
     )
     .toEqual({ active: null, index: null, sessions: null });
   expect(sessionRequests).toBe(0);
+
+  await page.getByRole("button", { name: "Use your own API key" }).click();
+  const settings = page.getByRole("dialog", { name: "Providers" });
+  await expect(settings).toBeVisible();
+  await expect(settings).toContainText("cannot fall back through the ChatHTML server");
+  await settings
+    .getByRole("textbox", { name: "API Key", exact: true })
+    .fill("sk-or-browser-only-test");
+  await settings.getByRole("button", { name: "Done" }).click();
+
+  await page.getByPlaceholder("Send a message...").fill("Verify direct mode");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Browser direct verified")).toBeVisible();
+  expect(providerRequests).toBe(1);
+  expect(providerAuthorization).toBe("Bearer sk-or-browser-only-test");
+  expect(providerBody).not.toContain("sk-or-browser-only-test");
+  expect(chatProxyRequests).toBe(0);
+  expect(sessionRequests).toBe(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.localStorage.getItem("chathtml.browserWorkspace.v1")
+      )
+    )
+    .not.toBeNull();
 });

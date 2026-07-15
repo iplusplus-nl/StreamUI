@@ -99,31 +99,23 @@ export function removeSettingsModelOption(
 
 export function selectContinueLocalApiSettings(
   current: ApiSettings,
-  runtimeSettings: RuntimeSettingsSummary | null
+  _runtimeSettings: RuntimeSettingsSummary | null
 ): ApiSettings {
   if (
     current.providerId !== "chathtml-cloud" &&
     current.apiKeySource !== "managed"
   ) {
-    return current;
+    return normalizeApiSettings({
+      ...current,
+      apiKeySource: "manual"
+    });
   }
 
-  const environmentKeys = runtimeSettings?.api.environmentKeys ?? [];
-  const hasEnvironmentKey = (name: string) =>
-    environmentKeys.some((key) => key.name === name && key.configured);
-  const providerId: ApiProviderId = hasEnvironmentKey("OPENROUTER_API_KEY")
-    ? "openrouter"
-    : hasEnvironmentKey("OPENAI_API_KEY")
-      ? "openai"
-      : "openrouter";
-  const environmentConfigured = hasEnvironmentKey(
-    providerId === "openai" ? "OPENAI_API_KEY" : "OPENROUTER_API_KEY"
-  );
-  const selected = changeSettingsProvider(current, providerId);
+  const selected = changeSettingsProvider(current, "openrouter");
 
   return normalizeApiSettings({
     ...selected,
-    apiKeySource: environmentConfigured ? "environment" : "manual",
+    apiKeySource: "manual",
     apiKey: ""
   });
 }

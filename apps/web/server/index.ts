@@ -24,6 +24,7 @@ import {
 } from "./exportResources.js";
 import { handleRetrievalRequest } from "./retrieval.js";
 import { handleGetRuntimeSettings } from "./runtimeApiSettings.js";
+import { rejectBrowserApiKeyProxy } from "./browserApiKeyGuard.js";
 import {
   createChatHtmlServiceGateway,
   isAuthenticationRequired
@@ -158,6 +159,7 @@ app.use(
 
 app.post(
   "/api/chat",
+  rejectBrowserApiKeyProxy,
   chatHtmlService.injectManagedApiSettings,
   handleOpenRouterChat
 );
@@ -165,11 +167,13 @@ app.get("/api/chat/runs/:runId/events", handleChatRunEvents);
 app.post("/api/chat/runs/:runId/cancel", handleCancelChatRun);
 app.post(
   "/api/artifact-edits",
+  rejectBrowserApiKeyProxy,
   chatHtmlService.injectManagedApiSettings,
   handleArtifactEdit
 );
 app.post(
   "/api/models",
+  rejectBrowserApiKeyProxy,
   chatHtmlService.injectManagedApiSettings,
   handleModelsRequest
 );

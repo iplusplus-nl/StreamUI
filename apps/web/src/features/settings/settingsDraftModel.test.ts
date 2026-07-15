@@ -136,7 +136,7 @@ describe("settings draft model", () => {
     assert.equal(next.modelOptions.includes(next.model), true);
   });
 
-  it("moves managed onboarding to an environment-backed local provider", () => {
+  it("keeps managed onboarding browser-direct even when server keys exist", () => {
     const current = normalizeApiSettings({ providerId: "chathtml-cloud" });
     const runtime: RuntimeSettingsSummary = {
       api: {
@@ -157,10 +157,9 @@ describe("settings draft model", () => {
 
     const next = selectContinueLocalApiSettings(current, runtime);
 
-    assert.equal(next.providerId, "openai");
-    assert.equal(next.apiKeySource, "environment");
-    assert.equal(next.model, "gpt-4.1");
-    assert.deepEqual(next.modelOptions, ["gpt-4.1"]);
+    assert.equal(next.providerId, "openrouter");
+    assert.equal(next.apiKeySource, "manual");
+    assert.equal(next.apiKey, "");
   });
 
   it("selects OpenRouter manual setup with guidance when no key exists", () => {

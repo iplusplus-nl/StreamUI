@@ -17,6 +17,11 @@ import type {
   StreamingRenderer
 } from "../../runtime/streamui/types";
 import type { SessionActionsController } from "../sessions/sessionActionsController";
+import { createBrowserLocalSessionFile } from "../sessions/browserLocalWorkspace";
+import {
+  startBrowserDirectChatRun,
+  usesBrowserDirectProvider
+} from "../providers/browserDirectProvider";
 import { getChatRunSessionFiles } from "./chatRunAttachmentFiles";
 import type { ChatRunCancellationTarget } from "./chatRunCancellationController";
 import type { ChatRunExecutionController } from "./chatRunExecutionController";
@@ -162,6 +167,7 @@ export function useFreshChatRunSender({
         requestUiComplexity,
         requestApiSettings
       } = settingsPlan;
+      const browserDirect = usesBrowserDirectProvider(requestApiSettings);
       if (
         requestApiSettings.apiKeySource === "managed" &&
         cloudEnabled &&
@@ -300,11 +306,13 @@ export function useFreshChatRunSender({
         updateAssistant: updateAssistantForPhase,
         onMemory: handleMemoryStreamEvent,
         loadServerMessage: () =>
-          loadChatRunServerMessage({
-            clientId: sessionClientIdRef.current,
-            sessionId: requestSessionId,
-            assistantId
-          }),
+          browserDirect
+            ? Promise.resolve(undefined)
+            : loadChatRunServerMessage({
+                clientId: sessionClientIdRef.current,
+                sessionId: requestSessionId,
+                assistantId
+              }),
         getClientId: () => sessionClientIdRef.current,
         getSessionFiles: () =>
           sessionStateRef.current.sessions.find(
@@ -313,7 +321,14 @@ export function useFreshChatRunSender({
         getCanvasContext,
         upsertSessionFiles: (files) =>
           upsertSessionFiles(requestSessionId, files),
-        refreshManagedAuth: refreshAuthSummary
+        refreshManagedAuth: refreshAuthSummary,
+        startRequest: browserDirect ? startBrowserDirectChatRun : undefined,
+        uploadArtifactFile: browserDirect
+          ? async (_sessionId, input) => createBrowserLocalSessionFile(input)
+          : undefined,
+        scheduleInterval: browserDirect
+          ? () => () => undefined
+          : undefined
       });
     },
     [

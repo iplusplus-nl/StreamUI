@@ -48,12 +48,10 @@ export function AuthChoiceDialogContent({
         CH
       </div>
       <div className="auth-choice-heading">
-        <h2 id="auth-choice-title">
-          {required ? "Sign in to ChatHTML" : "Choose how to use ChatHTML"}
-        </h2>
+        <h2 id="auth-choice-title">Choose how to use ChatHTML</h2>
         <p id="auth-choice-description">
           {required
-            ? "Your account keeps conversations and files private to you."
+            ? "Sign in for a private cloud workspace, or connect your own model provider without an account."
             : "Sign in for the managed service, or keep everything local and connect your own model provider."}
         </p>
       </div>
@@ -67,24 +65,21 @@ export function AuthChoiceDialogContent({
           <LogIn size={17} strokeWidth={2} aria-hidden="true" />
           <span>Sign in</span>
         </button>
-        {!required ? (
-          <button
-            className="auth-choice-secondary"
-            type="button"
-            onClick={onContinueLocal}
-          >
-            <Laptop size={17} strokeWidth={2} aria-hidden="true" />
-            <span>Continue locally</span>
-          </button>
-        ) : null}
+        <button
+          className="auth-choice-secondary"
+          type="button"
+          onClick={onContinueLocal}
+        >
+          <Laptop size={17} strokeWidth={2} aria-hidden="true" />
+          <span>Use your own API key</span>
+        </button>
       </div>
 
-      {!required ? (
-        <p className="auth-choice-footnote">
-          Local mode stays signed out. You can add an OpenRouter, OpenAI, local,
-          or custom API connection next.
-        </p>
-      ) : null}
+      <p className="auth-choice-footnote">
+        Your key and provider requests stay in this browser and never pass
+        through the ChatHTML server. Your browser stores local-mode chats on
+        this device.
+      </p>
     </section>
   );
 }
