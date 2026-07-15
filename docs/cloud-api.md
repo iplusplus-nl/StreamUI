@@ -13,7 +13,7 @@ are public so the frontend remains open.
   "cloud": {
     "enabled": true,
     "authRequired": true,
-    "billingEnabled": true,
+    "billingEnabled": false,
     "managedProviderEnabled": true,
     "brandName": "ChatHTML Cloud"
   }
@@ -54,8 +54,15 @@ never placed in browser URLs or exposed to frontend JavaScript.
     "id": "user_123",
     "email": "user@example.com",
     "role": "user",
-    "balanceUsd": "10.0000",
-    "balanceMicros": 10000000
+    "balanceUsd": "-12.500000",
+    "balanceMicros": -12500000,
+    "spentInWindowUsd": "4.250000",
+    "spentInWindowMicros": 4250000,
+    "usageLimitUsd": "20.000000",
+    "usageLimitMicros": 20000000,
+    "usageWindowHours": 24,
+    "limited": false,
+    "retryAfterSeconds": 0
   },
   "auth": {
     "available": true,
@@ -97,33 +104,22 @@ The native shell must register the `chathtml` URL scheme and accept only
 PKCE verifier, or persist a Service token. Multiple sign-in clicks are
 coalesced while one native authorization is active.
 
-## Billing
+## Managed usage accounting
 
-```txt
-POST /api/billing/top-up
-```
+Account deposits and top-ups are disabled during the alpha. Managed-provider
+costs accrue as debt, so the account balance is zero or negative. The Service
+rejects a new managed request after the account reaches $20 of recorded usage
+within the preceding rolling 24 hours. A rejected request uses HTTP 429 and the
+code `ACCOUNT_USAGE_LIMIT_REACHED`; `Retry-After` reports when enough usage is
+expected to age out of the window.
 
-Request:
-
-```json
-{ "amountUsd": "10" }
-```
-
-Response:
-
-```json
-{
-  "ok": true,
-  "amountMicros": 10000000,
-  "amountUsd": "10.0000",
-  "balanceMicros": 10000000,
-  "balanceUsd": "10.0000"
-}
-```
+Browser-direct requests made with a user-provided provider key do not pass
+through the Service and are not part of this balance or limit.
 
 ## Managed Provider
 
 When the selected provider has `apiKeySource: "managed"`, the frontend sends the
 normal `POST /api/chat` payload with serialized API settings. A hosted backend
-should authenticate the request, apply billing, use its server-side provider
-credentials, and stream the same NDJSON chat events as the local backend.
+should authenticate the request, apply managed-usage accounting, use its
+server-side provider credentials, and stream the same NDJSON chat events as the
+local backend.
