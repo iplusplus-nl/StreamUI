@@ -78,13 +78,114 @@ export function clearBrowserLocalWorkspace(
   }
 }
 
+function compactWorkspaceFingerprint(value: unknown): string {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  let length = 0;
+  const update = (text: string) => {
+    length += text.length;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      first = Math.imul(first ^ code, 0x01000193);
+      second = Math.imul(second ^ code, 0x5bd1e995);
+      second ^= second >>> 13;
+    }
+  };
+  const visit = (entry: unknown): void => {
+    if (entry === null) {
+      update("null;");
+      return;
+    }
+    if (Array.isArray(entry)) {
+      update(`array:${entry.length}[`);
+      entry.forEach(visit);
+      update("]");
+      return;
+    }
+    if (typeof entry === "object") {
+      const values = Object.entries(entry as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right));
+      update(`object:${values.length}{`);
+      for (const [key, item] of values) {
+        update(`key:${key.length}:${key}`);
+        visit(item);
+      }
+      update("}");
+      return;
+    }
+    const text = String(entry);
+    update(`${typeof entry}:${text.length}:${text};`);
+  };
+  visit(value);
+  return `v2:${length}:${(first >>> 0)
+    .toString(16)
+    .padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 export function browserLocalWorkspaceSignature(state: SessionState): string {
-  return JSON.stringify(
-    state.sessions
-      .filter((session) => !isSessionEmpty(session))
-      .map((session) => [session.id, session.updatedAt])
-      .sort(([left], [right]) => String(left).localeCompare(String(right)))
-  );
+  const sessions = state.sessions
+    .filter((session) => !isSessionEmpty(session))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return compactWorkspaceFingerprint({
+    activeSessionId: sessions.some(
+      (session) => session.id === state.activeSessionId
+    )
+      ? state.activeSessionId
+      : sessions[0]?.id ?? "",
+    sessions
+  });
+}
+
+export function browserLocalWorkspaceStorageVersion(
+  storage: WorkspaceStorage | undefined = browserStorage()
+): string | null | undefined {
+  if (!storage) {
+    return undefined;
+  }
+
+  try {
+    const raw = storage.getItem(BROWSER_LOCAL_WORKSPACE_STORAGE_KEY);
+    if (raw === null) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as { sessions?: unknown };
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      !Array.isArray(parsed.sessions)
+    ) {
+      return undefined;
+    }
+    return compactWorkspaceFingerprint(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+export function clearBrowserLocalWorkspaceIfUnchanged(
+  expectedVersion: string | null | undefined,
+  storage: WorkspaceStorage | undefined = browserStorage()
+): boolean {
+  if (!storage || expectedVersion === undefined) {
+    return false;
+  }
+
+  try {
+    const currentVersion = browserLocalWorkspaceStorageVersion(storage);
+    if (
+      currentVersion === undefined ||
+      currentVersion !== expectedVersion
+    ) {
+      return false;
+    }
+    if (currentVersion !== null) {
+      storage.removeItem(BROWSER_LOCAL_WORKSPACE_STORAGE_KEY);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function requestBrowserLocalWorkspace(

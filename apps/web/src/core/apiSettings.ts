@@ -35,6 +35,16 @@ export type MemoryItem = {
   text: string;
 };
 
+export type ApiMemorySettings = Pick<
+  ApiSettings,
+  "userPreferencePrompt" | "memoryItems"
+>;
+
+export type ApiSettingsStorage = Pick<
+  Storage,
+  "getItem" | "setItem" | "removeItem"
+>;
+
 type LegacyUserPreferences = {
   responseTone: string;
   interfaceStyle: string;
@@ -52,6 +62,9 @@ export type ApiProviderPreset = {
 };
 
 export const API_SETTINGS_STORAGE_KEY = "streamui.apiSettings.v1";
+export const LOCAL_API_MEMORY_STORAGE_KEY = "streamui.apiMemory.local.v1";
+export const ACCOUNT_API_MEMORY_STORAGE_PREFIX =
+  "streamui.apiMemory.account.v1.";
 const MANUAL_API_KEY_SESSION_STORAGE_KEY = "chathtml.manualApiKey.session.v1";
 export const MAX_MODEL_OPTIONS = 120;
 export const MAX_MODEL_ID_LENGTH = 180;
@@ -559,34 +572,112 @@ export function normalizeApiSettings(input: unknown): ApiSettings {
   };
 }
 
-export function loadApiSettings(): ApiSettings {
+function apiMemoryStorageKey(ownerId: string | null): string {
+  return ownerId
+    ? `${ACCOUNT_API_MEMORY_STORAGE_PREFIX}${encodeURIComponent(ownerId)}`
+    : LOCAL_API_MEMORY_STORAGE_KEY;
+}
+
+function emptyApiMemorySettings(): ApiMemorySettings {
+  return {
+    userPreferencePrompt: "",
+    memoryItems: []
+  };
+}
+
+function apiMemorySettingsFrom(input: unknown): ApiMemorySettings {
+  const normalized = normalizeApiSettings(input);
+  return {
+    userPreferencePrompt: normalized.userPreferencePrompt,
+    memoryItems: normalized.memoryItems
+  };
+}
+
+export function loadApiMemorySettings(
+  ownerId: string | null,
+  storage: ApiSettingsStorage
+): ApiMemorySettings {
+  try {
+    const scoped = storage.getItem(apiMemoryStorageKey(ownerId));
+    if (scoped !== null) {
+      return apiMemorySettingsFrom(JSON.parse(scoped));
+    }
+
+    if (ownerId !== null) {
+      return emptyApiMemorySettings();
+    }
+
+    // Memory used to live in the global settings record. It may safely migrate
+    // only into the browser-local scope because its account owner is unknown.
+    const legacy = storage.getItem(API_SETTINGS_STORAGE_KEY);
+    return legacy === null
+      ? emptyApiMemorySettings()
+      : apiMemorySettingsFrom(JSON.parse(legacy));
+  } catch {
+    return emptyApiMemorySettings();
+  }
+}
+
+export function saveApiMemorySettings(
+  ownerId: string | null,
+  settings: ApiMemorySettings,
+  storage: ApiSettingsStorage
+): void {
+  const normalized = apiMemorySettingsFrom(settings);
+  storage.setItem(apiMemoryStorageKey(ownerId), JSON.stringify(normalized));
+}
+
+function settingsWithoutMemory(settings: ApiSettings): Omit<
+  ApiSettings,
+  "userPreferencePrompt" | "memoryItems"
+> {
+  const { userPreferencePrompt: _prompt, memoryItems: _memoryItems, ...shared } =
+    settings;
+  return shared;
+}
+
+export function loadApiSettingsFromStorage(
+  ownerId: string | null,
+  localStorage: ApiSettingsStorage,
+  sessionStorage: ApiSettingsStorage
+): ApiSettings {
+  try {
+    const persisted = normalizeApiSettings(
+      JSON.parse(localStorage.getItem(API_SETTINGS_STORAGE_KEY) ?? "null")
+    );
+    const sessionKey =
+      sessionStorage.getItem(MANUAL_API_KEY_SESSION_STORAGE_KEY) ??
+      (persisted.apiKeySource === "manual" ? persisted.apiKey : "");
+    const memory = loadApiMemorySettings(ownerId, localStorage);
+    if (persisted.apiKey) {
+      if (persisted.apiKeySource === "manual" && sessionKey) {
+        sessionStorage.setItem(MANUAL_API_KEY_SESSION_STORAGE_KEY, sessionKey);
+      }
+      localStorage.setItem(
+        API_SETTINGS_STORAGE_KEY,
+        JSON.stringify({ ...settingsWithoutMemory(persisted), apiKey: "" })
+      );
+    }
+    return normalizeApiSettings({
+      ...persisted,
+      ...memory,
+      apiKey: sessionKey
+    });
+  } catch {
+    return DEFAULT_API_SETTINGS;
+  }
+}
+
+export function loadApiSettings(ownerId: string | null = null): ApiSettings {
   if (typeof window === "undefined") {
     return DEFAULT_API_SETTINGS;
   }
 
-  try {
-    const persisted = normalizeApiSettings(
-      JSON.parse(window.localStorage.getItem(API_SETTINGS_STORAGE_KEY) ?? "null")
-    );
-    const sessionKey =
-      window.sessionStorage.getItem(MANUAL_API_KEY_SESSION_STORAGE_KEY) ??
-      (persisted.apiKeySource === "manual" ? persisted.apiKey : "");
-    if (persisted.apiKey) {
-      if (persisted.apiKeySource === "manual" && sessionKey) {
-        window.sessionStorage.setItem(
-          MANUAL_API_KEY_SESSION_STORAGE_KEY,
-          sessionKey
-        );
-      }
-      window.localStorage.setItem(
-        API_SETTINGS_STORAGE_KEY,
-        JSON.stringify({ ...persisted, apiKey: "" })
-      );
-    }
-    return normalizeApiSettings({ ...persisted, apiKey: sessionKey });
-  } catch {
-    return DEFAULT_API_SETTINGS;
-  }
+  return loadApiSettingsFromStorage(
+    ownerId,
+    window.localStorage,
+    window.sessionStorage
+  );
 }
 
 export function hasSavedApiSettings(): boolean {
@@ -597,24 +688,42 @@ export function hasSavedApiSettings(): boolean {
   return window.localStorage.getItem(API_SETTINGS_STORAGE_KEY) !== null;
 }
 
-export function saveApiSettings(settings: ApiSettings): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
+export function saveApiSettingsToStorage(
+  settings: ApiSettings,
+  ownerId: string | null,
+  localStorage: ApiSettingsStorage,
+  sessionStorage: ApiSettingsStorage
+): void {
   const normalized = normalizeApiSettings(settings);
-  window.localStorage.setItem(
+  localStorage.setItem(
     API_SETTINGS_STORAGE_KEY,
-    JSON.stringify({ ...normalized, apiKey: "" })
+    JSON.stringify({ ...settingsWithoutMemory(normalized), apiKey: "" })
   );
+  saveApiMemorySettings(ownerId, normalized, localStorage);
   if (normalized.apiKeySource === "manual" && normalized.apiKey) {
-    window.sessionStorage.setItem(
+    sessionStorage.setItem(
       MANUAL_API_KEY_SESSION_STORAGE_KEY,
       normalized.apiKey
     );
   } else {
-    window.sessionStorage.removeItem(MANUAL_API_KEY_SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(MANUAL_API_KEY_SESSION_STORAGE_KEY);
   }
+}
+
+export function saveApiSettings(
+  settings: ApiSettings,
+  ownerId: string | null = null
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  saveApiSettingsToStorage(
+    settings,
+    ownerId,
+    window.localStorage,
+    window.sessionStorage
+  );
 }
 
 export function serializeApiSettings(settings: ApiSettings): ApiSettings {

@@ -125,14 +125,15 @@ describe("local workspace account merge", () => {
       ]
     };
     let reads = 0;
+    let serverState: SessionState = { sessions: [], activeSessionId: "" };
 
     await assert.rejects(
       mergeLocalWorkspaceIntoAccount(localState, "client", {
         requestSessions: async () => {
           reads += 1;
           return Response.json(
-            reads < 3
-              ? { sessions: [], activeSessionId: "" }
+            reads < 4
+              ? serverState
               : {
                   sessions: [
                     {
@@ -145,7 +146,13 @@ describe("local workspace account merge", () => {
                 }
           );
         },
-        persistSessions: async () => Response.json({ applied: true }),
+        persistSessions: async (serialized) => {
+          serverState = normalizeStoredSessionState(
+            JSON.parse(serialized),
+            10
+          );
+          return Response.json({ applied: true });
+        },
         uploadFile: async () => {
           throw new Error("No files should be uploaded.");
         },
@@ -153,6 +160,130 @@ describe("local workspace account merge", () => {
         now: () => 10
       }),
       /browser copy was kept/
+    );
+  });
+
+  it("retries under a fresh id when the stable import id was deleted", async () => {
+    const localState: SessionState = {
+      activeSessionId: "local-session",
+      sessions: [
+        {
+          id: "local-session",
+          title: "Recovered local session",
+          createdAt: 1,
+          updatedAt: 2,
+          messages: [{ id: "message", role: "user", content: "keep me" }],
+          files: []
+        }
+      ]
+    };
+    const tombstonedId = "browser-import:local-session";
+    let serverState: SessionState = { sessions: [], activeSessionId: "" };
+    const persistedIds: string[][] = [];
+
+    const merged = await mergeLocalWorkspaceIntoAccount(
+      localState,
+      "client",
+      {
+        requestSessions: async () => Response.json(serverState),
+        persistSessions: async (serialized) => {
+          const incoming = normalizeStoredSessionState(JSON.parse(serialized), 10);
+          persistedIds.push(incoming.sessions.map((session) => session.id));
+          serverState = {
+            sessions: incoming.sessions.filter(
+              (session) => session.id !== tombstonedId
+            ),
+            activeSessionId: incoming.activeSessionId
+          };
+          return Response.json({ applied: true });
+        },
+        uploadFile: async () => {
+          throw new Error("No files should be uploaded.");
+        },
+        nextRevision: () => 1,
+        createImportSuffix: () => "retry-1",
+        now: () => 10
+      }
+    );
+
+    assert.equal(persistedIds[0].includes(tombstonedId), true);
+    assert.equal(
+      merged.sessions.some(
+        (session) => session.id === `${tombstonedId}:retry-1`
+      ),
+      true
+    );
+  });
+
+  it("rebases automatically when a concurrent account save wins", async () => {
+    const localState: SessionState = {
+      activeSessionId: "local-session",
+      sessions: [
+        {
+          id: "local-session",
+          title: "Local",
+          createdAt: 1,
+          updatedAt: 2,
+          messages: [{ id: "message", role: "user", content: "keep me" }],
+          files: []
+        }
+      ]
+    };
+    let serverState: SessionState = { sessions: [], activeSessionId: "" };
+    let saves = 0;
+
+    const merged = await mergeLocalWorkspaceIntoAccount(
+      localState,
+      "client",
+      {
+        requestSessions: async () => Response.json(serverState),
+        persistSessions: async (serialized) => {
+          saves += 1;
+          if (saves === 1) {
+            serverState = normalizeStoredSessionState(
+              {
+                sessions: [
+                  {
+                    id: "concurrent",
+                    title: "Concurrent",
+                    createdAt: 3,
+                    updatedAt: 3,
+                    messages: [
+                      { id: "other", role: "user", content: "other tab" }
+                    ],
+                    files: []
+                  }
+                ],
+                activeSessionId: "concurrent"
+              },
+              10
+            );
+            return Response.json({ applied: false });
+          }
+          serverState = normalizeStoredSessionState(
+            JSON.parse(serialized),
+            10
+          );
+          return Response.json({ applied: true });
+        },
+        uploadFile: async () => {
+          throw new Error("No files should be uploaded.");
+        },
+        nextRevision: () => saves + 1,
+        now: () => 10
+      }
+    );
+
+    assert.equal(saves >= 3, true);
+    assert.equal(
+      merged.sessions.some((session) => session.id === "concurrent"),
+      true
+    );
+    assert.equal(
+      merged.sessions.some(
+        (session) => session.id === "browser-import:local-session"
+      ),
+      true
     );
   });
 });

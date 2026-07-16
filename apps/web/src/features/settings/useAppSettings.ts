@@ -36,7 +36,8 @@ import {
 
 export type AppSettingsDependencies = Partial<AppSettingsControllerDependencies> & {
   hasSavedApiSettings?(): boolean;
-  saveApiSettings?(settings: ApiSettings): void;
+  loadApiSettings?(ownerId: string | null): ApiSettings;
+  saveApiSettings?(settings: ApiSettings, ownerId: string | null): void;
   saveSearchSettings?(settings: SearchSettings): void;
   saveDisplaySettings?(settings: DisplaySettings): void;
   saveProfileSettings?(settings: ProfileSettings): void;
@@ -50,12 +51,17 @@ export type AppSettingsController = {
   runtimeSettings: RuntimeSettingsSummary | null;
   cloudEnabled: boolean;
   authRequired: boolean;
+  memoryOwnerId: string | null;
+  selectMemoryOwner(ownerId: string | null): void;
   replaceApiSettings(settings: ApiSettings): void;
   replaceSearchSettings(settings: SearchSettings): void;
   replaceDisplaySettings(settings: DisplaySettings): void;
   replaceProfileSettings(settings: ProfileSettings): void;
   updateApiSettings(updater: (current: ApiSettings) => ApiSettings): void;
-  applyMemoryEvent(event: MemoryStreamEvent): void;
+  applyMemoryEvent(
+    event: MemoryStreamEvent,
+    expectedOwnerId?: string | null
+  ): void;
 };
 
 export function useAppSettings(
@@ -69,7 +75,12 @@ export function useAppSettings(
       stableDependencies.hasSavedApiSettings ?? hasSavedApiSettings
     )()
   );
-  const [apiSettings, setApiSettings] = useState<ApiSettings>(loadApiSettings);
+  const [apiSettings, setApiSettings] = useState<ApiSettings>(() =>
+    (stableDependencies.loadApiSettings ?? loadApiSettings)(null)
+  );
+  const apiSettingsRef = useRef(apiSettings);
+  const [memoryOwnerId, setMemoryOwnerId] = useState<string | null>(null);
+  const memoryOwnerIdRef = useRef<string | null>(null);
   const [searchSettings, setSearchSettings] =
     useState<SearchSettings>(loadSearchSettings);
   const [displaySettings, setDisplaySettings] =
@@ -90,7 +101,11 @@ export function useAppSettings(
         hadSavedApiSettings,
         isCancelled: () => cancelled,
         setRuntimeSettings,
-        updateApiSettings: setApiSettings
+        updateApiSettings: (updater) => {
+          const next = updater(apiSettingsRef.current);
+          apiSettingsRef.current = next;
+          setApiSettings(next);
+        }
       },
       stableDependencies
     );
@@ -101,8 +116,12 @@ export function useAppSettings(
   }, [hadSavedApiSettings, stableDependencies]);
 
   useEffect(() => {
-    (stableDependencies.saveApiSettings ?? saveApiSettings)(apiSettings);
-  }, [apiSettings, stableDependencies.saveApiSettings]);
+    apiSettingsRef.current = apiSettings;
+    (stableDependencies.saveApiSettings ?? saveApiSettings)(
+      apiSettings,
+      memoryOwnerId
+    );
+  }, [apiSettings, memoryOwnerId, stableDependencies.saveApiSettings]);
 
   useEffect(() => {
     (stableDependencies.saveSearchSettings ?? saveSearchSettings)(searchSettings);
@@ -121,7 +140,9 @@ export function useAppSettings(
   }, [profileSettings, stableDependencies.saveProfileSettings]);
 
   const replaceApiSettings = useCallback((settings: ApiSettings) => {
-    setApiSettings(normalizeApiSettings(settings));
+    const next = normalizeApiSettings(settings);
+    apiSettingsRef.current = next;
+    setApiSettings(next);
   }, []);
   const replaceSearchSettings = useCallback((settings: SearchSettings) => {
     setSearchSettings(normalizeSearchSettings(settings));
@@ -134,13 +155,51 @@ export function useAppSettings(
   }, []);
   const updateApiSettings = useCallback(
     (updater: (current: ApiSettings) => ApiSettings) => {
-      setApiSettings(updater);
+      const next = updater(apiSettingsRef.current);
+      apiSettingsRef.current = next;
+      setApiSettings(next);
     },
     []
   );
-  const applyMemoryEvent = useCallback((event: MemoryStreamEvent) => {
-    setApiSettings((current) => applyMemoryStreamEvent(current, event));
-  }, []);
+  const selectMemoryOwner = useCallback(
+    (ownerId: string | null) => {
+      if (memoryOwnerIdRef.current === ownerId) {
+        return;
+      }
+
+      (stableDependencies.saveApiSettings ?? saveApiSettings)(
+        apiSettingsRef.current,
+        memoryOwnerIdRef.current
+      );
+      const scoped = (
+        stableDependencies.loadApiSettings ?? loadApiSettings
+      )(ownerId);
+      const next = normalizeApiSettings({
+        ...apiSettingsRef.current,
+        userPreferencePrompt: scoped.userPreferencePrompt,
+        memoryItems: scoped.memoryItems
+      });
+      memoryOwnerIdRef.current = ownerId;
+      apiSettingsRef.current = next;
+      setMemoryOwnerId(ownerId);
+      setApiSettings(next);
+    },
+    [stableDependencies.loadApiSettings, stableDependencies.saveApiSettings]
+  );
+  const applyMemoryEvent = useCallback(
+    (event: MemoryStreamEvent, expectedOwnerId?: string | null) => {
+      if (
+        expectedOwnerId !== undefined &&
+        expectedOwnerId !== memoryOwnerIdRef.current
+      ) {
+        return;
+      }
+      const next = applyMemoryStreamEvent(apiSettingsRef.current, event);
+      apiSettingsRef.current = next;
+      setApiSettings(next);
+    },
+    []
+  );
 
   return useMemo(
     () => ({
@@ -151,6 +210,8 @@ export function useAppSettings(
       runtimeSettings,
       cloudEnabled: Boolean(runtimeSettings?.cloud?.enabled),
       authRequired: Boolean(runtimeSettings?.cloud?.authRequired),
+      memoryOwnerId,
+      selectMemoryOwner,
       replaceApiSettings,
       replaceSearchSettings,
       replaceDisplaySettings,
@@ -162,6 +223,7 @@ export function useAppSettings(
       apiSettings,
       applyMemoryEvent,
       displaySettings,
+      memoryOwnerId,
       profileSettings,
       replaceApiSettings,
       replaceDisplaySettings,
@@ -169,6 +231,7 @@ export function useAppSettings(
       replaceSearchSettings,
       runtimeSettings,
       searchSettings,
+      selectMemoryOwner,
       updateApiSettings
     ]
   );

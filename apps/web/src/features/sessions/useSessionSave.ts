@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { SessionState } from "../../domain/chat/sessionModel";
 import {
   createSessionSaveCoordinator,
@@ -35,23 +35,30 @@ export function useSessionSave({
 }: UseSessionSaveInput): () => Promise<SessionSaveOutcome> {
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
-  const coordinatorRef = useRef<SessionSaveCoordinator | null>(null);
-  if (!coordinatorRef.current) {
-    coordinatorRef.current = createSessionSaveCoordinator(
-      {
-        isLoaded: () => sessionsLoadedRef.current,
-        getLatestState: () => sessionStateRef.current,
-        getClientId: () => sessionClientIdRef.current,
-        getDeletedSessionIds: () => deletedSessionIdsRef.current
-      },
+  const coordinator = useMemo<SessionSaveCoordinator>(
+    () =>
+      createSessionSaveCoordinator(
+        {
+          isLoaded: () => sessionsLoadedRef.current,
+          getLatestState: () => sessionStateRef.current,
+          getClientId: () => sessionClientIdRef.current,
+          getDeletedSessionIds: () => deletedSessionIdsRef.current
+        },
+        debounceMs,
+        {
+          ...dependencies,
+          onStatusChange: (status) => onStatusChangeRef.current?.(status)
+        }
+      ),
+    [
       debounceMs,
-      {
-        ...dependencies,
-        onStatusChange: (status) => onStatusChangeRef.current?.(status)
-      }
-    );
-  }
-  const coordinator = coordinatorRef.current;
+      deletedSessionIdsRef,
+      dependencies,
+      sessionClientIdRef,
+      sessionsLoadedRef,
+      sessionStateRef
+    ]
+  );
 
   useEffect(() => {
     if (typeof window === "undefined" || !sessionsLoaded) {

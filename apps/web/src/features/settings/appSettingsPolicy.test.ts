@@ -7,6 +7,7 @@ import {
 import type { RuntimeSettingsSummary } from "../../core/runtimeSettings";
 import {
   coerceApiSettingsForRuntime,
+  resolveAccountLoginApiSettings,
   resolveRuntimeApiSettings
 } from "./appSettingsPolicy";
 
@@ -126,5 +127,56 @@ describe("app settings policy", () => {
     );
     assert.equal(resolved.providerId, "openrouter");
     assert.equal(resolved.model, "user-model");
+  });
+
+  it("defaults a signed-in keyless provider to ChatHTML Cloud", () => {
+    const current = normalizeApiSettings({
+      providerId: "openrouter",
+      apiKeySource: "manual",
+      apiKey: "",
+      model: "user-model",
+      uiComplexity: 82,
+      userPreferencePrompt: "Keep this preference."
+    });
+    const resolved = resolveAccountLoginApiSettings(
+      current,
+      runtimeSettings({
+        cloudEnabled: true,
+        managedProviderEnabled: true
+      })
+    );
+
+    assert.equal(resolved.providerId, "chathtml-cloud");
+    assert.equal(resolved.apiKeySource, "managed");
+    assert.equal(resolved.apiKey, "");
+    assert.equal(resolved.uiComplexity, 82);
+    assert.equal(resolved.userPreferencePrompt, "Keep this preference.");
+  });
+
+  it("does not override a manual or configured environment provider key", () => {
+    const runtime = runtimeSettings({
+      cloudEnabled: true,
+      managedProviderEnabled: true
+    });
+    runtime.api.environmentKeys = [
+      { name: "OPENROUTER_API_KEY", configured: true }
+    ];
+    const manual = normalizeApiSettings({
+      providerId: "openrouter",
+      apiKeySource: "manual",
+      apiKey: "provided-key",
+      model: "manual-model"
+    });
+    const environment = normalizeApiSettings({
+      providerId: "openrouter",
+      apiKeySource: "environment",
+      model: "environment-model"
+    });
+
+    assert.deepEqual(resolveAccountLoginApiSettings(manual, runtime), manual);
+    assert.deepEqual(
+      resolveAccountLoginApiSettings(environment, runtime),
+      environment
+    );
   });
 });

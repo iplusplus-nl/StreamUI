@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
   BROWSER_LOCAL_WORKSPACE_STORAGE_KEY,
   browserLocalWorkspaceSignature,
+  browserLocalWorkspaceStorageVersion,
   clearBrowserLocalWorkspace,
+  clearBrowserLocalWorkspaceIfUnchanged,
   createBrowserLocalSessionFile,
   loadBrowserLocalWorkspace,
   requestBrowserLocalWorkspace,
@@ -83,9 +85,77 @@ describe("browser-only workspace", () => {
     const state = loadBrowserLocalWorkspace(storage);
     assert.deepEqual(state?.sessions.map((session) => session.id), ["kept"]);
     assert.equal(state?.activeSessionId, "kept");
-    assert.equal(browserLocalWorkspaceSignature(state!), '[["kept",3]]');
+    assert.match(browserLocalWorkspaceSignature(state!), /^v2:\d+:[a-f0-9]{16}$/);
 
     clearBrowserLocalWorkspace(storage);
     assert.equal(loadBrowserLocalWorkspace(storage), null);
+  });
+
+  it("fingerprints content changes even when session timestamps do not change", () => {
+    const original = {
+      activeSessionId: "kept",
+      sessions: [
+        {
+          id: "kept",
+          title: "Kept",
+          createdAt: 1,
+          updatedAt: 2,
+          messages: [{ id: "m1", role: "user" as const, content: "first" }],
+          files: []
+        }
+      ]
+    };
+    const changed = {
+      ...original,
+      sessions: [
+        {
+          ...original.sessions[0],
+          messages: [{ id: "m1", role: "user" as const, content: "second" }]
+        }
+      ]
+    };
+
+    assert.notEqual(
+      browserLocalWorkspaceSignature(original),
+      browserLocalWorkspaceSignature(changed)
+    );
+  });
+
+  it("clears only the exact browser workspace version that was imported", () => {
+    const storage = memoryStorage();
+    const original = JSON.stringify({
+      activeSessionId: "kept",
+      sessions: [
+        {
+          id: "kept",
+          title: "Kept",
+          createdAt: 1,
+          updatedAt: 2,
+          messages: [{ id: "m1", role: "user", content: "first" }],
+          files: []
+        }
+      ]
+    });
+    storage.setItem(BROWSER_LOCAL_WORKSPACE_STORAGE_KEY, original);
+    const expected = browserLocalWorkspaceStorageVersion(storage);
+
+    storage.setItem(
+      BROWSER_LOCAL_WORKSPACE_STORAGE_KEY,
+      original.replace("first", "changed in another tab")
+    );
+    assert.equal(
+      clearBrowserLocalWorkspaceIfUnchanged(expected, storage),
+      false
+    );
+    assert.notEqual(storage.getItem(BROWSER_LOCAL_WORKSPACE_STORAGE_KEY), null);
+
+    assert.equal(
+      clearBrowserLocalWorkspaceIfUnchanged(
+        browserLocalWorkspaceStorageVersion(storage),
+        storage
+      ),
+      true
+    );
+    assert.equal(storage.getItem(BROWSER_LOCAL_WORKSPACE_STORAGE_KEY), null);
   });
 });

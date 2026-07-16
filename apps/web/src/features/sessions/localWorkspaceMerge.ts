@@ -1,4 +1,5 @@
 import {
+  createId,
   normalizeStoredSessionState,
   type ChatSession,
   type SessionFile,
@@ -31,6 +32,7 @@ export type LocalWorkspaceMergeDependencies = {
   persistSessions: PersistSessions;
   uploadFile: UploadFile;
   nextRevision(clientId: string): number;
+  createImportSuffix(): string;
   now(): number;
 };
 
@@ -40,11 +42,34 @@ const defaultDependencies: LocalWorkspaceMergeDependencies = {
     saveSerializedSessionState(serializedState, clientId),
   uploadFile: uploadSessionFile,
   nextRevision: nextSessionSaveRevision,
+  createImportSuffix: () => createId("retry"),
   now: Date.now
 };
 
-function importedSessionId(localSessionId: string): string {
+function importedSessionBaseId(localSessionId: string): string {
   return `browser-import:${localSessionId}`;
+}
+
+function isImportedSessionId(
+  sessionId: string,
+  localSessionId: string
+): boolean {
+  const baseId = importedSessionBaseId(localSessionId);
+  return sessionId === baseId || sessionId.startsWith(`${baseId}:`);
+}
+
+function existingImportedSession(
+  accountState: SessionState,
+  localSessionId: string
+): ChatSession | undefined {
+  const candidates = accountState.sessions.filter((session) =>
+    isImportedSessionId(session.id, localSessionId)
+  );
+  return (
+    candidates.find(
+      (session) => session.id === importedSessionBaseId(localSessionId)
+    ) ?? candidates.sort((left, right) => right.updatedAt - left.updatedAt)[0]
+  );
 }
 
 function serverFileIdentity(file: SessionFile): string {
@@ -108,11 +133,12 @@ function remapMessages(
 
 function importedSession(
   session: ChatSession,
+  targetSessionId: string,
   uploadedFiles: ReadonlyMap<string, SessionFile>
 ): ChatSession {
   return {
     ...session,
-    id: importedSessionId(session.id),
+    id: targetSessionId,
     messages: remapMessages(session, uploadedFiles),
     files: session.files
       .map((file) => uploadedFiles.get(file.id))
@@ -179,7 +205,7 @@ async function persistAccountState(
   state: SessionState,
   clientId: string,
   dependencies: LocalWorkspaceMergeDependencies
-): Promise<void> {
+): Promise<boolean> {
   const response = await dependencies.persistSessions(
     serializeSessionStateForSave(
       state,
@@ -195,9 +221,93 @@ async function persistAccountState(
   const result = (await response.json().catch(() => null)) as {
     applied?: unknown;
   } | null;
-  if (result?.applied === false) {
-    throw new Error("A newer account session update won the merge. Please retry.");
+  return result?.applied !== false;
+}
+
+type LocalSessionImport = {
+  localSession: ChatSession;
+  targetSessionId: string;
+  uploadedFiles: Map<string, SessionFile>;
+};
+
+function materializeImports(
+  imports: readonly LocalSessionImport[]
+): ChatSession[] {
+  return imports.map((entry) =>
+    importedSession(
+      entry.localSession,
+      entry.targetSessionId,
+      entry.uploadedFiles
+    )
+  );
+}
+
+async function stageImportsUnderLiveIds(
+  imports: LocalSessionImport[],
+  accountState: SessionState,
+  clientId: string,
+  dependencies: LocalWorkspaceMergeDependencies
+): Promise<SessionState> {
+  let latestState = accountState;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const applied = await persistAccountState(
+      mergeImportedSessions(latestState, materializeImports(imports)),
+      clientId,
+      dependencies
+    );
+    latestState = await readAccountState(clientId, dependencies);
+    if (!applied) {
+      continue;
+    }
+    const liveIds = new Set(latestState.sessions.map((session) => session.id));
+    const missing = imports.filter(
+      (entry) => !liveIds.has(entry.targetSessionId)
+    );
+    if (!missing.length) {
+      return latestState;
+    }
+    if (attempt === 4) {
+      throw new Error(
+        "The account rejected a previously deleted local session id. Your browser copy was kept."
+      );
+    }
+
+    for (const entry of missing) {
+      entry.targetSessionId = `${importedSessionBaseId(
+        entry.localSession.id
+      )}:${dependencies.createImportSuffix()}`;
+      entry.uploadedFiles = new Map();
+    }
   }
+
+  throw new Error(
+    "Newer account updates repeatedly won the merge. Your browser copy was kept; please retry."
+  );
+}
+
+async function persistCompletedImports(
+  accountState: SessionState,
+  imports: readonly ChatSession[],
+  clientId: string,
+  dependencies: LocalWorkspaceMergeDependencies
+): Promise<void> {
+  let latestState = accountState;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (
+      await persistAccountState(
+        mergeImportedSessions(latestState, imports),
+        clientId,
+        dependencies
+      )
+    ) {
+      return;
+    }
+    latestState = await readAccountState(clientId, dependencies);
+  }
+  throw new Error(
+    "Newer account updates repeatedly won the merge. Your browser copy was kept; please retry."
+  );
 }
 
 function uploadInput(file: SessionFile): SessionFileUploadInput {
@@ -256,50 +366,48 @@ export async function mergeLocalWorkspaceIntoAccount(
 ): Promise<SessionState> {
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
   const accountState = await readAccountState(clientId, dependencies);
-  const uploadedBySession = new Map<string, Map<string, SessionFile>>();
-
-  for (const localSession of localState.sessions) {
-    const existing = accountState.sessions.find(
-      (session) => session.id === importedSessionId(localSession.id)
-    );
-    uploadedBySession.set(
-      localSession.id,
-      matchUploadedFiles(localSession.files, existing?.files ?? [])
-    );
-  }
-
-  const stagedImports = localState.sessions.map((session) =>
-    importedSession(session, uploadedBySession.get(session.id) ?? new Map())
+  const imports: LocalSessionImport[] = localState.sessions.map(
+    (localSession) => {
+      const existing = existingImportedSession(accountState, localSession.id);
+      return {
+        localSession,
+        targetSessionId:
+          existing?.id ?? importedSessionBaseId(localSession.id),
+        uploadedFiles: matchUploadedFiles(
+          localSession.files,
+          existing?.files ?? []
+        )
+      };
+    }
   );
-  await persistAccountState(
-    mergeImportedSessions(accountState, stagedImports),
+
+  await stageImportsUnderLiveIds(
+    imports,
+    accountState,
     clientId,
     dependencies
   );
 
   await runBoundedUploads(
-    localState.sessions.flatMap((session) => {
-      const uploaded = uploadedBySession.get(session.id) ?? new Map();
-      uploadedBySession.set(session.id, uploaded);
-      return session.files
-        .filter((file) => !uploaded.has(file.id))
+    imports.flatMap((entry) =>
+      entry.localSession.files
+        .filter((file) => !entry.uploadedFiles.has(file.id))
         .map((file) => async () => {
           const serverFile = await dependencies.uploadFile(
-            importedSessionId(session.id),
+            entry.targetSessionId,
             uploadInput(file),
             clientId
           );
-          uploaded.set(file.id, serverFile);
-        });
-    })
+          entry.uploadedFiles.set(file.id, serverFile);
+        })
+    )
   );
 
   const latestAccountState = await readAccountState(clientId, dependencies);
-  const completedImports = localState.sessions.map((session) =>
-    importedSession(session, uploadedBySession.get(session.id) ?? new Map())
-  );
-  await persistAccountState(
-    mergeImportedSessions(latestAccountState, completedImports),
+  const completedImports = materializeImports(imports);
+  await persistCompletedImports(
+    latestAccountState,
+    completedImports,
     clientId,
     dependencies
   );

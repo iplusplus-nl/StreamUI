@@ -27,6 +27,7 @@ import {
   generateRecoveryCode
 } from "./core/cloudAuth";
 import { providerSupportsReasoning } from "./core/apiSettings";
+import type { MemoryStreamEvent } from "./core/memoryStreamEvents";
 import {
   createId,
   isSessionEmpty,
@@ -78,8 +79,10 @@ import {
 } from "./features/sessions/sessionApi";
 import {
   createBrowserLocalSessionFile,
+  BROWSER_LOCAL_WORKSPACE_STORAGE_KEY,
   browserLocalWorkspaceSignature,
-  clearBrowserLocalWorkspace,
+  browserLocalWorkspaceStorageVersion,
+  clearBrowserLocalWorkspaceIfUnchanged,
   flushBrowserLocalWorkspace,
   loadBrowserLocalWorkspace,
   requestBrowserLocalWorkspace,
@@ -129,6 +132,7 @@ import { useAppSettings } from "./features/settings/useAppSettings";
 import { usePersistentThemeMode } from "./features/settings/usePersistentThemeMode";
 import { useSessionRunSettings } from "./features/settings/useSessionRunSettings";
 import { selectContinueLocalApiSettings } from "./features/settings/settingsDraftModel";
+import { resolveAccountLoginApiSettings } from "./features/settings/appSettingsPolicy";
 import { useCloudAuthController } from "./features/auth/useCloudAuthController";
 import type { SessionSaveStatus } from "./features/sessions/sessionSaveCoordinator";
 import type {
@@ -177,7 +181,7 @@ export default function App() {
   } = useSessionStateController();
   const [themeMode, setThemeMode] = usePersistentThemeMode();
   const {
-    apiSettings,
+    apiSettings: storedApiSettings,
     searchSettings,
     displaySettings,
     profileSettings,
@@ -189,7 +193,9 @@ export default function App() {
     replaceDisplaySettings: handleDisplaySettingsChange,
     replaceProfileSettings: handleProfileSettingsChange,
     updateApiSettings,
-    applyMemoryEvent: handleMemoryStreamEvent
+    applyMemoryEvent,
+    memoryOwnerId,
+    selectMemoryOwner
   } = useAppSettings();
   const {
     user: authenticatedUser,
@@ -199,6 +205,29 @@ export default function App() {
     refresh: refreshAuthSummary,
     logout: logoutCloudAccount
   } = useCloudAuthController({ cloudEnabled });
+  const expectedMemoryOwnerId = authenticatedUser?.id ?? null;
+  const isMemoryOwnerChanging = memoryOwnerId !== expectedMemoryOwnerId;
+  const apiSettings = useMemo(
+    () =>
+      isMemoryOwnerChanging
+        ? {
+            ...storedApiSettings,
+            userPreferencePrompt: "",
+            memoryItems: []
+          }
+        : storedApiSettings,
+    [isMemoryOwnerChanging, storedApiSettings]
+  );
+  const handleMemoryStreamEvent = useCallback(
+    (event: MemoryStreamEvent) =>
+      applyMemoryEvent(event, expectedMemoryOwnerId),
+    [applyMemoryEvent, expectedMemoryOwnerId]
+  );
+
+  useEffect(() => {
+    selectMemoryOwner(expectedMemoryOwnerId);
+  }, [expectedMemoryOwnerId, selectMemoryOwner]);
+
   const [accountMode, setAccountMode] = useState<AccountMode>(loadAccountMode);
   const [authenticatedWorkspaceScope, setAuthenticatedWorkspaceScope] =
     useState<AuthenticatedWorkspaceScope>("account");
@@ -210,6 +239,10 @@ export default function App() {
   const [isLocalMergeOpen, setIsLocalMergeOpen] = useState(false);
   const [isLocalMergeBusy, setIsLocalMergeBusy] = useState(false);
   const [localMergeError, setLocalMergeError] = useState<string | null>(null);
+  const authenticatedUserIdRef = useRef<string | null>(null);
+  const loginProviderDefaultUserIdRef = useRef<string | null>(null);
+  const isAuthenticatedUserChanging =
+    authenticatedUserIdRef.current !== (authenticatedUser?.id ?? null);
   const browserLocalWorkspace =
     authenticatedUser
       ? authenticatedWorkspaceScope === "local"
@@ -217,6 +250,7 @@ export default function App() {
   const browserDirectProvider = usesBrowserDirectProvider(apiSettings);
   const sessionAccessEnabled = Boolean(
     runtimeSettings &&
+      !isMemoryOwnerChanging &&
       (browserLocalWorkspace ||
         !authRequired ||
         (authLoaded && authenticatedUser))
@@ -264,37 +298,37 @@ export default function App() {
   const browserLocalWorkspaceRef = useRef(browserLocalWorkspace);
   browserLocalWorkspaceRef.current = browserLocalWorkspace;
   const sessionSyncDependencies = useMemo(
-    () => ({
-      requestSessions: (clientId: string) =>
-        browserLocalWorkspaceRef.current
-          ? requestBrowserLocalWorkspace()
-          : requestSessions(clientId),
-      loadLegacyState: () =>
-        browserLocalWorkspaceRef.current
-          ? null
-          : loadLegacyLocalSessionState()
-    }),
+    () =>
+      browserLocalWorkspace
+        ? {
+            requestSessions: () => requestBrowserLocalWorkspace(),
+            loadLegacyState: () => null
+          }
+        : {
+            requestSessions,
+            loadLegacyState: loadLegacyLocalSessionState
+          },
     [browserLocalWorkspace]
   );
   const sessionSaveDependencies = useMemo(
-    () => ({
-      persist: (
-        serializedState: string,
-        clientId: string,
-        signal?: AbortSignal
-      ) =>
-        browserLocalWorkspaceRef.current
-          ? saveBrowserLocalWorkspace(serializedState)
-          : saveSerializedSessionState(serializedState, clientId, signal),
-      flush: (serializedState: string, clientId: string) => {
-        if (browserLocalWorkspaceRef.current) {
-          flushBrowserLocalWorkspace(serializedState);
-          return;
-        }
-        saveSessionStateOnPageExit(serializedState, clientId);
-      }
-    }),
-    []
+    () =>
+      browserLocalWorkspace
+        ? {
+            persist: (serializedState: string) =>
+              saveBrowserLocalWorkspace(serializedState),
+            flush: (serializedState: string) =>
+              flushBrowserLocalWorkspace(serializedState)
+          }
+        : {
+            persist: (
+              serializedState: string,
+              clientId: string,
+              signal?: AbortSignal
+            ) => saveSerializedSessionState(serializedState, clientId, signal),
+            flush: (serializedState: string, clientId: string) =>
+              saveSessionStateOnPageExit(serializedState, clientId)
+          },
+    [browserLocalWorkspace]
   );
   const attachmentDependencies = useMemo(
     () => ({
@@ -365,7 +399,8 @@ export default function App() {
     dependencies: attachmentDependencies
   });
   attachmentDraftsRef.current = hasComposerAttachmentDrafts;
-  sessionSaveReadyRef.current = sessionsLoaded && sessionsHydrated;
+  sessionSaveReadyRef.current =
+    !isAuthenticatedUserChanging && sessionsLoaded && sessionsHydrated;
   sessionNewOrDeleteBlockedRef.current = isSending;
   sessionSelectionBlockedRef.current = false;
   const handleAuthOverlayRequest = useCallback(() => {
@@ -433,7 +468,6 @@ export default function App() {
     try {
       await deleteCloudAccount();
       await refreshAuthSummary();
-      clearBrowserLocalWorkspace();
       resetSessionState();
     } catch (error) {
       setSessionSyncError(
@@ -442,7 +476,6 @@ export default function App() {
     }
   }, [refreshAuthSummary, resetSessionState]);
 
-  const authenticatedUserIdRef = useRef<string | null>(null);
   useEffect(() => {
     const nextUserId = authenticatedUser?.id ?? null;
     if (authenticatedUserIdRef.current !== nextUserId) {
@@ -457,6 +490,37 @@ export default function App() {
       authenticatedUserIdRef.current = nextUserId;
     }
   }, [authenticatedUser?.id, resetSessionState]);
+
+  useEffect(() => {
+    const userId = authenticatedUser?.id ?? null;
+    if (!userId) {
+      loginProviderDefaultUserIdRef.current = null;
+      return;
+    }
+    if (
+      !runtimeSettings?.cloud?.enabled ||
+      !runtimeSettings.cloud.managedProviderEnabled ||
+      loginProviderDefaultUserIdRef.current === userId
+    ) {
+      return;
+    }
+
+    loginProviderDefaultUserIdRef.current = userId;
+    updateApiSettings((current) =>
+      resolveAccountLoginApiSettings(current, runtimeSettings)
+    );
+  }, [authenticatedUser?.id, runtimeSettings, updateApiSettings]);
+
+  useEffect(() => {
+    const handleBrowserWorkspaceChange = (event: StorageEvent) => {
+      if (event.key === BROWSER_LOCAL_WORKSPACE_STORAGE_KEY) {
+        setLocalWorkspaceSnapshot(loadBrowserLocalWorkspace());
+      }
+    };
+    window.addEventListener("storage", handleBrowserWorkspaceChange);
+    return () =>
+      window.removeEventListener("storage", handleBrowserWorkspaceChange);
+  }, []);
 
   useEffect(() => {
     if (
@@ -504,7 +568,10 @@ export default function App() {
   }, [cloudEnabled, pendingManagedRequestSlot, pendingVisualRepairSlot]);
 
   const sessionListPreview = useSessionIndex({
-    enabled: sessionAccessEnabled && !browserLocalWorkspace,
+    enabled:
+      sessionAccessEnabled &&
+      !isAuthenticatedUserChanging &&
+      !browserLocalWorkspace,
     cacheEnabled: Boolean(runtimeSettings && !authRequired),
     sessionState,
     sessionsHydrated,
@@ -513,7 +580,10 @@ export default function App() {
   });
 
   useSessionSync({
-    enabled: sessionAccessEnabled && !isLocalMergeBusy,
+    enabled:
+      sessionAccessEnabled &&
+      !isAuthenticatedUserChanging &&
+      !isLocalMergeBusy,
     sessionsLoaded,
     intervalMs: SESSION_SYNC_INTERVAL_MS,
     sessionClientIdRef,
@@ -536,7 +606,10 @@ export default function App() {
   });
 
   useStaleArtifactEditSweep(
-    sessionAccessEnabled && !isLocalMergeBusy && sessionsLoaded,
+    sessionAccessEnabled &&
+      !isAuthenticatedUserChanging &&
+      !isLocalMergeBusy &&
+      sessionsLoaded,
     setSessionStateAndRef
   );
 
@@ -544,6 +617,7 @@ export default function App() {
     sessionState,
     sessionsLoaded:
       sessionAccessEnabled &&
+      !isAuthenticatedUserChanging &&
       !isLocalMergeBusy &&
       sessionsLoaded &&
       sessionsHydrated,
@@ -557,7 +631,7 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (!sessionsHydrated) {
+    if (isAuthenticatedUserChanging || !sessionsHydrated) {
       return;
     }
     if (browserLocalWorkspace) {
@@ -568,6 +642,7 @@ export default function App() {
   }, [
     authenticatedUser,
     browserLocalWorkspace,
+    isAuthenticatedUserChanging,
     sessionState,
     sessionsHydrated
   ]);
@@ -587,6 +662,7 @@ export default function App() {
   useEffect(() => {
     if (
       !authenticatedUser ||
+      isAuthenticatedUserChanging ||
       authenticatedWorkspaceScope !== "account" ||
       !sessionsLoaded ||
       !sessionsHydrated ||
@@ -604,6 +680,7 @@ export default function App() {
   }, [
     authenticatedUser,
     authenticatedWorkspaceScope,
+    isAuthenticatedUserChanging,
     isLocalMergeOpen,
     localStateAvailableToAccount,
     localWorkspaceDecisionSignature,
@@ -638,18 +715,28 @@ export default function App() {
           "Your account workspace could not be saved before the merge."
         );
       }
+      const importedLocalVersion = browserLocalWorkspaceStorageVersion();
       const latestLocalState =
         loadBrowserLocalWorkspace() ?? localStateAvailableToAccount;
       const mergedState = await mergeLocalWorkspaceIntoAccount(
         latestLocalState,
         sessionClientIdRef.current
       );
-      clearBrowserLocalWorkspace();
-      clearKeptLocalWorkspace(authenticatedUser.id);
-      setLocalWorkspaceSnapshot(null);
       setAccountWorkspaceSnapshot(mergedState);
       setSessionStateAndRef(mergedState);
       setSessionSyncError(null);
+      if (
+        !clearBrowserLocalWorkspaceIfUnchanged(importedLocalVersion)
+      ) {
+        setLocalWorkspaceSnapshot(loadBrowserLocalWorkspace());
+        throw new Error(
+          "Local sessions changed in another tab during the merge. The " +
+            "imported snapshot is safe in your account and the newer browser " +
+            "copy was kept; merge again to bring it up to date."
+        );
+      }
+      clearKeptLocalWorkspace(authenticatedUser.id);
+      setLocalWorkspaceSnapshot(null);
       setIsLocalMergeOpen(false);
     } catch (error) {
       setLocalMergeError(

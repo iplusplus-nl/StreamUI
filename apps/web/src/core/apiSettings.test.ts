@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 import {
   DEFAULT_API_SETTINGS,
   DEFAULT_UI_COMPLEXITY,
+  ACCOUNT_API_MEMORY_STORAGE_PREFIX,
+  API_SETTINGS_STORAGE_KEY,
+  LOCAL_API_MEMORY_STORAGE_KEY,
   MAX_MEMORY_ITEM_TEXT_LENGTH,
   MAX_USER_PREFERENCE_PROMPT_LENGTH,
   REQUIRED_MODEL_OPTIONS,
@@ -12,13 +15,28 @@ import {
   getSelectableModelOptions,
   getUiComplexityLevel,
   hasCompleteApiSettings,
+  loadApiSettingsFromStorage,
   normalizeApiSettings,
   normalizeModelIdForProvider,
   normalizeMemoryItems,
   normalizeUiComplexity,
   providerSupportsReasoning,
+  saveApiSettingsToStorage,
+  type ApiSettingsStorage,
   serializeApiSettings
 } from "./apiSettings";
+
+function memoryStorage(
+  initial: Record<string, string> = {}
+): ApiSettingsStorage & { entries(): Record<string, string> } {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+    entries: () => Object.fromEntries(values)
+  };
+}
 
 describe("apiSettings", () => {
   it("defaults user memory settings to an empty prompt and table", () => {
@@ -27,6 +45,129 @@ describe("apiSettings", () => {
     assert.equal(normalizeApiSettings(null).userPreferencePrompt, "");
     assert.equal(normalizeApiSettings(null).uiComplexity, DEFAULT_UI_COMPLEXITY);
     assert.deepEqual(normalizeApiSettings(null).memoryItems, []);
+  });
+
+  it("keeps memory in separate storage for every account", () => {
+    const localStorage = memoryStorage();
+    const sessionStorage = memoryStorage();
+    saveApiSettingsToStorage(
+      {
+        ...DEFAULT_API_SETTINGS,
+        userPreferencePrompt: "Account A preferences",
+        memoryItems: [{ id: "a", text: "Account A memory" }]
+      },
+      "user/a",
+      localStorage,
+      sessionStorage
+    );
+    saveApiSettingsToStorage(
+      {
+        ...DEFAULT_API_SETTINGS,
+        userPreferencePrompt: "Account B preferences",
+        memoryItems: [{ id: "b", text: "Account B memory" }]
+      },
+      "user/b",
+      localStorage,
+      sessionStorage
+    );
+
+    const accountA = loadApiSettingsFromStorage(
+      "user/a",
+      localStorage,
+      sessionStorage
+    );
+    const accountB = loadApiSettingsFromStorage(
+      "user/b",
+      localStorage,
+      sessionStorage
+    );
+    const anonymous = loadApiSettingsFromStorage(
+      null,
+      localStorage,
+      sessionStorage
+    );
+
+    assert.equal(accountA.userPreferencePrompt, "Account A preferences");
+    assert.deepEqual(accountA.memoryItems, [
+      { id: "a", text: "Account A memory" }
+    ]);
+    assert.equal(accountB.userPreferencePrompt, "Account B preferences");
+    assert.deepEqual(accountB.memoryItems, [
+      { id: "b", text: "Account B memory" }
+    ]);
+    assert.equal(anonymous.userPreferencePrompt, "");
+    assert.deepEqual(anonymous.memoryItems, []);
+    assert.ok(
+      localStorage.entries()[
+        `${ACCOUNT_API_MEMORY_STORAGE_PREFIX}${encodeURIComponent("user/a")}`
+      ]
+    );
+    assert.ok(
+      localStorage.entries()[
+        `${ACCOUNT_API_MEMORY_STORAGE_PREFIX}${encodeURIComponent("user/b")}`
+      ]
+    );
+  });
+
+  it("does not leave memory in globally shared API settings", () => {
+    const localStorage = memoryStorage();
+    const sessionStorage = memoryStorage();
+    saveApiSettingsToStorage(
+      {
+        ...DEFAULT_API_SETTINGS,
+        userPreferencePrompt: "Private preference",
+        memoryItems: [{ id: "private", text: "Private memory" }]
+      },
+      "account-1",
+      localStorage,
+      sessionStorage
+    );
+
+    const shared = JSON.parse(
+      localStorage.entries()[API_SETTINGS_STORAGE_KEY]
+    ) as Record<string, unknown>;
+    assert.equal("userPreferencePrompt" in shared, false);
+    assert.equal("memoryItems" in shared, false);
+  });
+
+  it("migrates legacy global memory only to the local browser scope", () => {
+    const legacy = {
+      ...DEFAULT_API_SETTINGS,
+      userPreferencePrompt: "Unowned legacy preference",
+      memoryItems: [{ id: "legacy", text: "Unowned legacy memory" }]
+    };
+    const localStorage = memoryStorage({
+      [API_SETTINGS_STORAGE_KEY]: JSON.stringify(legacy)
+    });
+    const sessionStorage = memoryStorage();
+
+    const account = loadApiSettingsFromStorage(
+      "account-1",
+      localStorage,
+      sessionStorage
+    );
+    const local = loadApiSettingsFromStorage(
+      null,
+      localStorage,
+      sessionStorage
+    );
+
+    assert.equal(account.userPreferencePrompt, "");
+    assert.deepEqual(account.memoryItems, []);
+    assert.equal(local.userPreferencePrompt, "Unowned legacy preference");
+    assert.deepEqual(local.memoryItems, [
+      { id: "legacy", text: "Unowned legacy memory" }
+    ]);
+    saveApiSettingsToStorage(
+      local,
+      null,
+      localStorage,
+      sessionStorage
+    );
+    assert.match(
+      localStorage.getItem(LOCAL_API_MEMORY_STORAGE_KEY) ?? "",
+      /Unowned legacy memory/
+    );
   });
 
   it("derives the default models endpoint from the base URL", () => {
