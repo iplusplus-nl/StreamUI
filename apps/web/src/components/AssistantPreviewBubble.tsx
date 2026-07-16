@@ -101,6 +101,7 @@ export function AssistantPreviewBubble({
   const containerRef = useRef<HTMLElement | null>(null);
   const previewShellRef = useRef<HTMLDivElement | null>(null);
   const actionsSlotRef = useRef<HTMLDivElement | null>(null);
+  const bottomActionsRef = useRef<HTMLDivElement | null>(null);
   const sideActionsRef = useRef<HTMLDivElement | null>(null);
   const [floatingEditPosition, setFloatingEditPosition] =
     useState<FloatingEditPosition | null>(null);
@@ -316,6 +317,10 @@ export function AssistantPreviewBubble({
   }, [actions, selectionModeActive, snapshot.status, updateSideActions]);
 
   useLayoutEffect(() => {
+    bottomActionsRef.current?.toggleAttribute("inert", bottomActionsSuppressed);
+  }, [bottomActionsSuppressed]);
+
+  useLayoutEffect(() => {
     sideActionsRef.current?.toggleAttribute("inert", !sideActionsPosition);
   }, [sideActionsPosition]);
 
@@ -383,6 +388,7 @@ export function AssistantPreviewBubble({
         className="assistant-artifact-actions-slot"
       >
         <div
+          ref={bottomActionsRef}
           className={`assistant-artifact-actions ${
             bottomActionsSuppressed ? "is-suppressed" : ""
           }`}

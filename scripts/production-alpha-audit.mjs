@@ -784,7 +784,7 @@ try {
         .evaluateAll((elements) =>
           new Set(
             elements.flatMap((element) => {
-              const match = element.textContent?.trim().match(/^(?:0?)([1-9]|[12]\d|3[0-5])\b/);
+              const match = element.textContent?.trim().match(/^0?([1-9]|[12]\d|3[0-5])/);
               return match ? [Number(match[1])] : [];
             }),
           ).size,
