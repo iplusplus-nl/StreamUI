@@ -173,8 +173,8 @@ export function SettingsSelect({
     if (!isOpen || !menuPosition || hasFocusedMenuRef.current) {
       return undefined;
     }
-    hasFocusedMenuRef.current = true;
     const frame = window.requestAnimationFrame(() => {
+      hasFocusedMenuRef.current = true;
       focusOption(
         getInitialSettingsOptionIndex(
           options,
