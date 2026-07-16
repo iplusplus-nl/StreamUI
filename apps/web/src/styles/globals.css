@@ -3693,6 +3693,14 @@ button {
   transform: translateY(0) scale(1);
 }
 
+@media (hover: none), (pointer: coarse) {
+  .bubble-edit-button {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .avatar {
   display: none;
 }
