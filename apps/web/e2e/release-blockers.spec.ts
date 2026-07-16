@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "playwright/test";
+import { CONTENT_SECURITY_POLICY } from "../server/securityHeaders.js";
 
 const MODELS = Array.from(
   { length: 12 },
@@ -11,6 +12,40 @@ const TRANSPARENT_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64"
 );
+
+test("production CSP keeps sandboxed artifact scripts interactive", async ({
+  page
+}) => {
+  await page.setContent(`<!doctype html>
+    <html>
+      <head>
+        <meta http-equiv="Content-Security-Policy" content="${CONTENT_SECURITY_POLICY}">
+      </head>
+      <body><iframe sandbox="allow-scripts" title="Artifact preview"></iframe></body>
+    </html>`);
+
+  const source = `<!doctype html>
+    <button id="artifact-button" type="button">Run artifact action</button>
+    <output id="artifact-status">runtime pending</output>
+    <script>
+      const status = document.querySelector("#artifact-status");
+      status.textContent = "runtime ready";
+      document.querySelector("#artifact-button").addEventListener("click", () => {
+        status.textContent = "artifact action complete";
+      });
+    </script>`;
+  await page.locator("iframe").evaluate((iframe, srcdoc) => {
+    (iframe as HTMLIFrameElement).srcdoc = srcdoc;
+  }, source);
+
+  const artifact = page.locator("iframe").contentFrame();
+  await expect(artifact.locator("#artifact-status")).toHaveText("runtime ready");
+  await artifact.getByRole("button", { name: "Run artifact action" }).click();
+  await expect(artifact.locator("#artifact-status")).toHaveText(
+    "artifact action complete"
+  );
+  expect(CONTENT_SECURITY_POLICY).toContain("script-src-attr 'none'");
+});
 
 type MockSessionState = {
   activeSessionId: string;

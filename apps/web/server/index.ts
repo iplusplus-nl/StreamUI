@@ -48,6 +48,7 @@ import {
 } from "./requestLimits.js";
 import { getAuthenticatedStateKey } from "./chatHtmlService.js";
 import { checkSessionRepositoryHealth } from "./sessionRepository.js";
+import { CONTENT_SECURITY_POLICY } from "./securityHeaders.js";
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -109,8 +110,7 @@ function authorizeDeployAdmin(req: Request, res: Response): boolean {
 app.disable("x-powered-by");
 app.use((_req, res, next) => {
   res.set({
-    "Content-Security-Policy":
-      "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; frame-src 'self' blob:; worker-src 'self' blob:",
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Permissions-Policy":
       "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
