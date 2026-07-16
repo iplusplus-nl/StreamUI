@@ -566,7 +566,7 @@ test("keyboard focus reveals non-active session actions", async ({ page }) => {
   await expect(secondary.getByRole("menuitem", { name: "Delete" })).toBeVisible();
 });
 
-test("hidden duplicate artifact actions stay inert", async ({ page }) => {
+test("hidden artifact action groups stay inert", async ({ page }) => {
   await openApp(
     page,
     { width: 320, height: 568 },
@@ -580,6 +580,14 @@ test("hidden duplicate artifact actions stay inert", async ({ page }) => {
   const hiddenButton = hiddenActions.locator("button").first();
   await hiddenButton.focus();
   await expect(hiddenButton).not.toBeFocused();
+
+  const suppressedActions = page.locator(".assistant-artifact-actions.is-suppressed");
+  await expect(suppressedActions).toHaveAttribute("aria-hidden", "true");
+  await expect(suppressedActions).toHaveAttribute("inert", "");
+
+  const suppressedButton = suppressedActions.locator("button").first();
+  await suppressedButton.focus();
+  await expect(suppressedButton).not.toBeFocused();
 });
 
 test("opaque artifact preview loads a tokenized same-origin session image", async ({
