@@ -503,6 +503,9 @@ test("mobile drawer closes with Escape and its real backdrop", async ({ page }) 
   await expect(backdrop).toBeVisible();
   await expect(page.locator(".chat-workspace")).toHaveAttribute("inert", "");
   await expect(drawer.getByRole("button", { name: "Collapse sidebar" })).toBeFocused();
+  await expect
+    .poll(async () => (await drawer.boundingBox())?.width ?? 0)
+    .toBeGreaterThanOrEqual(220);
 
   await page.keyboard.press("Escape");
   await expect(drawer).toBeHidden();
@@ -520,6 +523,76 @@ test("mobile drawer closes with Escape and its real backdrop", async ({ page }) 
 
 test.describe("touch session actions", () => {
   test.use({ hasTouch: true });
+
+  test("mobile composer stays compact, readable, and does not summon the keyboard", async ({
+    page
+  }) => {
+    await openApp(page, { width: 320, height: 568 });
+
+    const input = page.getByPlaceholder("Send a message...");
+    await expect(input).not.toBeFocused();
+
+    const modelButton = page.getByRole("button", { name: "Choose model" });
+    await expect(modelButton.locator(".chat-model-button-reasoning")).toBeHidden();
+    const modelName = modelButton.locator("span").first();
+    expect(
+      await modelName.evaluate((element) => element.scrollWidth <= element.clientWidth)
+    ).toBe(true);
+
+    for (const control of [
+      page.getByRole("button", { name: "Attach image" }),
+      modelButton,
+      page.getByRole("button", { name: "Send message" })
+    ]) {
+      const box = await control.boundingBox();
+      expect(box?.height).toBeGreaterThanOrEqual(40);
+    }
+  });
+
+  test("phone settings use the viewport and keep actions reachable", async ({
+    page
+  }) => {
+    const viewport = { width: 320, height: 568 };
+    await openApp(page, viewport);
+
+    await page.getByRole("button", { name: "Expand sidebar" }).tap();
+    await page.getByRole("button", { name: "Open personal settings" }).tap();
+    const settings = page.getByRole("dialog", { name: "Personal" });
+    await expect(settings).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Close session drawer" })
+    ).toBeHidden();
+    await expect(page.locator(".chat-workspace")).not.toHaveAttribute("inert", "");
+
+    const panelBox = await settings.boundingBox();
+    expect(panelBox?.x).toBe(0);
+    expect(panelBox?.y).toBe(0);
+    expect(panelBox?.width).toBe(viewport.width);
+    expect(panelBox?.height).toBe(viewport.height);
+
+    const actions = page.locator(".settings-actions");
+    const scrollArea = settings.locator(".settings-form-scroll");
+    await expect(actions).toBeInViewport();
+    const before = await actions.boundingBox();
+    const scrollMetrics = await scrollArea.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight
+    }));
+    expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+
+    await scrollArea.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const after = await actions.boundingBox();
+    expect(after?.y).toBeCloseTo(before?.y ?? 0, 0);
+    expect((after?.y ?? 0) + (after?.height ?? 0)).toBeLessThanOrEqual(
+      viewport.height
+    );
+
+    await settings.getByRole("button", { name: "Providers" }).tap();
+    await expect(page.getByRole("dialog", { name: "Providers" })).toBeVisible();
+    await expect(actions).toBeInViewport();
+  });
 
   test("non-active session actions remain visible and tappable", async ({ page }) => {
     await openApp(

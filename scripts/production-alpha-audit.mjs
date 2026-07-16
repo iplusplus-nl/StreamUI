@@ -855,6 +855,44 @@ try {
     return { sessionCountBefore, sessionCountAfter };
   });
 
+  await check("Phone settings fill the viewport and keep save actions reachable", async () => {
+    try {
+      await page.setViewportSize({ width: 320, height: 568 });
+      await openSettings(page, "Personal");
+      const panel = page.locator(".settings-panel");
+      const panelBox = await panel.boundingBox();
+      assert(panelBox, "phone settings panel geometry unavailable");
+      assert(
+        Math.abs(panelBox.x) <= 1 &&
+          Math.abs(panelBox.y) <= 1 &&
+          Math.abs(panelBox.width - 320) <= 1 &&
+          Math.abs(panelBox.height - 568) <= 1,
+        `phone settings did not fill the viewport: ${JSON.stringify(panelBox)}`,
+      );
+      const actions = panel.locator(".settings-actions");
+      const actionsBox = await actions.boundingBox();
+      assert(
+        actionsBox && actionsBox.y >= 0 && actionsBox.y + actionsBox.height <= 569,
+        "phone settings actions escaped the viewport",
+      );
+      const scrollArea = panel.locator(".settings-form-scroll");
+      const scroll = await scrollArea.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      }));
+      assert(scroll.scrollHeight > scroll.clientHeight, "phone settings content did not scroll independently");
+      await screenshot(page, "responsive-settings-personal-320x568");
+      await panel.getByRole("button", { name: "Providers", exact: true }).click();
+      await page.getByRole("heading", { name: "Providers", exact: true }).waitFor();
+      await screenshot(page, "responsive-settings-providers-320x568");
+      await page.keyboard.press("Escape");
+      await panel.waitFor({ state: "hidden" });
+      return { panelBox, actionsBox, scroll };
+    } finally {
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+  });
+
   for (const viewport of [
     { width: 320, height: 568, name: "320x568" },
     { width: 375, height: 812, name: "375x812" },
@@ -870,6 +908,7 @@ try {
         const expand = page.getByRole("button", { name: "Expand sidebar" });
         await expand.click();
         await page.getByRole("button", { name: "Close session drawer" }).waitFor();
+        await page.waitForTimeout(250);
         const drawerAudit = await auditDom(page, `drawer ${viewport.name}`);
         await screenshot(page, `responsive-drawer-${viewport.name}`);
         await page.keyboard.press("Escape");

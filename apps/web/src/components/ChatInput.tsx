@@ -17,6 +17,14 @@ import {
 import { getComposerAttachmentPresentation } from "./chatInputAttachmentModel";
 import { ChatModelSelector } from "./ChatModelSelector";
 
+function shouldAutoFocusComposer(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+
+  return !window.matchMedia("(hover: none), (pointer: coarse)").matches;
+}
+
 function useAttachmentPreviewUrl(attachment: Attachment): string | undefined {
   return useMemo(() => {
     if (attachment.file) {
@@ -167,6 +175,7 @@ export function ChatInput({
   onRetryAttachmentCleanup,
   onUiComplexityChange
 }: ChatInputProps) {
+  const autoFocusComposer = useMemo(shouldAutoFocusComposer, []);
   const attachments = useAuiState((state) => state.composer.attachments);
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const canSend = useAuiState((state) => state.composer.canSend);
@@ -262,7 +271,7 @@ export function ChatInput({
         <ComposerPrimitive.Input
           className="chat-input-textarea"
           rows={1}
-          autoFocus
+          autoFocus={autoFocusComposer}
           placeholder="Send a message..."
           submitMode="enter"
         />

@@ -125,6 +125,15 @@ export function SessionSidebar({
   const shouldShowPersonalSettings =
     !shouldShowSignIn || accountMode === "local";
 
+  const openSettingsSection = (section: SettingsSection) => {
+    setOpenSessionMenuId(null);
+    if (isCompactSidebar) {
+      setIsCollapsed(true);
+    }
+    setSettingsSection(section);
+    setIsSettingsOpen(true);
+  };
+
   useEffect(() => {
     const mediaQuery = window.matchMedia(COMPACT_SIDEBAR_QUERY);
     const updateCompactSidebarState = () => {
@@ -222,8 +231,7 @@ export function SessionSidebar({
     if (providerSettingsRequestVersion <= 0) {
       return;
     }
-    setSettingsSection("api");
-    setIsSettingsOpen(true);
+    openSettingsSection("api");
   }, [providerSettingsRequestVersion]);
 
   return (
@@ -298,10 +306,7 @@ export function SessionSidebar({
                 type="button"
                 aria-label="Open personal settings"
                 title="Personal settings"
-                onClick={() => {
-                  setSettingsSection("profile");
-                  setIsSettingsOpen(true);
-                }}
+                onClick={() => openSettingsSection("profile")}
               >
                 <ProfileAvatar avatarDataUrl={profileSettings.avatarDataUrl} />
               </button>
@@ -477,10 +482,7 @@ export function SessionSidebar({
                   type="button"
                   aria-label="Open personal settings"
                   title={authUser?.email || "Personal settings"}
-                  onClick={() => {
-                    setSettingsSection("profile");
-                    setIsSettingsOpen(true);
-                  }}
+                  onClick={() => openSettingsSection("profile")}
                 >
                   <ProfileAvatar avatarDataUrl={profileSettings.avatarDataUrl} />
                 </button>
@@ -491,10 +493,7 @@ export function SessionSidebar({
                   type="button"
                   title={authUser.email}
                   aria-label={`Open account settings for ${authUser.email}`}
-                  onClick={() => {
-                    setSettingsSection("profile");
-                    setIsSettingsOpen(true);
-                  }}
+                  onClick={() => openSettingsSection("profile")}
                 >
                   {authUser.email}
                 </button>

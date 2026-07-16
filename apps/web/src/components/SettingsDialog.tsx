@@ -360,8 +360,9 @@ export function SettingsDialog({
               handleSave();
             }}
           >
-            {section === "api" ? (
-              <ApiSettingsSection
+            <div className="settings-form-scroll">
+              {section === "api" ? (
+                <ApiSettingsSection
                 settings={draftApiSettings}
                 runtimeSettings={runtimeSettings}
                 cloudEnabled={cloudEnabled}
@@ -385,8 +386,8 @@ export function SettingsDialog({
                   )
                 }
               />
-            ) : section === "profile" ? (
-              <ProfileSettingsSection
+              ) : section === "profile" ? (
+                <ProfileSettingsSection
                 apiSettings={draftApiSettings}
                 profileSettings={draftProfileSettings}
                 cloudEnabled={cloudEnabled}
@@ -443,8 +444,8 @@ export function SettingsDialog({
                 onDeleteAccount={onDeleteAccount}
                 onGenerateRecoveryCode={onGenerateRecoveryCode}
               />
-            ) : section === "display" ? (
-              <DisplaySettingsSection
+              ) : section === "display" ? (
+                <DisplaySettingsSection
                 settings={draftDisplaySettings}
                 onSettingsChange={(patch) =>
                   updateDisplaySettingsDraft((current) => ({
@@ -453,13 +454,14 @@ export function SettingsDialog({
                   }))
                 }
               />
-            ) : (
-              <SearchSettingsSection
+              ) : (
+                <SearchSettingsSection
                 settings={draftSearchSettings}
                 runtimeSettings={runtimeSettings}
                 onSettingsChange={updateSearchDraft}
               />
-            )}
+              )}
+            </div>
 
             <div className="settings-actions">
               <button
