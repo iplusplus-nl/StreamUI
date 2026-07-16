@@ -1,0 +1,459 @@
+<sessiontitle>Cubic Bezier Playground</sessiontitle>
+<chat></chat>
+<streamui>
+<style>
+  :root {
+    --bg: var(--streamui-page-bg, #212121);
+    --surface: rgba(255, 255, 255, 0.03);
+    --surface-border: var(--streamui-secondary-border, rgba(255, 255, 255, 0.1));
+    --text: var(--streamui-text, #eee);
+    --text-muted: var(--streamui-muted, #999);
+    --primary: #4F93FA;
+    --primary-dim: rgba(79, 147, 250, 0.2);
+    --handle-1: #FF5C8D;
+    --handle-2: #2AD0B0;
+    --grid-line: rgba(255, 255, 255, 0.08);
+  }
+
+  .bezier-wrapper {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2rem;
+    color: var(--text);
+    font-family: system-ui, -apple-system, sans-serif;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 1rem 0;
+  }
+
+  @media (min-width: 768px) {
+    .bezier-wrapper {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  /* Header & Typography */
+  .bezier-header h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+  }
+  .bezier-header p {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+</style>
+
+<div class="bezier-wrapper">
+
+  <!-- INTERACTIVE PLAYGROUND COLUMN -->
+  <div class="bezier-interactive">
+    <style>
+      .bezier-canvas-wrapper {
+        background: var(--surface);
+        border: 1px solid var(--surface-border);
+        border-radius: 12px;
+        position: relative;
+        aspect-ratio: 1;
+        width: 100%;
+        user-select: none;
+        touch-action: none;
+        box-sizing: border-box;
+      }
+
+      .bezier-svg {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible; /* allow handles to slightly overflow */
+        padding: 40px; /* inset for axis labels */
+        box-sizing: border-box;
+      }
+
+      .svg-bg { fill: none; }
+      .svg-grid { stroke: var(--grid-line); stroke-width: 1; }
+      .svg-axis { stroke: var(--text-muted); stroke-width: 1.5; }
+
+      .svg-curve {
+        fill: none;
+        stroke: var(--primary);
+        stroke-width: 4;
+        stroke-linecap: round;
+        pointer-events: none;
+      }
+
+      .svg-handle-line {
+        fill: none;
+        stroke-width: 2;
+        stroke-dasharray: 4 4;
+        pointer-events: none;
+      }
+
+      .svg-handle {
+        cursor: grab;
+        fill: #fff;
+        stroke-width: 3;
+        transition: transform 0.1s;
+      }
+      .svg-handle:active {
+        cursor: grabbing;
+        transform: scale(1.1);
+      }
+      .svg-handle-1 { stroke: var(--handle-1); }
+      .svg-handle-2 { stroke: var(--handle-2); }
+      .svg-handle-line-1 { stroke: var(--handle-1); }
+      .svg-handle-line-2 { stroke: var(--handle-2); }
+
+      .svg-point-fixed {
+        fill: var(--text);
+      }
+
+      .anim-demo-box {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        background: var(--surface);
+        border: 1px solid var(--surface-border);
+        border-radius: 8px;
+      }
+
+      .anim-track {
+        height: 24px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 12px;
+        position: relative;
+      }
+
+      .anim-ball {
+        position: absolute;
+        left: 0;
+        top: 2px;
+        width: 20px;
+        height: 20px;
+        background: var(--primary);
+        border-radius: 50%;
+        box-shadow: 0 0 10px var(--primary-dim);
+      }
+
+      /* The global transition var will be set via JS */
+      .anim-ball.running {
+        animation: run-ball 2s infinite alternate;
+        /* Default fallback */
+        animation-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
+      }
+
+      @keyframes run-ball {
+        0% { left: 0%; }
+        100% { left: calc(100% - 20px); }
+      }
+    </style>
+
+    <div class="bezier-header">
+      <h2>Visualizer</h2>
+      <p>Drag the colored control points ($P_1$ and $P_2$) to shape the curve.</p>
+    </div>
+
+    <br>
+
+    <div class="bezier-canvas-wrapper" id="canvas-container">
+      <svg class="bezier-svg" id="bezier-svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+        <!-- SVG Coordinate system: 0,0 is top-left, 100,100 is bottom-right -->
+        <!-- Background Grid -->
+        <g class="svg-grid">
+          <line x1="0" y1="25" x2="100" y2="25"></line>
+          <line x1="0" y1="50" x2="100" y2="50"></line>
+          <line x1="0" y1="75" x2="100" y2="75"></line>
+          <line x1="25" y1="0" x2="25" y2="100"></line>
+          <line x1="50" y1="0" x2="50" y2="100"></line>
+          <line x1="75" y1="0" x2="75" y2="100"></line>
+        </g>
+
+        <!-- Axes box -->
+        <rect x="0" y="0" width="100" height="100" class="svg-bg" stroke="var(--text-muted)" stroke-width="1.5"></rect>
+
+        <!-- The actual bezier curve -->
+        <path id="curve-path" class="svg-curve" d="M 0 100 C 25 90, 25 0, 100 0"></path>
+
+        <!-- Handle Lines -->
+        <line id="handle-line-1" class="svg-handle-line svg-handle-line-1" x1="0" y1="100" x2="25" y2="90"></line>
+        <line id="handle-line-2" class="svg-handle-line svg-handle-line-2" x1="100" y1="0" x2="25" y2="0"></line>
+
+        <!-- Fixed end points P0, P3 -->
+        <circle cx="0" cy="100" r="3" class="svg-point-fixed"></circle>
+        <circle cx="100" cy="0" r="3" class="svg-point-fixed"></circle>
+
+        <!-- Drag handles P1, P2 -->
+        <!-- Center of circle represents the handle pos -->
+        <circle id="handle-1" class="svg-handle svg-handle-1" cx="25" cy="90" r="5"></circle>
+        <circle id="handle-2" class="svg-handle svg-handle-2" cx="25" cy="0" r="5"></circle>
+      </svg>
+    </div>
+
+    <div class="anim-demo-box">
+      <div style="display:flex; justify-content:space-between; margin-bottom:0.5rem">
+        <span style="font-size:0.875rem; color:var(--text-muted)">Transition Speed Demo</span>
+        <span id="timing-readout" style="font-family:monospace; font-size:0.875rem; color:var(--primary);">cubic-bezier(0.25, 0.1, 0.25, 1.0)</span>
+      </div>
+      <div class="anim-track">
+        <div id="anim-ball" class="anim-ball running"></div>
+      </div>
+    </div>
+  </div><!-- /bezier-interactive -->
+
+  <!-- DETAILS & FORMULA COLUMN -->
+  <div class="bezier-details">
+    <style>
+      .info-card {
+        background: var(--surface);
+        border: 1px solid var(--surface-border);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-top: 1rem;
+      }
+      .info-card h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.125rem;
+      }
+      .math-box {
+        padding: 1rem;
+        background: rgba(0,0,0,0.2);
+        border-radius: 8px;
+        overflow-x: auto;
+        color: #ddd;
+        margin-bottom: 1.5rem;
+      }
+      .presets-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+      .preset-btn {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid var(--surface-border);
+        color: var(--text);
+        padding: 0.75rem;
+        border-radius: 8px;
+        cursor: pointer;
+        text-align: left;
+        transition: background 0.15s, border-color 0.15s;
+        font-size: 0.9rem;
+      }
+      .preset-btn:hover {
+        background: rgba(255,255,255,0.1);
+        border-color: rgba(255,255,255,0.3);
+      }
+      .preset-btn span.val {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        font-family: monospace;
+        margin-top: 0.25rem;
+      }
+      ul.bullet-info {
+        padding-left: 1.25rem;
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        line-height: 1.6;
+      }
+      ul.bullet-info li {
+        margin-bottom: 0.5rem;
+      }
+    </style>
+
+    <div class="bezier-header">
+      <h2>The Math</h2>
+      <p>How four points define a smooth transition.</p>
+    </div>
+
+    <div class="info-card">
+      <h3>The Cubic Expression</h3>
+      <p style="color:var(--text-muted); font-size:0.95rem; margin-bottom: 1rem;">
+        A cubic Bézier curve uses parametric equations based on a time parameter \( t \) that goes from 0 to 1. The position \( B(t) \) is interpolated between four points:
+      </p>
+
+      <div class="math-box">
+        \[ B(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3 \]
+      </div>
+
+      <ul class="bullet-info">
+        <li><strong>\( P_0 \) (Start)</strong>: Always fixed at <code>(0, 0)</code> in CSS easings.</li>
+        <li><strong style="color:var(--handle-1)">\( P_1 \) (Control 1)</strong>: Pulls the curve initially. Determines starting acceleration.</li>
+        <li><strong style="color:var(--handle-2)">\( P_2 \) (Control 2)</strong>: Pulls the curve near the end. Determines deceleration.</li>
+        <li><strong>\( P_3 \) (End)</strong>: Always fixed at <code>(1, 1)</code> in standard easings.</li>
+        <li><strong>\( t \) (Time)</strong>: Progress through the animation.</li>
+      </ul>
+    </div>
+
+    <div class="info-card">
+      <h3>Easing Presets</h3>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 1rem 0;">
+        Click to apply common timing functions.
+      </p>
+
+      <div class="presets-grid">
+        <button class="preset-btn" data-preset="0,0,1,1">
+          Linear
+          <span class="val">0.00, 0.00, 1.00, 1.00</span>
+        </button>
+        <button class="preset-btn" data-preset="0.42,0,1,1">
+          Ease In
+          <span class="val">0.42, 0.00, 1.00, 1.00</span>
+        </button>
+        <button class="preset-btn" data-preset="0,0,0.58,1">
+          Ease Out
+          <span class="val">0.00, 0.00, 0.58, 1.00</span>
+        </button>
+        <button class="preset-btn" data-preset="0.42,0,0.58,1">
+          Ease In Out
+          <span class="val">0.42, 0.00, 0.58, 1.00</span>
+        </button>
+        <button class="preset-btn" data-preset="0.68,-0.55,0.26,1.55">
+          Bouncy / Back
+          <span class="val">0.68, -0.55, 0.26, 1.55</span>
+        </button>
+        <button class="preset-btn" data-preset="0.25,0.1,0.25,1">
+          Default Ease
+          <span class="val">0.25, 0.10, 0.25, 1.00</span>
+        </button>
+      </div>
+    </div>
+  </div><!-- /bezier-details -->
+
+</div>
+
+<script>
+  (function() {
+    // MathJax triggers natively in ChatHTML for LaTeX tags,
+    // but the interactive components require custom setup.
+
+    const svg = document.getElementById("bezier-svg");
+    const handle1 = document.getElementById("handle-1");
+    const handle2 = document.getElementById("handle-2");
+    const handleLine1 = document.getElementById("handle-line-1");
+    const handleLine2 = document.getElementById("handle-line-2");
+    const curvePath = document.getElementById("curve-path");
+
+    const timingReadout = document.getElementById("timing-readout");
+    const animBall = document.getElementById("anim-ball");
+    const presetBtns = document.querySelectorAll(".preset-btn");
+
+    // Coordinates are mathematically (0,0) to (1,1).
+    // SVG is mapped 0-100 logically, but Y is inverted in SVG.
+    // So Mathematical P(x, y) maps to SVG(x * 100, 100 - y * 100)
+    let p1 = { x: 0.25, y: 0.10 };
+    let p2 = { x: 0.25, y: 1.00 }; // Wait, default CSS ease is 0.25,0.1,0.25,1
+
+    let activeHandle = null;
+
+    function renderCurve() {
+      // Clamp X for visual & css correctness (CSS cubic-bezier requires X in [0,1])
+      p1.x = Math.max(0, Math.min(1, p1.x));
+      p2.x = Math.max(0, Math.min(1, p2.x));
+
+      // Calculate SVG positions
+      const sx1 = p1.x * 100;
+      const sy1 = 100 - (p1.y * 100);
+
+      const sx2 = p2.x * 100;
+      const sy2 = 100 - (p2.y * 100);
+
+      // Update Handle SVG elements
+      handle1.setAttribute('cx', sx1);
+      handle1.setAttribute('cy', sy1);
+      handleLine1.setAttribute('x2', sx1);
+      handleLine1.setAttribute('y2', sy1);
+
+      handle2.setAttribute('cx', sx2);
+      handle2.setAttribute('cy', sy2);
+      handleLine2.setAttribute('x1', sx2);
+      handleLine2.setAttribute('y1', sy2);
+
+      // Update Path
+      // M P0 C P1, P2, P3
+      // P0 is always (0, 100) SVG and P3 is (100, 0) SVG
+      curvePath.setAttribute('d', `M 0 100 C ${sx1} ${sy1}, ${sx2} ${sy2}, 100 0`);
+
+      // Update Readouts & Animation
+      const bezierStr = `cubic-bezier(${p1.x.toFixed(2)}, ${p1.y.toFixed(2)}, ${p2.x.toFixed(2)}, ${p2.y.toFixed(2)})`;
+      timingReadout.textContent = bezierStr;
+
+      // Force animation restart smoothly to show new timing
+      animBall.style.animationTimingFunction = bezierStr;
+    }
+
+    // Convert mouse/touch interaction to SVG coordinates
+    function getMousePosition(evt) {
+      if (evt.touches && evt.touches.length > 0) {
+        evt = evt.touches[0];
+      }
+      const CTM = svg.getScreenCTM();
+      return {
+        x: (evt.clientX - CTM.e) / CTM.a,
+        y: (evt.clientY - CTM.f) / CTM.d
+      };
+    }
+
+    function startDrag(evt) {
+      if (evt.target === handle1) {
+        activeHandle = "p1";
+      } else if (evt.target === handle2) {
+        activeHandle = "p2";
+      }
+    }
+
+    function drag(evt) {
+      if (!activeHandle) return;
+      evt.preventDefault();
+
+      const coord = getMousePosition(evt);
+
+      // Map SVG to Math coordinates
+      // svgX = mathX * 100 => mathX = svgX / 100
+      // svgY = 100 - mathY * 100 => mathY = (100 - svgY) / 100
+      let mathX = coord.x / 100;
+      let mathY = (100 - coord.y) / 100;
+
+      if (activeHandle === "p1") {
+        p1.x = mathX;
+        p1.y = mathY;
+      } else {
+        p2.x = mathX;
+        p2.y = mathY;
+      }
+
+      renderCurve();
+    }
+
+    function endDrag(evt) {
+      activeHandle = null;
+    }
+
+    // Attach Event Listeners for dragging
+    svg.addEventListener('mousedown', startDrag);
+    svg.addEventListener('mousemove', drag);
+    window.addEventListener('mouseup', endDrag);
+
+    svg.addEventListener('touchstart', startDrag, { passive: false });
+    svg.addEventListener('touchmove', drag, { passive: false });
+    window.addEventListener('touchend', endDrag);
+
+    // Preset buttons logic
+    presetBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const vals = btn.getAttribute('data-preset').split(',').map(Number);
+        p1.x = vals[0];
+        p1.y = vals[1];
+        p2.x = vals[2];
+        p2.y = vals[3];
+        renderCurve();
+      });
+    });
+
+    // Initial render
+    renderCurve();
+  })();
+</script>
+</streamui>

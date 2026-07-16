@@ -1,0 +1,606 @@
+<sessiontitle>Browser Navigation Pipeline</sessiontitle>
+<chat></chat>
+<streamui>
+<style>
+  :root {
+    --bg-primary: var(--streamui-page-bg, #1a1a1a);
+    --bg-surface: color-mix(in srgb, var(--streamui-page-bg, #1a1a1a) 90%, white);
+    --bg-surface-elevated: color-mix(in srgb, var(--streamui-page-bg, #1a1a1a) 80%, white);
+    --text-main: var(--streamui-text, #f0f0f0);
+    --text-muted: var(--streamui-muted, #a0a0a0);
+    --accent-blue: #3b82f6;
+    --accent-cyan: #06b6d4;
+    --accent-green: #10b981;
+    --accent-purple: #8b5cf6;
+    --accent-orange: #f97316;
+    --border-color: var(--streamui-secondary-border, rgba(255, 255, 255, 0.1));
+  }
+
+  .pipeline-container {
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+    font-family: system-ui, -apple-system, sans-serif;
+    color: var(--text-main);
+    background: var(--bg-primary);
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 600px;
+  }
+
+  .url-bar-wrapper {
+    padding: 16px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .browser-dots {
+    display: flex;
+    gap: 6px;
+  }
+  .browser-dots span {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #4b5563;
+  }
+  .browser-dots span:nth-child(1) { background: #ef4444; }
+  .browser-dots span:nth-child(2) { background: #eab308; }
+  .browser-dots span:nth-child(3) { background: #22c55e; }
+
+  .url-input {
+    flex: 1;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-family: ui-monospace, monospace;
+    font-size: 14px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+  }
+  .url-input-text {
+    flex: 1;
+  }
+  .url-input-text span {
+    color: var(--text-main);
+  }
+
+  .pipeline-layout {
+    display: flex;
+    flex: 1;
+  }
+
+  /* Timeline Sidebar */
+  .timeline {
+    width: 220px;
+    padding: 24px;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    position: relative;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    top: 36px;
+    left: 35px;
+    bottom: 36px;
+    width: 2px;
+    background: var(--border-color);
+    z-index: 0;
+  }
+
+  .timeline-step {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    opacity: 0.5;
+    transition: all 0.3s ease;
+    cursor: default;
+  }
+
+  .step-node {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--bg-surface-elevated);
+    border: 2px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+  }
+
+  .step-label {
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+  }
+
+  .timeline-step.active {
+    opacity: 1;
+  }
+  .timeline-step.active .step-node {
+    border-color: var(--accent-color, var(--accent-blue));
+    box-shadow: 0 0 12px var(--accent-color, var(--accent-blue));
+    background: var(--bg-primary);
+  }
+  .timeline-step.active .step-node::inner {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-color, var(--accent-blue));
+  }
+
+  .timeline-step.completed {
+    opacity: 0.8;
+  }
+  .timeline-step.completed .step-node {
+    background: var(--accent-color, var(--accent-blue));
+    border-color: var(--accent-color, var(--accent-blue));
+  }
+
+  /* Main View Area */
+  .main-stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+
+  .animation-view {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    padding: 32px;
+    overflow: hidden;
+    background: radial-gradient(circle at center, var(--bg-surface-elevated) 0%, var(--bg-primary) 70%);
+  }
+
+  .anim-container {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  .anim-container.active {
+    display: flex;
+    animation: fadeIn 0.4s ease forwards;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  /* Info Panel */
+  .info-panel {
+    padding: 24px 32px;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-color);
+  }
+
+  .info-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 8px 0;
+    color: var(--accent-color, var(--text-main));
+  }
+
+  .info-desc {
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text-muted);
+    margin: 0;
+    min-height: 4.5em;
+  }
+
+  .controls {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .btn {
+    background: var(--bg-surface-elevated);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--bg-surface-elevated) 80%, white);
+  }
+  .btn.primary {
+    background: var(--accent-color, var(--accent-blue));
+    color: white;
+    border: none;
+  }
+  .btn.primary:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+</style>
+
+<!-- Animation Specific Styles -->
+<style>
+  /* Step 0: Input */
+  .pulse-cursor {
+    display: inline-block;
+    width: 8px;
+    height: 16px;
+    background: var(--accent-blue);
+    margin-left: 2px;
+    animation: blink 1s step-end infinite;
+    vertical-align: middle;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .anim-icon { width: 64px; height: 64px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+
+  .entity {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-main);
+  }
+
+  /* Step 1: DNS */
+  .network-path { position: absolute; top: 50%; left: 100px; right: 100px; height: 2px; background: var(--border-color); transform: translateY(-50%); z-index: 1;}
+  .entity-wrapper { display: flex; justify-content: space-between; width: 80%; max-width: 600px; z-index: 2; position: relative;}
+
+  .packet {
+    position: absolute;
+    top: -24px;
+    width: 24px; height: 16px;
+    border-radius: 4px;
+    background: var(--accent-cyan);
+    box-shadow: 0 0 10px var(--accent-cyan);
+    animation: traverse 2s linear infinite;
+  }
+  @keyframes traverse {
+    0% { left: 0; opacity: 1; transform: translateX(0); }
+    45% { left: 100%; opacity: 1; transform: translateX(-100%); }
+    50% { left: 100%; opacity: 0; transform: translateX(-100%); }
+    55% { left: 100%; opacity: 1; transform: translateX(-100%); background: var(--accent-green); box-shadow: 0 0 10px var(--accent-green); }
+    95% { left: 0; opacity: 1; transform: translateX(0); background: var(--accent-green); box-shadow: 0 0 10px var(--accent-green); }
+    100% { left: 0; opacity: 0; transform: translateX(0); }
+  }
+
+  /* Step 2: TCP */
+  .tcp-packet {
+    position: absolute; width: 16px; height: 16px; border-radius: 50%; background: var(--accent-orange);
+    top: -30px;
+    box-shadow: 0 0 12px var(--accent-orange);
+  }
+  .tcp-anim-1 { animation: slideRight 1.5s ease-in-out infinite; }
+  .tcp-anim-2 { animation: slideLeft 1.5s ease-in-out 0.5s infinite; background: var(--accent-blue); box-shadow: 0 0 12px var(--accent-blue); }
+  .tcp-anim-3 { animation: slideRight 1.5s ease-in-out 1s infinite; background: var(--accent-green); box-shadow: 0 0 12px var(--accent-green); }
+
+  @keyframes slideRight { 0% { left: 0; opacity: 1; } 90% { left: 100%; opacity: 1; } 100% { left: 100%; opacity: 0; } }
+  @keyframes slideLeft { 0% { right: 0; opacity: 1; } 90% { right: 100%; opacity: 1; } 100% { right: 100%; opacity: 0; } }
+
+  /* Step 3: TLS */
+  .tls-shield { color: var(--accent-purple); stroke-dasharray: 100; animation: dash 2s linear infinite; }
+  .lock-ring { transform-origin: 50% 30%; animation: lockClose 2s ease-in-out infinite alternate; }
+  @keyframes dash { to { stroke-dashoffset: 200; } }
+  @keyframes lockClose { 0% { transform: translateY(-5px); } 100% { transform: translateY(0); } }
+
+  /* Step 4: HTTP */
+  .http-doc {
+    width: 40px; height: 50px; background: white; border-radius: 4px;
+    position: absolute; right: 0; top: -40px;
+    border: 2px solid var(--accent-blue);
+    animation: downloadDoc 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .http-doc::after { content:''; position: absolute; top:10px; left:5px; right:5px; height:2px; background:#e2e8f0; box-shadow: 0 6px 0 #e2e8f0, 0 12px 0 #e2e8f0; }
+  @keyframes downloadDoc { 0% { right: 0; opacity: 0; transform: scale(0.5); } 20% { opacity: 1; transform: scale(1); } 80% { right: 100%; opacity: 1; transform: scale(1); } 100% { right: 100%; opacity: 0; transform: scale(0.5); } }
+
+  /* Step 5: Render */
+  .render-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 120px; height: 120px;
+  }
+  .render-block {
+    background: var(--bg-surface-elevated); border-radius: 4px; opacity: 0;
+    animation: popIn 1.5s ease forwards infinite;
+  }
+  .render-block:nth-child(1) { grid-column: 1 / -1; height: 24px; animation-delay: 0s; background: var(--accent-blue); }
+  .render-block:nth-child(2) { grid-column: 1 / 3; animation-delay: 0.3s; background: var(--text-muted); }
+  .render-block:nth-child(3) { grid-column: 3 / 4; animation-delay: 0.6s; background: var(--accent-orange); }
+  .render-block:nth-child(4) { grid-column: 1 / -1; height: 40px; animation-delay: 0.9s; background: var(--accent-green); }
+  @keyframes popIn { 0%, 10% { opacity: 0; transform: scale(0.8); } 20%, 90% { opacity: 1; transform: scale(1); } 100% { opacity: 0; } }
+
+</style>
+
+<div class="pipeline-container" id="tour-root">
+
+  <!-- Browser URL Bar Simulator -->
+  <div class="url-bar-wrapper">
+    <div class="browser-dots"><span></span><span></span><span></span></div>
+    <div class="url-input">
+      https://
+      <div class="url-input-text">
+        <span id="url-text"></span><div class="pulse-cursor" id="url-cursor"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pipeline-layout">
+
+    <!-- Timeline Sidebar -->
+    <div class="timeline" id="timeline">
+      <div class="timeline-step" data-step="0" style="--accent-color: var(--text-muted)">
+        <div class="step-node"></div><div class="step-label">Input URL</div>
+      </div>
+      <div class="timeline-step" data-step="1" style="--accent-color: var(--accent-cyan)">
+        <div class="step-node"></div><div class="step-label">DNS Query</div>
+      </div>
+      <div class="timeline-step" data-step="2" style="--accent-color: var(--accent-orange)">
+        <div class="step-node"></div><div class="step-label">TCP Handshake</div>
+      </div>
+      <div class="timeline-step" data-step="3" style="--accent-color: var(--accent-purple)">
+        <div class="step-node"></div><div class="step-label">TLS Handshake</div>
+      </div>
+      <div class="timeline-step" data-step="4" style="--accent-color: var(--accent-blue)">
+        <div class="step-node"></div><div class="step-label">HTTP Request</div>
+      </div>
+      <div class="timeline-step" data-step="5" style="--accent-color: var(--accent-green)">
+        <div class="step-node"></div><div class="step-label">Rendering</div>
+      </div>
+    </div>
+
+    <!-- Main Stage -->
+    <div class="main-stage">
+
+      <!-- Animations Area -->
+      <div class="animation-view">
+
+        <!-- Step 0: Input -->
+        <div class="anim-container" id="anim-0">
+          <div class="entity" style="color: var(--text-muted)">
+            <svg class="anim-icon" viewBox="0 0 24 24"><path d="M12 20h9M3 10L12 3l9 7v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9z"/></svg>
+            <div>Waiting for input...</div>
+          </div>
+        </div>
+
+        <!-- Step 1: DNS -->
+        <div class="anim-container" id="anim-1">
+          <div class="entity-wrapper">
+            <div class="entity">
+              <svg class="anim-icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              <div>Browser</div>
+            </div>
+            <div class="network-path">
+              <div class="packet"></div>
+            </div>
+            <div class="entity">
+              <svg class="anim-icon" viewBox="0 0 24 24" style="color: var(--accent-cyan)"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M4 6h16M4 10h16M4 14h16M8 18h8"/></svg>
+              <div>DNS Resolver</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2: TCP -->
+        <div class="anim-container" id="anim-2">
+          <div class="entity-wrapper">
+            <div class="entity">
+              <svg class="anim-icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              <div>Client Node</div>
+            </div>
+            <div class="network-path">
+              <div class="tcp-packet tcp-anim-1"></div>
+              <div class="tcp-packet tcp-anim-2"></div>
+              <div class="tcp-packet tcp-anim-3"></div>
+            </div>
+            <div class="entity">
+              <svg class="anim-icon" viewBox="0 0 24 24" style="color: var(--accent-orange)"><path d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/><path d="M8 12h8M12 8v8"/></svg>
+              <div>Server :443</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: TLS -->
+        <div class="anim-container" id="anim-3">
+          <div class="entity-wrapper">
+            <div class="entity">
+               <svg class="anim-icon tls-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <div class="network-path" style="background: repeating-linear-gradient(90deg, var(--accent-purple) 0, var(--accent-purple) 10px, transparent 10px, transparent 20px); height:4px;">
+            </div>
+            <div class="entity">
+              <svg class="anim-icon" style="color: var(--accent-purple)" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path class="lock-ring" d="M8 11V7a4 4 0 118 0v4"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: HTTP -->
+        <div class="anim-container" id="anim-4">
+           <div class="entity-wrapper">
+            <div class="entity">
+              <svg class="anim-icon" style="color: var(--accent-blue)" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            </div>
+            <div class="network-path" style="background: var(--accent-blue); height: 3px;">
+              <div class="http-doc"></div>
+            </div>
+            <div class="entity">
+               <svg class="anim-icon" viewBox="0 0 24 24" style="color: var(--accent-blue)"><rect x="4" y="2" width="16" height="20" rx="2"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 5: Render -->
+        <div class="anim-container" id="anim-5">
+           <div class="render-grid">
+             <div class="render-block"></div>
+             <div class="render-block"></div>
+             <div class="render-block"></div>
+             <div class="render-block"></div>
+           </div>
+        </div>
+
+      </div>
+
+      <!-- Info Panel -->
+      <div class="info-panel">
+        <h3 class="info-title" id="info-title">URL Resolution</h3>
+        <p class="info-desc" id="info-desc">Press "Next Step / Enter" to simulate navigating to example.com.</p>
+
+        <div class="controls">
+          <button class="btn" id="btn-prev" disabled>Previous Step</button>
+          <button class="btn primary" id="btn-next">Next Step / Enter</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+  const stepsData = [
+    {
+      title: "1. The URL",
+      desc: "You type 'example.com' and press Enter. The browser parses the URL, checking if it uses HTTP or HTTPS, and sets up for a secure connection to the host.",
+      color: "var(--text-muted)",
+      textValue: "example.com"
+    },
+    {
+      title: "2. DNS Query",
+      desc: "Where does example.com live? The browser checks its cache, then the OS. If not found, it queries a DNS Resolver to translate the human-readable domain into a machine-readable IP address (e.g., 93.184.216.34).",
+      color: "var(--accent-cyan)",
+      textValue: "example.com"
+    },
+    {
+      title: "3. TCP Handshake",
+      desc: "Before sending data, the client and server must connect. They perform a 3-way handshake (SYN, SYN-ACK, ACK) to ensure both sides are ready to establish a reliable stream to port 443.",
+      color: "var(--accent-orange)",
+      textValue: "93.184.216.34"
+    },
+    {
+      title: "4. TLS Handshake",
+      desc: "To secure the connection, a TLS Handshake occurs. The client and server agree on cryptographic algorithms, exchange certificates to verify identity, and generate shared session keys to encrypt all future traffic.",
+      color: "var(--accent-purple)",
+      textValue: "https://example.com (Secured)"
+    },
+    {
+      title: "5. HTTP Request & Response",
+      desc: "Inside the encrypted tunnel, the browser sends an HTTP GET request. The server receives it, processes any logic, and responds with an HTTP 200 OK message containing the raw HTML payload.",
+      color: "var(--accent-blue)",
+      textValue: "Fetching Document..."
+    },
+    {
+      title: "6. Browser Rendering",
+      desc: "The browser parses the HTML into the DOM and CSS into the CSSOM. It combines these into a Render Tree, calculates layout geometry, and finally paints the pixels to your screen.",
+      color: "var(--accent-green)",
+      textValue: "example.com - Rendered"
+    }
+  ];
+
+  let currentStep = 0;
+
+  const root = document.getElementById('tour-root');
+  const titleEl = document.getElementById('info-title');
+  const descEl = document.getElementById('info-desc');
+  const urlTextEl = document.getElementById('url-text');
+  const cursorEl = document.getElementById('url-cursor');
+  const btnPrev = document.getElementById('btn-prev');
+  const btnNext = document.getElementById('btn-next');
+  const timelines = document.querySelectorAll('.timeline-step');
+  const anims = document.querySelectorAll('.anim-container');
+
+  function updateView() {
+    const data = stepsData[currentStep];
+
+    // Update Text
+    titleEl.textContent = data.title;
+    titleEl.style.color = data.color;
+    descEl.textContent = data.desc;
+
+    // URL Animation logic
+    urlTextEl.textContent = data.textValue;
+    if(currentStep === 0) {
+      cursorEl.style.display = "inline-block";
+    } else {
+      cursorEl.style.display = "none";
+    }
+
+    // Timeline Updates
+    timelines.forEach((el, index) => {
+      el.classList.remove('active', 'completed');
+      if (index === currentStep) {
+        el.classList.add('active');
+        root.style.setProperty('--accent-color', data.color);
+      } else if (index < currentStep) {
+        el.classList.add('completed');
+      }
+    });
+
+    // Animation view updates
+    anims.forEach((el, index) => {
+      if (index === currentStep) {
+        el.classList.add('active');
+      } else {
+        el.classList.remove('active');
+      }
+    });
+
+    // Button states
+    btnPrev.disabled = currentStep === 0;
+
+    if (currentStep === stepsData.length - 1) {
+      btnNext.textContent = "Start Over";
+    } else if (currentStep === 0) {
+      btnNext.textContent = "Press Enter";
+    } else {
+      btnNext.textContent = "Next Step";
+    }
+  }
+
+  btnNext.addEventListener('click', () => {
+    if (currentStep < stepsData.length - 1) {
+      currentStep++;
+    } else {
+      currentStep = 0;
+    }
+    updateView();
+  });
+
+  btnPrev.addEventListener('click', () => {
+    if (currentStep > 0) {
+      currentStep--;
+      updateView();
+    }
+  });
+
+  // Initialize
+  updateView();
+</script>
+</streamui>
