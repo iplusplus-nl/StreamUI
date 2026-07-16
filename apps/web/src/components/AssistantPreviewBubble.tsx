@@ -2,6 +2,7 @@ import { MousePointer2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -313,6 +314,10 @@ export function AssistantPreviewBubble({
   useEffect(() => {
     updateSideActions();
   }, [actions, selectionModeActive, snapshot.status, updateSideActions]);
+
+  useLayoutEffect(() => {
+    sideActionsRef.current?.toggleAttribute("inert", !sideActionsPosition);
+  }, [sideActionsPosition]);
 
   return (
     <div

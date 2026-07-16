@@ -566,6 +566,22 @@ test("keyboard focus reveals non-active session actions", async ({ page }) => {
   await expect(secondary.getByRole("menuitem", { name: "Delete" })).toBeVisible();
 });
 
+test("hidden duplicate artifact actions stay inert", async ({ page }) => {
+  await openApp(
+    page,
+    { width: 320, height: 568 },
+    { artifactWithPositionedBody: true }
+  );
+
+  const hiddenActions = page.locator(".assistant-artifact-side-actions");
+  await expect(hiddenActions).toHaveAttribute("aria-hidden", "true");
+  await expect(hiddenActions).toHaveAttribute("inert", "");
+
+  const hiddenButton = hiddenActions.locator("button").first();
+  await hiddenButton.focus();
+  await expect(hiddenButton).not.toBeFocused();
+});
+
 test("opaque artifact preview loads a tokenized same-origin session image", async ({
   page
 }) => {

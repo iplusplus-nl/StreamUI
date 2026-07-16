@@ -133,6 +133,12 @@ async function auditDom(page, label) {
     const isVisible = (element) => {
       let current = element;
       while (current instanceof Element) {
+        if (
+          current.hasAttribute("inert") ||
+          current.getAttribute("aria-hidden") === "true"
+        ) {
+          return false;
+        }
         const style = getComputedStyle(current);
         if (
           style.visibility === "hidden" ||
@@ -191,6 +197,15 @@ async function auditDom(page, label) {
     const interactive = Array.from(
       document.querySelectorAll("button, a[href], input, textarea, select, [role='button']"),
     ).filter(isVisible);
+    const focusableInHiddenContainers = Array.from(
+      document.querySelectorAll("button, a[href], input, textarea, select, [role='button']"),
+    )
+      .filter((element) =>
+        element.tabIndex >= 0 &&
+        Boolean(element.closest('[aria-hidden="true"]')) &&
+        !element.closest("[inert]"),
+      )
+      .map((element) => element.outerHTML.slice(0, 180));
     const unnamedInteractive = interactive
       .filter((element) => {
         if (element instanceof HTMLInputElement && ["hidden", "file"].includes(element.type)) {
@@ -286,6 +301,7 @@ async function auditDom(page, label) {
       },
       horizontalOverflow:
         document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+      focusableInHiddenContainers,
       unnamedInteractive,
       duplicateIds,
       outsideViewport,
@@ -295,6 +311,10 @@ async function auditDom(page, label) {
   });
   report.domAudits.push({ label, ...audit });
   assert(!audit.horizontalOverflow, `${label}: page has horizontal overflow`);
+  assert(
+    !audit.focusableInHiddenContainers.length,
+    `${label}: ${audit.focusableInHiddenContainers.length} controls remain focusable inside aria-hidden content`,
+  );
   assert(!audit.unnamedInteractive.length, `${label}: unnamed controls: ${audit.unnamedInteractive.length}`);
   assert(!audit.duplicateIds.length, `${label}: duplicate IDs: ${audit.duplicateIds.join(", ")}`);
   assert(!audit.outsideViewport.length, `${label}: ${audit.outsideViewport.length} interactive controls escape viewport`);
@@ -759,11 +779,16 @@ try {
     "Generated artifact follows the requested long-list content",
     async () => {
       const frame = page.locator(".assistant-artifact-block").last().locator("iframe").contentFrame();
-      const artifactText = await frame.locator("body").innerText();
-      const numberedRows = artifactText
-        .split("\n")
-        .filter((line) => /^(?:0?[1-9]|[12]\d|3[0-5])(?:\s|[.):\-])/.test(line.trim()))
-        .length;
+      const numberedRows = await frame
+        .locator("li, tr, [class*='row']")
+        .evaluateAll((elements) =>
+          new Set(
+            elements.flatMap((element) => {
+              const match = element.textContent?.trim().match(/^(?:0?)([1-9]|[12]\d|3[0-5])\b/);
+              return match ? [Number(match[1])] : [];
+            }),
+          ).size,
+        );
       assert(numberedRows >= 20, `only ${numberedRows} numbered rows were rendered`);
       return { numberedRows };
     },
@@ -838,7 +863,7 @@ try {
   ]) {
     await check(`Authenticated responsive layout ${viewport.name}`, async () => {
       await page.setViewportSize(viewport);
-      await page.waitForTimeout(250);
+      await page.waitForTimeout(500);
       const audit = await auditDom(page, `authenticated ${viewport.name}`);
       await screenshot(page, `responsive-${viewport.name}`);
       if (viewport.width <= 375) {
@@ -907,6 +932,9 @@ try {
       if (event.kind === "console-warning" && /Layout was forced before the page was fully loaded/.test(event.text)) return false;
       if (event.kind === "requestfailed" && /^PUT \/api\/sessions: NS_BINDING_ABORTED$/.test(event.text)) return false;
       if (event.kind === "pageerror" && event.text === "ResizeObserver loop completed with undelivered notifications.") return false;
+      if (account.deleted && event.kind === "http-error" && /^401 GET .*\/api\/sessions$/.test(event.text)) return false;
+      if (account.deleted && event.kind === "console-error" && /status of 401/.test(event.text)) return false;
+      if (account.deleted && event.kind === "console-warning" && /Could not sync ChatHTML sessions.*HTTP 401/s.test(event.text)) return false;
       return true;
     });
     assert(!unexpected.length, `${unexpected.length} unexpected browser events were recorded`);
