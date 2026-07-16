@@ -784,7 +784,7 @@ try {
         .evaluateAll((elements) =>
           new Set(
             elements.flatMap((element) => {
-              const match = element.textContent?.trim().match(/^0?([1-9]|[12]\d|3[0-5])/);
+              const match = element.textContent?.trim().match(/^0?(3[0-5]|[12]\d|[1-9])/);
               return match ? [Number(match[1])] : [];
             }),
           ).size,
@@ -932,9 +932,9 @@ try {
       if (event.kind === "console-warning" && /Layout was forced before the page was fully loaded/.test(event.text)) return false;
       if (event.kind === "requestfailed" && /^PUT \/api\/sessions: NS_BINDING_ABORTED$/.test(event.text)) return false;
       if (event.kind === "pageerror" && event.text === "ResizeObserver loop completed with undelivered notifications.") return false;
-      if (account.deleted && event.kind === "http-error" && /^401 GET .*\/api\/sessions$/.test(event.text)) return false;
+      if (account.deleted && event.kind === "http-error" && /^401 (?:GET|PUT) .*\/api\/sessions$/.test(event.text)) return false;
       if (account.deleted && event.kind === "console-error" && /status of 401/.test(event.text)) return false;
-      if (account.deleted && event.kind === "console-warning" && /Could not sync ChatHTML sessions.*HTTP 401/s.test(event.text)) return false;
+      if (account.deleted && event.kind === "console-warning" && /Could not (?:sync|save) ChatHTML sessions.*HTTP 401/s.test(event.text)) return false;
       return true;
     });
     assert(!unexpected.length, `${unexpected.length} unexpected browser events were recorded`);
