@@ -9,8 +9,6 @@ placing code in a fenced block or waiting for a complete page, it streams HTML
 into the conversation and progressively renders it as the model writes. The
 result can be explanatory, visual, interactive, or simply a well-typeset answer.
 
-![ChatHTML rendering an interactive cubic Bezier explainer](docs/images/chathtml-app.png)
-
 ChatHTML is focused on the response medium: it is not a ChatGPT clone and it is
 not an app-builder workflow. The chat shell exists so a normal message can
 become a sandboxed UI artifact.
@@ -90,9 +88,9 @@ protocol response.
 > a large curve, adjustable control points, the formula, and three named easing
 > presets. Keep it focused and polished; no web search.
 
-![Interactive cubic Bezier curve playground](docs/images/bezier-playground.png)
+<img src="docs/images/bezier-playground.png" alt="Interactive cubic Bezier curve playground" width="640">
 
-[View the generated ChatHTML source](docs/examples/bezier-playground.chathtml.html)
+[Open the live interactive example](https://chat.aietheia.com/artifacts/share-mrnomgvb-8b47470d9f0e40b28b) · [View the generated ChatHTML source](docs/examples/bezier-playground.chathtml.html)
 
 ### Working utility
 
@@ -100,9 +98,9 @@ protocol response.
 > Include editable bill, tip, and party-size controls, update totals live, and
 > show the calculation clearly. Keep it compact and polished; no web search.
 
-![Interactive tip and split calculator](docs/images/split-calculator.png)
+<img src="docs/images/split-calculator.png" alt="Interactive tip and split calculator" width="640">
 
-[View the generated ChatHTML source](docs/examples/split-calculator.chathtml.html)
+[Open the live interactive example](https://chat.aietheia.com/artifacts/share-mrnomhcn-460bb1e619794742b9) · [View the generated ChatHTML source](docs/examples/split-calculator.chathtml.html)
 
 ### Step-through diagram
 
@@ -111,9 +109,9 @@ protocol response.
 > TCP and TLS, HTTP, and rendering, with controls to step through each stage. No
 > web search.
 
-![Interactive browser request pipeline](docs/images/request-pipeline.png)
+<img src="docs/images/request-pipeline.png" alt="Interactive browser request pipeline" width="640">
 
-[View the generated ChatHTML source](docs/examples/request-pipeline.chathtml.html)
+[Open the live interactive example](https://chat.aietheia.com/artifacts/share-mrnomhs2-75a3c0aacc1348268a) · [View the generated ChatHTML source](docs/examples/request-pipeline.chathtml.html)
 
 To create or refresh a documentation example while the dev server is running:
 
