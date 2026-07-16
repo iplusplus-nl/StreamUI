@@ -542,6 +542,19 @@ test.describe("touch session actions", () => {
     await actions.tap();
     await expect(secondary.getByRole("menuitem", { name: "Delete" })).toBeVisible();
   });
+
+  test("user prompt edit affordance remains visible and tappable", async ({ page }) => {
+    await openApp(page, { width: 375, height: 812 });
+
+    const userRow = page.locator(".chat-row.user").first();
+    const edit = userRow.getByRole("button", { name: "Edit prompt" });
+
+    await expect(edit).toHaveCSS("opacity", "1");
+    await expect(edit).toHaveCSS("pointer-events", "auto");
+    await edit.tap();
+    await expect(userRow.locator(".message-edit-input")).toBeVisible();
+    await expect(userRow.locator(".message-edit-input")).toBeFocused();
+  });
 });
 
 test("keyboard focus reveals non-active session actions", async ({ page }) => {
