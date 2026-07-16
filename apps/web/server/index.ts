@@ -32,6 +32,7 @@ import {
 } from "./chatHtmlService.js";
 import {
   deleteAccountSessionData,
+  handleAdminGetAllSessions,
   handleCreateSessionFile,
   handleDeleteSessionFile,
   handleGetFileContent,
@@ -247,6 +248,7 @@ app.post("/api/retrieve", handleRetrievalRequest);
 app.get("/api/export-resource", handleExportResourceRequest);
 app.get("/api/media-image", handleMediaImageRequest);
 app.get("/api/sessions", handleGetSessions);
+app.get("/api/admin/sessions", handleAdminGetAllSessions);
 app.get("/api/account/export", handleExportAccountData);
 app.delete("/api/account", async (req, res) => {
   try {

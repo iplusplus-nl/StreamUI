@@ -31,11 +31,15 @@ import {
   findStoredFileCapability,
   deleteSessionState,
   readSessionState,
+  readAllSessionStateEntries,
   readSessionStateSnapshot,
   readSessionStateVersion,
   writeSessionState
 } from "./sessionRepository.js";
-import { getAuthenticatedStateKey } from "./chatHtmlService.js";
+import {
+  getAuthenticatedServiceUser,
+  getAuthenticatedStateKey
+} from "./chatHtmlService.js";
 import {
   compactEmptyStoredSessions,
   ensureStoredSession,
@@ -564,6 +568,35 @@ export async function handleExportAccountData(
           state: { ...state, sessions }
         })
       );
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+export async function handleAdminGetAllSessions(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const user = getAuthenticatedServiceUser(req);
+  if (user?.role !== "admin") {
+    res.status(403).json({ error: "Administrator access is required." });
+    return;
+  }
+
+  try {
+    const entries = await readAllSessionStateEntries();
+    const accounts = entries
+      .filter((entry) => entry.stateKey.startsWith("user:"))
+      .map((entry) => ({
+        accountId: entry.stateKey.slice("user:".length),
+        updatedAt: entry.version,
+        ...presentState(req, entry.state)
+      }))
+      .sort((left, right) => left.accountId.localeCompare(right.accountId));
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json({ accounts });
   } catch (error) {
     res.status(500).json({
       error: error instanceof Error ? error.message : String(error)

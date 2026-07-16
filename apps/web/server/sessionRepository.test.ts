@@ -16,7 +16,9 @@ process.env.STREAMUI_SESSION_DIR = repositoryDirectory;
 const {
   closeSessionRepository,
   enqueueSessionRepositoryOperation,
-  readSessionState
+  readAllSessionStateEntries,
+  readSessionState,
+  writeSessionState
 } = await import("./sessionRepository.js");
 
 after(async () => {
@@ -173,5 +175,19 @@ describe("session repository queue", () => {
     } finally {
       await verificationDb.close();
     }
+  });
+
+  it("lists every tenant state with its key and version", async () => {
+    await writeSessionState(state("first account", 21), "user:first");
+    await writeSessionState(state("second account", 22), "user:second");
+
+    const entries = await readAllSessionStateEntries();
+    const first = entries.find((entry) => entry.stateKey === "user:first");
+    const second = entries.find((entry) => entry.stateKey === "user:second");
+
+    assert.equal(first?.state.sessions[0]?.title, "first account");
+    assert.equal(second?.state.sessions[0]?.title, "second account");
+    assert.equal(Number.isFinite(first?.version), true);
+    assert.equal(Number.isFinite(second?.version), true);
   });
 });
