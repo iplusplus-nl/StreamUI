@@ -542,7 +542,14 @@ export function SessionSidebar({
           onSearchSettingsChange={onSearchSettingsChange}
           onDisplaySettingsChange={onDisplaySettingsChange}
           onProfileSettingsChange={onProfileSettingsChange}
-          onLogout={onLogout}
+          onLogout={
+            onLogout
+              ? () => {
+                  setIsSettingsOpen(false);
+                  onLogout();
+                }
+              : undefined
+          }
           onExportAccount={onExportAccount}
           onDeleteAccount={onDeleteAccount}
           onGenerateRecoveryCode={onGenerateRecoveryCode}

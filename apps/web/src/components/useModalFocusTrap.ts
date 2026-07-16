@@ -100,6 +100,7 @@ export function useModalFocusTrap({
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+    let isRedirectingFocus = false;
     const focusInside = (preferLast = false) => {
       const focusableElements = getModalFocusableElements(dialog);
       const requested = initialFocusRef?.current;
@@ -167,11 +168,17 @@ export function useModalFocusTrap({
     const handleFocusIn = (event: FocusEvent) => {
       const target = event.target;
       if (
+        !isRedirectingFocus &&
         target instanceof Node &&
         !dialog.contains(target) &&
         !isOwnedModalFocusPortal(dialog, target)
       ) {
-        focusInside();
+        isRedirectingFocus = true;
+        try {
+          focusInside();
+        } finally {
+          isRedirectingFocus = false;
+        }
       }
     };
 

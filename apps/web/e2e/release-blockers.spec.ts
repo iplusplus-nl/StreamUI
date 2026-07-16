@@ -825,7 +825,10 @@ test("signed-in users can keep or merge browser sessions with their files", asyn
   page
 }) => {
   let sessionState: MockSessionState = initialSessionState();
+  let authenticated = true;
   let uploadedFiles = 0;
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem("streamui.theme.v1", "day");
@@ -881,7 +884,17 @@ test("signed-in users can keep or merge browser sessions with their files", asyn
     }
     if (path === "/api/auth/me") {
       await fulfillJson(route, {
-        user: { id: "e2e-user", email: "e2e@example.com", role: "user" },
+        user: authenticated
+          ? { id: "e2e-user", email: "e2e@example.com", role: "user" }
+          : null,
+        auth: { available: true, requiresInvite: false, firstUser: false }
+      });
+      return;
+    }
+    if (path === "/api/auth/logout" && request.method() === "POST") {
+      authenticated = false;
+      await fulfillJson(route, {
+        user: null,
         auth: { available: true, requiresInvite: false, firstUser: false }
       });
       return;
@@ -992,4 +1005,14 @@ test("signed-in users can keep or merge browser sessions with their files", asyn
   expect(
     (imported?.messages as Array<{ fileIds?: string[] }>)[0].fileIds
   ).toEqual(["server-local-file"]);
+
+  await page.getByRole("button", { name: "Open personal settings" }).click();
+  const settings = page.getByRole("dialog", { name: "Personal" });
+  await expect(settings).toBeVisible();
+  await settings.getByRole("button", { name: "Sign out" }).click();
+  await expect(settings).toBeHidden();
+  await expect(
+    page.getByRole("heading", { name: "Choose how to use ChatHTML" })
+  ).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });
