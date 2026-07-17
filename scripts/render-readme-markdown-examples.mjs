@@ -73,7 +73,7 @@ function renderMarkdown(markdown) {
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    const fence = /^```([\w+-]*)\s*$/.exec(line);
+    const fence = /^```([\w+-]*)(?:\s+.*)?\s*$/.exec(line);
     if (fence) {
       flushParagraph();
       closeList();

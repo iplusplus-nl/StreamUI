@@ -79,11 +79,12 @@ API proxy runs on `http://127.0.0.1:8787`.
 ## Plain Markdown vs. ChatHTML
 
 Each row starts from the same request; the response medium is different. The
-left side is a real Markdown-only response from the same configured model,
-rendered as a plain document with no product chrome. The right side is the
-actual output of this repository's `/api/chat` pipeline, rendered by the
-ChatHTML runtime. The exact user prompts and Markdown-only system instruction
-are stored in [`scripts/readme-comparison-prompts.mjs`](scripts/readme-comparison-prompts.mjs).
+left side is the raw response from the same configured model after sending the
+user prompt directly to OpenRouter, rendered as a plain Markdown document with
+no product chrome. No system instruction or response-format instruction is
+sent. The right side is the actual output of this repository's `/api/chat`
+pipeline, rendered by the ChatHTML runtime. The exact submitted prompts are
+stored in [`scripts/readme-comparison-prompts.mjs`](scripts/readme-comparison-prompts.mjs).
 No ChatGPT screenshots or third-party product UI are used. External gallery
 photos come from Wikimedia Commons and are credited next to the example.
 
@@ -100,68 +101,68 @@ photos come from Wikimedia Commons and are credited next to the example.
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-pomodoro-clock.png" alt="A Markdown-only response containing a complete Pomodoro clock implementation" width="420"><br><sub><a href="docs/markdown-examples/pomodoro-clock.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/pomodoro-clock.png" alt="A working Pomodoro clock rendered by ChatHTML" width="420"><br><sub><a href="docs/examples/pomodoro-clock.chathtml.html">Generated source</a></sub></td>
+      <td valign="top"><img src="docs/images/pomodoro-clock.png" alt="A working Pomodoro clock rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov30jz-906f0f3b9b794a8f89">Live example</a> · <a href="docs/examples/pomodoro-clock.chathtml.html">Generated source</a></sub></td>
     </tr>
     <tr>
       <td colspan="2"><strong>Prompt 2 · Curate an image gallery</strong><br><br>Create a compact editorial gallery titled “Evolution / I–X” celebrating the Mitsubishi Lancer Evolution. Keep the complete 2-by-2 gallery, filters, captions, and credits visible within a single viewport. Use the four provided Wikimedia Commons images and load every image eagerly. Show model generation, year, photographer, and license on each card, with filters for III, VI, IX, and X and a click-to-expand lightbox. Do not imply endorsement; no web search.</td>
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-lancer-evolution-gallery.png" alt="A Markdown-only response containing a complete Lancer Evolution gallery implementation" width="420"><br><sub><a href="docs/markdown-examples/lancer-evolution-gallery.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/lancer-evolution-gallery.png" alt="An image-rich Lancer Evolution gallery rendered by ChatHTML" width="420"><br><sub><a href="docs/examples/lancer-evolution-gallery.chathtml.html">Generated source</a><br>Photos: <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_Evolution_III_(1995)_(53619429931).jpg">III · Charles · CC BY 2.0</a> · <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_Evolution_VI.jpg">VI · Motoring Weapon R · CC BY-SA 3.0</a> · <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_Evolution_IX_(31677018768).jpg">IX · FotoSleuth · CC BY 2.0</a> · <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_EVO_X.jpg">X · IFCAR · Public domain</a></sub></td>
+      <td valign="top"><img src="docs/images/lancer-evolution-gallery.png" alt="An image-rich Lancer Evolution gallery rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov315c-e13cff5689b64dea8f">Live example</a> · <a href="docs/examples/lancer-evolution-gallery.chathtml.html">Generated source</a><br>Photos: <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_Evolution_III_(1995)_(53619429931).jpg">III · Charles · CC BY 2.0</a> · <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_Evolution_VI.jpg">VI · Motoring Weapon R · CC BY-SA 3.0</a> · <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_Evolution_IX_(31677018768).jpg">IX · FotoSleuth · CC BY 2.0</a> · <a href="https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_EVO_X.jpg">X · IFCAR · Public domain</a></sub></td>
     </tr>
     <tr>
       <td colspan="2"><strong>Prompt 3 · Make it playable</strong><br><br>Build a playable 2048 mini-game with arrow-key and swipe controls, score and best counters, a new game button, and a clear visual hierarchy. The initial HTML itself must contain all 16 visible board cells and a plausible mid-game seed; JavaScript may take over for moves after load. Do not access browser storage; keep the best score only in memory for the current artifact. Keep it compact and polished; no web search.</td>
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-game-2048.png" alt="A Markdown-only response containing a complete 2048 implementation" width="420"><br><sub><a href="docs/markdown-examples/game-2048.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/game-2048.png" alt="A playable seeded 2048 game rendered by ChatHTML" width="420"><br><sub><a href="docs/examples/game-2048.chathtml.html">Generated source</a></sub></td>
+      <td valign="top"><img src="docs/images/game-2048.png" alt="A playable seeded 2048 game rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov31n7-0ca9eac4000c48e894">Live example</a> · <a href="docs/examples/game-2048.chathtml.html">Generated source</a></sub></td>
     </tr>
     <tr>
       <td colspan="2"><strong>Prompt 4 · Direct a visual</strong><br><br>Build an interactive typographic poster studio. Show a bold live poster preview with the editable headline “MOVE / WITH / INTENT”, controls for palette, type scale, grain, alignment, and a shuffle button. Use only CSS shapes and typography; no external assets. Make it editorial, expressive, and polished; no web search.</td>
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-poster-studio.png" alt="A Markdown-only response containing a complete poster studio implementation" width="420"><br><sub><a href="docs/markdown-examples/poster-studio.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/poster-studio.png" alt="An interactive typographic poster studio rendered by ChatHTML" width="420"><br><sub><a href="docs/examples/poster-studio.chathtml.html">Generated source</a></sub></td>
+      <td valign="top"><img src="docs/images/poster-studio.png" alt="An interactive typographic poster studio rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov322p-63251906e2cd4d5694">Live example</a> · <a href="docs/examples/poster-studio.chathtml.html">Generated source</a></sub></td>
     </tr>
     <tr>
       <td colspan="2"><strong>Prompt 5 · Explain it interactively</strong><br><br>Teach me how cubic Bezier curves work. Build an interactive playground with a large curve, adjustable control points, the formula, and three named easing presets. Keep it focused and polished; no web search.</td>
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-bezier-playground.png" alt="A Markdown-only explanation and implementation of cubic Bezier curves" width="420"><br><sub><a href="docs/markdown-examples/bezier-playground.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/bezier-playground.png" alt="An interactive cubic Bezier curve playground rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrnomgvb-8b47470d9f0e40b28b">Live example</a> · <a href="docs/examples/bezier-playground.chathtml.html">Generated source</a></sub></td>
+      <td valign="top"><img src="docs/images/bezier-playground.png" alt="An interactive cubic Bezier curve playground rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov6ua0-d171eec5e4d743cbb2">Live example</a> · <a href="docs/examples/bezier-playground.chathtml.html">Generated source</a></sub></td>
     </tr>
     <tr>
       <td colspan="2"><strong>Prompt 6 · Build a working utility</strong><br><br>Build a tip and split calculator for a EUR 186.50 dinner shared by 4 people. Include editable bill, tip, and party-size controls, update totals live, and show the calculation clearly. Keep it compact and polished; no web search.</td>
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-split-calculator.png" alt="A Markdown-only response containing a complete tip calculator implementation" width="420"><br><sub><a href="docs/markdown-examples/split-calculator.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/split-calculator.png" alt="An interactive tip and split calculator rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrnomhcn-460bb1e619794742b9">Live example</a> · <a href="docs/examples/split-calculator.chathtml.html">Generated source</a></sub></td>
+      <td valign="top"><img src="docs/images/split-calculator.png" alt="An interactive tip and split calculator rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov6va9-6b7d9ed3d3144b62a6">Live example</a> · <a href="docs/examples/split-calculator.chathtml.html">Generated source</a></sub></td>
     </tr>
     <tr>
       <td colspan="2"><strong>Prompt 7 · Step through a process</strong><br><br>Explain what happens after I type https://example.com into a browser and press Enter. Make an annotated, animated-looking pipeline from DNS through TCP and TLS, HTTP, and rendering, with controls to step through each stage. No web search.</td>
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-request-pipeline.png" alt="A Markdown-only response containing a complete browser pipeline implementation" width="420"><br><sub><a href="docs/markdown-examples/request-pipeline.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/request-pipeline.png" alt="An interactive browser request pipeline rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrnomhs2-75a3c0aacc1348268a">Live example</a> · <a href="docs/examples/request-pipeline.chathtml.html">Generated source</a></sub></td>
+      <td valign="top"><img src="docs/images/request-pipeline.png" alt="An interactive browser request pipeline rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov6vxo-67d6f80caa6a46d988">Live example</a> · <a href="docs/examples/request-pipeline.chathtml.html">Generated source</a></sub></td>
     </tr>
     <tr>
       <td colspan="2"><strong>Prompt 8 · Explore live data</strong><br><br>Build an accessible color palette lab. Include HSL sliders, five live swatches with hex values, a foreground/background contrast checker, and AA/AAA status badges. Make it vivid, compact, and polished; no web search.</td>
     </tr>
     <tr>
       <td valign="top"><img src="docs/images/markdown-color-lab.png" alt="A Markdown-only response containing a complete accessibility color lab implementation" width="420"><br><sub><a href="docs/markdown-examples/color-lab.md">Markdown source</a></sub></td>
-      <td valign="top"><img src="docs/images/color-lab.png" alt="An interactive accessibility color lab rendered by ChatHTML" width="420"><br><sub><a href="docs/examples/color-lab.chathtml.html">Generated source</a></sub></td>
+      <td valign="top"><img src="docs/images/color-lab.png" alt="An interactive accessibility color lab rendered by ChatHTML" width="420"><br><sub><a href="https://chat.aietheia.com/artifacts/share-mrov32ve-ba8df4a93c2d4a409c">Live example</a> · <a href="docs/examples/color-lab.chathtml.html">Generated source</a></sub></td>
     </tr>
   </tbody>
 </table>
 
-Generate or refresh the stored Markdown-only answers:
+Generate or refresh the stored OpenRouter responses:
 
 ```bash
 node scripts/generate-readme-markdown-examples.mjs
 ```
 
-The generator uses the prompts above with the conventional-chat instruction in
-`scripts/readme-comparison-prompts.mjs`. It defaults to
+The generator submits each stored prompt directly as the only input, without a
+system instruction or response-format guidance. It defaults to
 `google/gemini-3.1-pro-preview`; set `CHATHTML_README_MARKDOWN_MODEL` to override
 it. This command invokes the provider and uses provider credits. To regenerate
 one or more examples, pass their slugs as arguments.
@@ -186,6 +187,17 @@ streaming protocol, persistence layer, and iframe renderer. It writes the raw
 response to `docs/examples/<slug>.chathtml.html`. It defaults to
 `google/gemini-3.1-pro-preview`; set `CHATHTML_README_MODEL` to override it. The
 command invokes the provider and therefore uses provider credits.
+
+Publish generated examples to stable hosted share links:
+
+```bash
+npx tsx scripts/share-readme-examples.ts example-slug
+```
+
+The publisher wraps each saved ChatHTML response in the same sandbox document
+used by the app, then creates or updates its stable link on
+`https://chat.aietheia.com`. Omit the slugs to publish every README example; set
+`CHATHTML_README_SHARE_ORIGIN` to use another compatible host.
 
 ## How it works
 

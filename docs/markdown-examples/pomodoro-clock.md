@@ -1,349 +1,410 @@
-Here is a complete, single-file HTML solution for the Pomodoro clock. It includes all requested features, a subtle pulse animation when running, and an analog-inspired circular progress indicator.
+Here is a polished, fully functional Pomodoro clock within a single file. It features an analog-inspired, tabular-numeric display, smooth mode transitions, session tracking, and keyboard shortcuts.
 
-Save the code below as an `.html` file (e.g., `pomodoro.html`) and open it in any modern web browser.
+Save the following code as an `.html` file and open it in your browser.
 
 ```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pomodoro Timer</title>
-<style>
-  :root {
-    --bg-color: #0f172a;
-    --text-color: #f8fafc;
-    --focus-color: #ef4444;
-    --short-color: #10b981;
-    --long-color: #3b82f6;
-    --surface: #1e293b;
-    --border: #334155;
-    --theme: var(--focus-color);
-  }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Focus Clock</title>
+    <style>
+        :root {
+            --bg-color: #0f0f13;
+            --surface: #1c1c21;
+            --text-main: #e0e0e0;
+            --text-muted: #6b6b76;
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+            /* Mode Colors */
+            --focus-color: #ff5e57;
+            --short-color: #0fb9b1;
+            --long-color: #487eb0;
 
-  body {
-    font-family: system-ui, -apple-system, sans-serif;
-    background-color: var(--bg-color);
-    color: var(--text-color);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
-    transition: background-color 0.5s ease;
-  }
+            --current-color: var(--focus-color);
+            --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
 
-  .container {
-    background: var(--surface);
-    padding: 2rem;
-    border-radius: 24px;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    width: 380px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1.5rem;
-  }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-  .task-field {
-    width: 100%;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid var(--border);
-    color: var(--text-color);
-    font-size: 1rem;
-    padding: 0.5rem;
-    text-align: center;
-    outline: none;
-    transition: border-color 0.3s;
-  }
-  .task-field:focus { border-color: var(--theme); }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: var(--font-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            transition: background-color 0.5s ease;
+        }
 
-  .modes {
-    display: flex;
-    gap: 0.5rem;
-    background: rgba(0,0,0,0.2);
-    padding: 0.25rem;
-    border-radius: 99px;
-  }
-  .modes button {
-    background: transparent;
-    border: none;
-    color: #94a3b8;
-    padding: 0.5rem 1rem;
-    border-radius: 99px;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 0.85rem;
-    transition: all 0.3s;
-  }
-  .modes button.active {
-    background: var(--theme);
-    color: white;
-  }
+        .container {
+            background-color: var(--surface);
+            padding: 3rem;
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+        }
 
-  .analog-timer {
-    position: relative;
-    width: 240px;
-    height: 240px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  }
+        /* Subtle top glow based on mode */
+        .container::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background-color: var(--current-color);
+            transition: background-color 0.5s ease;
+        }
 
-  svg {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    transform: rotate(-90deg);
-  }
+        /* Modes */
+        .modes {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2.5rem;
+            background: rgba(0,0,0,0.2);
+            padding: 0.3rem;
+            border-radius: 12px;
+        }
 
-  circle {
-    fill: none;
-    stroke-width: 8;
-    stroke-linecap: round;
-  }
-  .bg-circle { stroke: var(--border); }
-  .progress-circle {
-    stroke: var(--theme);
-    stroke-dasharray: 703;
-    stroke-dashoffset: 0;
-    transition: stroke-dashoffset 1s linear;
-  }
+        .mode-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.6rem 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
 
-  .time-display {
-    font-size: 4rem;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -2px;
-    z-index: 1;
-    text-shadow: 0 4px 12px rgba(0,0,0,0.3);
-  }
+        .mode-btn.active {
+            background-color: var(--surface);
+            color: var(--text-main);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
 
-  .running .time-display {
-    animation: pulse 2s infinite ease-in-out;
-  }
+        kbd {
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-family: monospace;
+            color: var(--text-muted);
+        }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.85; transform: scale(0.98); }
-  }
+        .mode-btn.active kbd { color: var(--current-color); }
 
-  .controls {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-  }
+        /* Timer Display */
+        .timer {
+            font-size: 6rem;
+            font-weight: 800;
+            letter-spacing: -2px;
+            font-variant-numeric: tabular-nums;
+            margin-bottom: 1.5rem;
+            color: var(--current-color);
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.05);
+            transition: color 0.5s ease;
+            display: flex;
+            align-items: center;
+        }
 
-  .btn {
-    background: var(--border);
-    color: white;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    border-radius: 12px;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    transition: transform 0.1s, background 0.3s;
-  }
-  .btn:active { transform: scale(0.95); }
-  .btn.primary { background: var(--theme); padding: 1rem 2rem; font-size: 1.25rem; }
+        .colon {
+            margin: 0 -5px;
+            padding-bottom: 15px; /* Visual alignment */
+            opacity: 1;
+            transition: opacity 0.1s;
+        }
 
-  .btn-hint {
-    font-size: 0.65rem;
-    opacity: 0.7;
-    margin-top: 0.2rem;
-    font-weight: normal;
-  }
+        .colon.blink {
+            animation: blink 1s step-end infinite;
+        }
 
-  .dots {
-    display: flex;
-    gap: 0.5rem;
-  }
-  .dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--border);
-    transition: background 0.3s;
-  }
-  .dot.active { background: var(--focus-color); box-shadow: 0 0 8px var(--focus-color); }
+        @keyframes blink { 50% { opacity: 0.2; } }
 
-</style>
+        /* Progress Dots */
+        .progress {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 2.5rem;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid var(--text-muted);
+            transition: all 0.3s ease;
+        }
+
+        .dot.filled {
+            background-color: var(--current-color);
+            border-color: var(--current-color);
+            box-shadow: 0 0 10px var(--current-color);
+        }
+
+        .dot.active-session {
+            border-color: var(--current-color);
+            animation: pulse-border 2s infinite;
+        }
+
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.2); }
+            70% { box-shadow: 0 0 0 8px rgba(255,255,255,0); }
+            100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+        }
+
+        /* Task Field */
+        .task-input {
+            width: 100%;
+            background: none;
+            border: none;
+            border-bottom: 2px solid rgba(255,255,255,0.1);
+            color: var(--text-main);
+            font-size: 1rem;
+            text-align: center;
+            padding: 0.8rem;
+            margin-bottom: 2.5rem;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .task-input:focus {
+            border-bottom-color: var(--current-color);
+        }
+
+        .task-input::placeholder { color: rgba(255,255,255,0.2); }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .btn {
+            border: none;
+            cursor: pointer;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: transform 0.1s, opacity 0.2s, background-color 0.3s;
+            font-weight: bold;
+        }
+
+        .btn:active { transform: scale(0.95); }
+
+        .btn-main {
+            background-color: var(--current-color);
+            color: #fff;
+            padding: 1rem 2.5rem;
+            font-size: 1.1rem;
+            min-width: 160px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .btn-main kbd { background: rgba(0,0,0,0.2); color: #fff; }
+
+        .btn-icon {
+            background-color: rgba(255,255,255,0.05);
+            color: var(--text-muted);
+            width: 50px;
+            height: 50px;
+            font-size: 1.2rem;
+            position: relative;
+        }
+
+        .btn-icon:hover {
+            background-color: rgba(255,255,255,0.1);
+            color: var(--text-main);
+        }
+
+        .btn-icon kbd {
+            position: absolute;
+            bottom: -25px;
+            font-size: 0.6rem;
+            opacity: 0;
+            transition: opacity 0.2s, bottom 0.2s;
+        }
+
+        .btn-icon:hover kbd {
+            opacity: 1;
+            bottom: -20px;
+        }
+
+    </style>
 </head>
 <body>
 
-<div class="container">
-  <input type="text" class="task-field" placeholder="What are you focusing on?" />
+    <div class="container">
+        <div class="modes">
+            <button class="mode-btn active" data-mode="focus">Focus <kbd>1</kbd></button>
+            <button class="mode-btn" data-mode="short">Short Break <kbd>2</kbd></button>
+            <button class="mode-btn" data-mode="long">Long Break <kbd>3</kbd></button>
+        </div>
 
-  <div class="modes">
-    <button id="btn-focus" class="active" onclick="setMode('focus')">Focus</button>
-    <button id="btn-short" onclick="setMode('short')">Short Break</button>
-    <button id="btn-long" onclick="setMode('long')">Long Break</button>
-  </div>
+        <div class="timer">
+            <span id="min">25</span><span class="colon">:</span><span id="sec">00</span>
+        </div>
 
-  <div class="analog-timer" id="timer-container">
-    <svg>
-      <circle class="bg-circle" cx="120" cy="120" r="112"></circle>
-      <circle class="progress-circle" id="progress" cx="120" cy="120" r="112"></circle>
-    </svg>
-    <div class="time-display" id="time">25:00</div>
-  </div>
+        <div class="progress" id="dots-container">
+            <div class="dot active-session"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+        </div>
 
-  <div class="controls">
-    <button class="btn" onclick="resetTimer()">
-      Reset
-      <span class="btn-hint">[R]</span>
-    </button>
-    <button class="btn primary" id="btn-toggle" onclick="toggleTimer()">
-      Start
-      <span class="btn-hint">[Space]</span>
-    </button>
-    <button class="btn" onclick="skipSession()">
-      Skip
-      <span class="btn-hint">[S]</span>
-    </button>
-  </div>
+        <input type="text" class="task-input" placeholder="What are you focusing on?" autocomplete="off">
 
-  <div class="dots" id="dots">
-    <div class="dot"></div>
-    <div class="dot"></div>
-    <div class="dot"></div>
-    <div class="dot"></div>
-  </div>
-</div>
+        <div class="controls">
+            <button class="btn btn-icon" id="reset-btn" title="Reset">↻ <kbd>R</kbd></button>
+            <button class="btn btn-main" id="start-btn">Start <kbd>Space</kbd></button>
+            <button class="btn btn-icon" id="skip-btn" title="Skip">⏭ <kbd>S</kbd></button>
+        </div>
+    </div>
 
-<script>
-  const MODES = {
-    focus: { time: 25 * 60, color: 'var(--focus-color)' },
-    short: { time: 5 * 60, color: 'var(--short-color)' },
-    long: { time: 15 * 60, color: 'var(--long-color)' }
-  };
+    <script>
+        const DURATIONS = { focus: 25 * 60, short: 5 * 60, long: 15 * 60 };
+        const COLORS = { focus: '#ff5e57', short: '#0fb9b1', long: '#487eb0' };
 
-  let currentMode = 'focus';
-  let timeLeft = MODES.focus.time;
-  let isRunning = false;
-  let timerId = null;
-  let sessionsCompleted = 0;
+        let currentMode = 'focus';
+        let timeLeft = DURATIONS[currentMode];
+        let timerId = null;
+        let isRunning = false;
+        let sessionsCompleted = 0;
 
-  const timeEl = document.getElementById('time');
-  const progressEl = document.getElementById('progress');
-  const toggleBtn = document.getElementById('btn-toggle');
-  const timerContainer = document.getElementById('timer-container');
-  const root = document.documentElement;
-  const dots = document.querySelectorAll('.dot');
+        // DOM Elements
+        const minEl = document.getElementById('min');
+        const secEl = document.getElementById('sec');
+        const colonEl = document.querySelector('.colon');
+        const startBtn = document.getElementById('start-btn');
+        const root = document.documentElement;
+        const dots = document.querySelectorAll('.dot');
+        const modeBtns = document.querySelectorAll('.mode-btn');
 
-  const circumference = 2 * Math.PI * 112;
+        // Functions
+        function updateDisplay() {
+            const m = Math.floor(timeLeft / 60).toString().padStart(2, '0');
+            const s = (timeLeft % 60).toString().padStart(2, '0');
+            minEl.textContent = m;
+            secEl.textContent = s;
+            document.title = `${m}:${s} - ${currentMode === 'focus' ? 'Focus' : 'Break'}`;
+        }
 
-  function updateDisplay() {
-    const minutes = Math.floor(timeLeft / 60);
-    const seconds = timeLeft % 60;
-    timeEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    document.title = `${timeEl.textContent} - Pomodoro`;
+        function toggleTimer() {
+            if (isRunning) pauseTimer();
+            else startTimer();
+        }
 
-    const total = MODES[currentMode].time;
-    const offset = circumference - (timeLeft / total) * circumference;
-    progressEl.style.strokeDashoffset = offset;
-  }
+        function startTimer() {
+            isRunning = true;
+            startBtn.innerHTML = 'Pause <kbd>Space</kbd>';
+            colonEl.classList.add('blink');
+            timerId = setInterval(() => {
+                timeLeft--;
+                updateDisplay();
+                if (timeLeft <= 0) handleComplete();
+            }, 1000);
+        }
 
-  function setMode(mode) {
-    currentMode = mode;
-    timeLeft = MODES[mode].time;
-    root.style.setProperty('--theme', MODES[mode].color);
+        function pauseTimer() {
+            isRunning = false;
+            startBtn.innerHTML = 'Start <kbd>Space</kbd>';
+            colonEl.classList.remove('blink');
+            clearInterval(timerId);
+        }
 
-    document.querySelectorAll('.modes button').forEach(b => b.classList.remove('active'));
-    document.getElementById(`btn-${mode}`).classList.add('active');
+        function resetTimer() {
+            pauseTimer();
+            timeLeft = DURATIONS[currentMode];
+            updateDisplay();
+        }
 
-    pauseTimer();
-    updateDisplay();
-  }
+        function switchMode(mode) {
+            currentMode = mode;
+            root.style.setProperty('--current-color', COLORS[mode]);
 
-  function toggleTimer() {
-    if (isRunning) pauseTimer();
-    else startTimer();
-  }
+            modeBtns.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === mode);
+            });
 
-  function startTimer() {
-    if (timeLeft <= 0) return;
-    isRunning = true;
-    timerContainer.classList.add('running');
-    toggleBtn.innerHTML = `Pause <span class="btn-hint">[Space]</span>`;
+            updateDotsDisplay();
+            resetTimer();
+        }
 
-    timerId = setInterval(() => {
-      timeLeft--;
-      updateDisplay();
+        function handleComplete() {
+            if (currentMode === 'focus') {
+                sessionsCompleted++;
+                if (sessionsCompleted % 4 === 0) switchMode('long');
+                else switchMode('short');
+            } else {
+                switchMode('focus');
+            }
+        }
 
-      if (timeLeft <= 0) {
-        pauseTimer();
-        handleSessionEnd();
-      }
-    }, 1000);
-  }
+        function updateDotsDisplay() {
+            const cycleCount = sessionsCompleted % 4;
 
-  function pauseTimer() {
-    isRunning = false;
-    timerContainer.classList.remove('running');
-    toggleBtn.innerHTML = `Start <span class="btn-hint">[Space]</span>`;
-    clearInterval(timerId);
-  }
+            dots.forEach((dot, index) => {
+                dot.className = 'dot'; // Reset classes
+                if (index < cycleCount) {
+                    dot.classList.add('filled');
+                } else if (index === cycleCount && currentMode === 'focus') {
+                    dot.classList.add('active-session');
+                }
+            });
 
-  function resetTimer() {
-    pauseTimer();
-    timeLeft = MODES[currentMode].time;
-    updateDisplay();
-  }
+            // If a long break completes, empty the dots for the new cycle
+            if (currentMode === 'focus' && cycleCount === 0 && sessionsCompleted > 0) {
+                 dots.forEach(d => d.classList.remove('filled'));
+                 dots[0].classList.add('active-session');
+            }
+        }
 
-  function skipSession() {
-    pauseTimer();
-    handleSessionEnd();
-  }
+        // Event Listeners
+        startBtn.addEventListener('click', toggleTimer);
+        document.getElementById('reset-btn').addEventListener('click', resetTimer);
+        document.getElementById('skip-btn').addEventListener('click', handleComplete);
 
-  function handleSessionEnd() {
-    if (currentMode === 'focus') {
-      sessionsCompleted++;
-      updateDots();
-      if (sessionsCompleted % 4 === 0) setMode('long');
-      else setMode('short');
-    } else {
-      setMode('focus');
-    }
-    // Auto-start next cycle can be called here if desired: startTimer();
-  }
+        modeBtns.forEach(btn => {
+            btn.addEventListener('click', () => switchMode(btn.dataset.mode));
+        });
 
-  function updateDots() {
-    const activeDots = sessionsCompleted % 4 || (sessionsCompleted > 0 && sessionsCompleted % 4 === 0 ? 4 : 0);
-    dots.forEach((dot, idx) => {
-      dot.classList.toggle('active', idx < activeDots);
-    });
-    // Clear dots after a long break (4 completed)
-    if (currentMode === 'long') {
-      setTimeout(() => {
-        dots.forEach(dot => dot.classList.remove('active'));
-      }, 1000);
-    }
-  }
+        // Keyboard Shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Disable shortcuts if typing in the task field
+            if (document.activeElement.tagName === 'INPUT') return;
 
-  // Keyboard controls
-  document.addEventListener('keydown', (e) => {
-    // Prevent triggering if typing in task field
-    if (document.activeElement.tagName === 'INPUT') return;
+            if (e.code === 'Space') {
+                e.preventDefault();
+                toggleTimer();
+            }
+            if (e.key.toLowerCase() === 'r') resetTimer();
+            if (e.key.toLowerCase() === 's') handleComplete();
+            if (e.key === '1') switchMode('focus');
+            if (e.key === '2') switchMode('short');
+            if (e.key === '3') switchMode('long');
+        });
 
-    if (e.code === 'Space') {
-      e.preventDefault();
-      toggleTimer();
-    }
-    if (e.code === 'KeyR') resetTimer();
-    if (e.code === 'KeyS') skipSession();
-  });
-
-  // Init
-  updateDisplay();
-</script>
-
+        // Init
+        updateDisplay();
+        updateDotsDisplay();
+    </script>
 </body>
 </html>
 ```

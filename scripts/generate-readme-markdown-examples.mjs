@@ -1,9 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import dotenv from "dotenv";
-import {
-  MARKDOWN_SYSTEM_INSTRUCTION,
-  README_COMPARISON_EXAMPLES
-} from "./readme-comparison-prompts.mjs";
+import { README_COMPARISON_EXAMPLES } from "./readme-comparison-prompts.mjs";
 
 dotenv.config();
 
@@ -62,10 +59,8 @@ async function generateMarkdown(example) {
     },
     body: JSON.stringify({
       model,
-      instructions: MARKDOWN_SYSTEM_INSTRUCTION,
-      input: [{ role: "user", content: example.prompt }],
-      reasoning: { effort: "low" },
-      max_output_tokens: 8_000
+      input: example.prompt,
+      max_output_tokens: 32_000
     })
   });
 

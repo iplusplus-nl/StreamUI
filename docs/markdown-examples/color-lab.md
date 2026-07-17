@@ -1,357 +1,484 @@
-Here is a complete, self-contained implementation of an accessible color palette lab. It includes HSL controls, a 5-color dynamically generated monochromatic palette, a contrast checker using WCAG standards, and AA/AAA badges.
+An elegant, self-contained interactive color palette lab. It features dynamically colored sliders, intelligent text-color flipping for the hex readouts, and a real-time WCAG contrast calculator.
 
-Save the code below as an `.html` file and open it in any modern browser to use the tool.
+Save the following code as an `.html` file and open it in any browser.
 
 ```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Accessible Color Palette Lab</title>
-  <style>
-    :root {
-      --bg-color: #0f172a;
-      --panel-bg: #1e293b;
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --accent: #3b82f6;
-      --border: #334155;
-      --radius: 12px;
-    }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vivid Palette Lab</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg-color: #0f1115;
+    --panel-bg: #1a1d24;
+    --border: #2c313c;
+    --text-main: #e2e8f0;
+    --text-muted: #94a3b8;
+    --accent: #6366f1;
+    --pass: #10b981;
+    --fail: #ef4444;
+  }
 
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      background-color: var(--bg-color);
-      color: var(--text-main);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      padding: 1rem;
-    }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
 
-    .container {
-      background: var(--panel-bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 2rem;
-      width: 100%;
-      max-width: 600px;
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
-    }
+  body {
+    background-color: var(--bg-color);
+    color: var(--text-main);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
 
-    h1 {
-      font-size: 1.5rem;
-      margin-bottom: 1.5rem;
-      text-align: center;
-      background: linear-gradient(to right, #60a5fa, #a78bfa);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
+  .lab-container {
+    background: var(--panel-bg);
+    width: 100%;
+    max-width: 480px;
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
 
-    .section {
-      margin-bottom: 2rem;
-      padding-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border);
-    }
-    .section:last-child {
-      margin-bottom: 0;
-      padding-bottom: 0;
-      border-bottom: none;
-    }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
 
-    h2 { font-size: 1rem; margin-bottom: 1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;}
+  .header h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.5px; }
 
-    /* Sliders */
-    .slider-group {
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-    }
-    .slider-row {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-    }
-    .slider-row label {
-      width: 40px;
-      font-weight: bold;
-    }
-    input[type=range] {
-      flex: 1;
-      accent-color: var(--accent);
-      cursor: pointer;
-    }
-    .val-display { width: 50px; text-align: right; font-family: monospace; color: var(--text-muted) }
+  /* Palette Swatches */
+  .palette {
+    display: flex;
+    gap: 8px;
+    height: 90px;
+  }
 
-    /* Palette */
-    .palette {
-      display: flex;
-      gap: 0.5rem;
-      height: 100px;
-    }
-    .swatch {
-      flex: 1;
-      border-radius: 8px;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-      padding: 0.5rem;
-      transition: transform 0.2s;
-      cursor: pointer;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
-    }
-    .swatch:hover {
-      transform: translateY(-4px);
-    }
-    .swatch-hex {
-      font-family: monospace;
-      font-size: 0.8rem;
-      text-align: center;
-      background: rgba(0,0,0,0.5);
-      color: white;
-      padding: 2px 4px;
-      border-radius: 4px;
-    }
+  .swatch {
+    flex: 1;
+    border-radius: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 12px;
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), flex 0.2s;
+    position: relative;
+    overflow: hidden;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+  }
 
-    /* Contrast Checker */
-    .contrast-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1.5rem;
-    }
-    .contrast-preview-box {
-      border-radius: var(--radius);
-      padding: 1.5rem;
-      text-align: center;
-      border: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-    }
-    .contrast-preview-box h3 { font-size: 1.2rem; margin-bottom: 0.5rem; }
-    .contrast-preview-box p { font-size: 0.85rem; }
+  .swatch.active {
+    flex: 1.5;
+    transform: translateY(-4px);
+    box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3), inset 0 0 0 2px rgba(255,255,255,0.8);
+  }
 
-    .contrast-controls {
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-      justify-content: center;
-    }
+  .hex-label {
+    font-size: 0.75rem;
+    font-family: monospace;
+    font-weight: 700;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
 
-    .fg-picker {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-    }
-    .fg-picker input[type="color"] {
-      background: none;
-      border: none;
-      width: 40px;
-      height: 40px;
-      cursor: pointer;
-    }
+  /* Sliders */
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    background: rgba(0,0,0,0.2);
+    padding: 16px;
+    border-radius: 12px;
+  }
 
-    .ratio-display {
-      font-size: 2rem;
-      font-weight: bold;
-      font-family: monospace;
-      margin: 0.5rem 0;
-    }
+  .slider-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
 
-    .badges {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.5rem;
-    }
-    .badge {
-      text-align: center;
-      padding: 0.4rem;
-      border-radius: 6px;
-      font-size: 0.75rem;
-      font-weight: bold;
-      background: var(--border);
-      color: var(--text-muted);
-    }
-    .badge.pass { background: #059669; color: #fff; }
-    .badge.fail { background: #e11d48; color: #fff; }
-  </style>
+  .slider-group label {
+    width: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+
+  .slider-group span {
+    width: 32px;
+    text-align: right;
+    font-size: 0.75rem;
+    font-family: monospace;
+    color: var(--text-muted);
+  }
+
+  input[type=range] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--track-bg, #333);
+    outline: none;
+  }
+
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: ew-resize;
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.2);
+  }
+
+  /* Contrast Checker */
+  .contrast-section {
+    border-top: 1px solid var(--border);
+    padding-top: 24px;
+  }
+
+  .section-title {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin-bottom: 16px;
+    letter-spacing: 0.5px;
+  }
+
+  .checker-ui {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .select-group { display: flex; flex-direction: column; gap: 6px; }
+  .select-group label { font-size: 0.75rem; color: var(--text-muted); }
+
+  select {
+    background: rgba(0,0,0,0.2);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 8px;
+    border-radius: 8px;
+    outline: none;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .preview-area {
+    grid-column: 1 / -1;
+    height: 80px;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    font-size: 1.5rem;
+    font-weight: 600;
+    transition: background 0.3s, color 0.3s;
+    position: relative;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.2);
+  }
+
+  .small-text-preview {
+    font-size: 0.85rem;
+    font-weight: 400;
+    margin-top: 4px;
+  }
+
+  .results {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(0,0,0,0.2);
+    padding: 12px 16px;
+    border-radius: 12px;
+  }
+
+  .ratio-wrapper { display: flex; align-items: baseline; gap: 4px; }
+  .ratio-value { font-size: 1.5rem; font-weight: 700; font-family: monospace; }
+  .ratio-label { font-size: 0.75rem; color: var(--text-muted); }
+
+  .badges {
+    display: flex;
+    gap: 8px;
+  }
+
+  .badge {
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #333;
+    color: #888;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.2;
+  }
+
+  .badge span { font-size: 0.55rem; opacity: 0.8; font-weight: 500; }
+  .badge.pass { background: rgba(16, 185, 129, 0.15); color: var(--pass); border: 1px solid rgba(16,185,129,0.3); }
+  .badge.fail { background: rgba(239, 68, 68, 0.15); color: var(--fail); border: 1px solid rgba(239,68,68,0.3); }
+
+</style>
 </head>
 <body>
 
-  <div class="container">
-    <h1>Color Palette Lab</h1>
+<div class="lab-container">
+  <div class="header">
+    <h1>Vivid Palette Lab</h1>
+  </div>
 
-    <div class="section">
-      <h2>Base Color (HSL)</h2>
-      <div class="slider-group">
-        <div class="slider-row">
-          <label>H</label>
-          <input type="range" id="h-slider" min="0" max="360" value="217">
-          <span class="val-display" id="h-val">217°</span>
-        </div>
-        <div class="slider-row">
-          <label>S</label>
-          <input type="range" id="s-slider" min="0" max="100" value="90">
-          <span class="val-display" id="s-val">90%</span>
-        </div>
-        <div class="slider-row">
-          <label>L</label>
-          <input type="range" id="l-slider" min="0" max="100" value="50">
-          <span class="val-display" id="l-val">50%</span>
-        </div>
-      </div>
+  <div class="palette" id="palette">
+    <!-- Swatches injected via JS -->
+  </div>
+
+  <div class="controls">
+    <div class="slider-group">
+      <label>H</label>
+      <input type="range" id="hue" min="0" max="360" value="0">
+      <span id="h-val">0</span>
     </div>
-
-    <div class="section">
-      <h2>Generated Palette</h2>
-      <div class="palette" id="palette">
-        <!-- Swatches rendered via JS -->
-      </div>
+    <div class="slider-group">
+      <label>S</label>
+      <input type="range" id="sat" min="0" max="100" value="0">
+      <span id="s-val">0</span>
     </div>
-
-    <div class="section">
-      <h2>Contrast Checker</h2>
-      <div class="contrast-grid">
-        <div class="contrast-preview-box" id="contrast-preview">
-          <h3>Sample Text</h3>
-          <p>AA/AAA compliance check</p>
-        </div>
-
-        <div class="contrast-controls">
-          <div class="fg-picker">
-            <label>Foreground:</label>
-            <input type="color" id="fg-color" value="#ffffff">
-          </div>
-          <div>
-            <div class="ratio-display" id="ratio-display">1.00:1</div>
-            <div class="badges">
-              <div class="badge" id="badge-aa-normal">AA Normal</div>
-              <div class="badge" id="badge-aaa-normal">AAA Normal</div>
-              <div class="badge" id="badge-aa-large">AA Large</div>
-              <div class="badge" id="badge-aaa-large">AAA Large</div>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div class="slider-group">
+      <label>L</label>
+      <input type="range" id="lit" min="0" max="100" value="0">
+      <span id="l-val">0</span>
     </div>
   </div>
 
-  <script>
-    // State
-    const state = { h: 217, s: 90, l: 50, fg: '#ffffff' };
+  <div class="contrast-section">
+    <div class="section-title">Contrast Checker</div>
+    <div class="checker-ui">
 
-    // Elements
-    const elH = document.getElementById('h-slider');
-    const elS = document.getElementById('s-slider');
-    const elL = document.getElementById('l-slider');
-    const elFg = document.getElementById('fg-color');
-    const paletteEl = document.getElementById('palette');
-    const contrastPreview = document.getElementById('contrast-preview');
-    const ratioDisp = document.getElementById('ratio-display');
+      <div class="select-group">
+        <label>Foreground Text</label>
+        <select id="fg-select">
+          <option value="0">Color 1</option>
+          <option value="1">Color 2</option>
+          <option value="2">Color 3</option>
+          <option value="3">Color 4</option>
+          <option value="4" selected>Color 5</option>
+        </select>
+      </div>
 
-    // Utility: HSL to RGB
-    function hslToRgb(h, s, l) {
-      s /= 100; l /= 100;
-      const k = n => (n + h / 30) % 12;
-      const a = s * Math.min(l, 1 - l);
-      const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-      return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
-    }
+      <div class="select-group">
+        <label>Background</label>
+        <select id="bg-select">
+          <option value="0" selected>Color 1</option>
+          <option value="1">Color 2</option>
+          <option value="2">Color 3</option>
+          <option value="3">Color 4</option>
+          <option value="4">Color 5</option>
+        </select>
+      </div>
 
-    // Utility: RGB to HEX
-    function rgbToHex(r, g, b) {
-      return "#" + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
-    }
+      <div class="preview-area" id="preview">
+        Hello World
+        <div class="small-text-preview">Legibility matters.</div>
+      </div>
 
-    // Utility: HEX to RGB
-    function hexToRgb(hex) {
-      const match = hex.replace('#','').match(/.{1,2}/g);
-      return [parseInt(match[0], 16), parseInt(match[1], 16), parseInt(match[2], 16)];
-    }
+      <div class="results">
+        <div class="ratio-wrapper">
+          <span class="ratio-value" id="ratio-display">1.00</span>
+          <span class="ratio-label">: 1</span>
+        </div>
+        <div class="badges">
+          <div class="badge" id="badge-aa">AA <span>Normal</span></div>
+          <div class="badge" id="badge-aa-lg">AA <span>Large</span></div>
+          <div class="badge" id="badge-aaa">AAA <span>Normal</span></div>
+        </div>
+      </div>
 
-    // Relative Luminance for WCAG Contrast
-    function getLuminance(r, g, b) {
-      const a = [r, g, b].map(v => {
-        v /= 255;
-        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-      });
-      return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
-    }
+    </div>
+  </div>
+</div>
 
-    function getContrast(rgb1, rgb2) {
-      const lum1 = getLuminance(...rgb1);
-      const lum2 = getLuminance(...rgb2);
-      const brightest = Math.max(lum1, lum2);
-      const darkest = Math.min(lum1, lum2);
-      return (brightest + 0.05) / (darkest + 0.05);
-    }
+<script>
+  // State
+  let colors = [
+    { h: 250, s: 80, l: 60 }, // Vivid Purple
+    { h: 320, s: 90, l: 65 }, // Hot Pink
+    { h: 35,  s: 95, l: 55 }, // Orange
+    { h: 220, s: 40, l: 15 }, // Dark Navy
+    { h: 210, s: 20, l: 96 }  // Off White
+  ];
+  let activeIdx = 0;
 
-    function update() {
-      // Get values
-      state.h = parseInt(elH.value);
-      state.s = parseInt(elS.value);
-      state.l = parseInt(elL.value);
-      state.fg = elFg.value;
+  // DOM Elements
+  const paletteEl = document.getElementById('palette');
+  const hueInput = document.getElementById('hue');
+  const satInput = document.getElementById('sat');
+  const litInput = document.getElementById('lit');
+  const hVal = document.getElementById('h-val');
+  const sVal = document.getElementById('s-val');
+  const lVal = document.getElementById('l-val');
 
-      document.getElementById('h-val').textContent = state.h + '°';
-      document.getElementById('s-val').textContent = state.s + '%';
-      document.getElementById('l-val').textContent = state.l + '%';
+  const fgSelect = document.getElementById('fg-select');
+  const bgSelect = document.getElementById('bg-select');
+  const previewArea = document.getElementById('preview');
+  const ratioDisplay = document.getElementById('ratio-display');
 
-      // Generate Palette (Luminance variations)
-      const offsets = [-30, -15, 0, 15, 30];
-      paletteEl.innerHTML = '';
+  const badgeAA = document.getElementById('badge-aa');
+  const badgeAALg = document.getElementById('badge-aa-lg');
+  const badgeAAA = document.getElementById('badge-aaa');
 
-      let baseHex = '';
-      let baseRgb = [];
+  // Math Utilities
+  function hslToRgb(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [Math.round(255 * f(0)), Math.round(255 * f(8)), Math.round(255 * f(4))];
+  }
 
-      offsets.forEach(offset => {
-        let curL = Math.max(0, Math.min(100, state.l + offset));
-        let rgb = hslToRgb(state.h, state.s, curL);
-        let hex = rgbToHex(...rgb);
+  function rgbToHex(r, g, b) {
+    return "#" + (1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1);
+  }
 
-        if(offset === 0) {
-          baseHex = hex;
-          baseRgb = rgb;
-        }
+  function getLuminance(r, g, b) {
+    let a = [r, g, b].map(v => {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+  }
 
-        const div = document.createElement('div');
-        div.className = 'swatch';
-        div.style.backgroundColor = hex;
-        div.innerHTML = `<span class="swatch-hex">${hex}</span>`;
-        paletteEl.appendChild(div);
-      });
+  function getContrast(rgb1, rgb2) {
+    const lum1 = getLuminance(rgb1[0], rgb1[1], rgb1[2]);
+    const lum2 = getLuminance(rgb2[0], rgb2[1], rgb2[2]);
+    const lightest = Math.max(lum1, lum2);
+    const darkest = Math.min(lum1, lum2);
+    return (lightest + 0.05) / (darkest + 0.05);
+  }
 
-      // Update Contrast Checker
-      const fgRgb = hexToRgb(state.fg);
-      contrastPreview.style.backgroundColor = baseHex;
-      contrastPreview.style.color = state.fg;
+  // Determine if text on a color should be black or white
+  function getBestTextColor(r, g, b) {
+    const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+    return (yiq >= 128) ? '#000000' : '#ffffff';
+  }
 
-      const ratio = getContrast(fgRgb, baseRgb);
-      ratioDisp.textContent = ratio.toFixed(2) + ':1';
+  // UI Updates
+  function initSwatches() {
+    paletteEl.innerHTML = '';
+    colors.forEach((c, idx) => {
+      const el = document.createElement('div');
+      el.className = `swatch ${idx === activeIdx ? 'active' : ''}`;
+      el.innerHTML = `<span class="hex-label"></span>`;
+      el.onclick = () => setActiveSwatch(idx);
+      paletteEl.appendChild(el);
+    });
+    updateAll();
+  }
 
-      // Update Badges
-      const updateBadge = (id, pass) => {
-        const el = document.getElementById(id);
-        el.className = 'badge ' + (pass ? 'pass' : 'fail');
-      };
+  function setActiveSwatch(idx) {
+    activeIdx = idx;
+    Array.from(paletteEl.children).forEach((el, i) => {
+      el.classList.toggle('active', i === activeIdx);
+    });
+    const c = colors[activeIdx];
+    hueInput.value = c.h;
+    satInput.value = c.s;
+    litInput.value = c.l;
+    updateSliderVisuals();
+  }
 
-      updateBadge('badge-aa-normal', ratio >= 4.5);
-      updateBadge('badge-aaa-normal', ratio >= 7.0);
-      updateBadge('badge-aa-large', ratio >= 3.0);
-      updateBadge('badge-aaa-large', ratio >= 4.5);
-    }
+  function updateSliderVisuals() {
+    const c = colors[activeIdx];
+    hVal.innerText = c.h;
+    sVal.innerText = c.s;
+    lVal.innerText = c.l;
 
-    // Listeners
-    [elH, elS, elL, elFg].forEach(el => el.addEventListener('input', update));
+    // Rainbow background for Hue
+    hueInput.style.setProperty('--track-bg', 'linear-gradient(to right, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%)');
 
-    // Init
-    update();
-  </script>
+    // Saturation background (grey to full color at current lightness)
+    const satSt = rgbToHex(...hslToRgb(c.h, 0, c.l));
+    const satEd = rgbToHex(...hslToRgb(c.h, 100, c.l));
+    satInput.style.setProperty('--track-bg', `linear-gradient(to right, ${satSt}, ${satEd})`);
+
+    // Lightness background (black to color to white)
+    const litMid = rgbToHex(...hslToRgb(c.h, c.s, 50));
+    litInput.style.setProperty('--track-bg', `linear-gradient(to right, #000, ${litMid}, #fff)`);
+  }
+
+  function updateAll() {
+    updateSliderVisuals();
+
+    // Update Swatches
+    colors.forEach((c, idx) => {
+      const rgb = hslToRgb(c.h, c.s, c.l);
+      const hex = rgbToHex(rgb[0], rgb[1], rgb[2]);
+      const swatch = paletteEl.children[idx];
+      swatch.style.background = hex;
+
+      const label = swatch.querySelector('.hex-label');
+      label.innerText = hex;
+      label.style.color = getBestTextColor(rgb[0], rgb[1], rgb[2]);
+
+      // Update Dropdown labels silently
+      fgSelect.options[idx].text = `C${idx+1} (${hex})`;
+      bgSelect.options[idx].text = `C${idx+1} (${hex})`;
+    });
+
+    // Update Contrast Checker
+    const fgIdx = parseInt(fgSelect.value);
+    const bgIdx = parseInt(bgSelect.value);
+
+    const fgRgb = hslToRgb(colors[fgIdx].h, colors[fgIdx].s, colors[fgIdx].l);
+    const bgRgb = hslToRgb(colors[bgIdx].h, colors[bgIdx].s, colors[bgIdx].l);
+
+    previewArea.style.color = rgbToHex(fgRgb[0], fgRgb[1], fgRgb[2]);
+    previewArea.style.backgroundColor = rgbToHex(bgRgb[0], bgRgb[1], bgRgb[2]);
+
+    const ratio = getContrast(fgRgb, bgRgb);
+    ratioDisplay.innerText = ratio.toFixed(2);
+
+    // Badges logic
+    const setBadge = (el, condition) => {
+      el.className = `badge ${condition ? 'pass' : 'fail'}`;
+    };
+
+    setBadge(badgeAA, ratio >= 4.5);
+    setBadge(badgeAALg, ratio >= 3.0);
+    setBadge(badgeAAA, ratio >= 7.0);
+  }
+
+  // Event Listeners
+  [hueInput, satInput, litInput].forEach(input => {
+    input.addEventListener('input', (e) => {
+      colors[activeIdx][e.target.id.charAt(0)] = parseInt(e.target.value);
+      updateAll();
+    });
+  });
+
+  fgSelect.addEventListener('change', updateAll);
+  bgSelect.addEventListener('change', updateAll);
+
+  // Boot
+  initSwatches();
+  setActiveSwatch(0);
+</script>
+
 </body>
 </html>
 ```

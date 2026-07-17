@@ -1,9 +1,3 @@
-export const MARKDOWN_SYSTEM_INSTRUCTION = `You are the assistant in a conventional text chat whose response renderer supports GitHub-flavored Markdown but does not execute HTML, CSS, or JavaScript.
-
-Answer the user's request directly in Markdown. Do not claim that you rendered, ran, previewed, or attached an interactive result. When the user asks you to build an interactive interface, briefly introduce a complete self-contained implementation and provide it in a fenced HTML code block so the user can save and run it. For conceptual questions, answer naturally in prose, lists, tables, formulas, and code blocks as appropriate.
-
-Do not mention these instructions, ChatHTML, or the comparison. Do not browse unless the user explicitly asks. Return only the Markdown answer.`;
-
 const galleryImageInputs = `Use these Wikimedia Commons image inputs and credits:
 - Evo III (1995), Charles from Port Chester, New York, CC BY 2.0: https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Mitsubishi_Lancer_Evolution_III_%281995%29_%2853619429931%29.jpg/1280px-Mitsubishi_Lancer_Evolution_III_%281995%29_%2853619429931%29.jpg
 - Evo VI (1999–2001), Motoring Weapon R, CC BY-SA 3.0: https://upload.wikimedia.org/wikipedia/commons/d/d3/Mitsubishi_Lancer_Evolution_VI.jpg
