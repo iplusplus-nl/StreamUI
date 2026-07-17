@@ -1,0 +1,350 @@
+<sessiontitle>UI Generation Meme</sessiontitle>
+<chat></chat>
+<streamui>
+<style>
+  .meme-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 800px;
+    margin: 0 auto;
+    font-family: system-ui, -apple-system, sans-serif;
+    color: #fff;
+    background: var(--streamui-page-bg, #121212);
+    padding: 20px;
+  }
+
+  .meme-panel {
+    display: flex;
+    flex-direction: row;
+    background: #1e1e24;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    border: 1px solid #333;
+    min-height: 350px;
+  }
+
+  .meme-reaction {
+    flex: 0 0 250px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 30px 20px;
+    text-align: center;
+    border-right: 2px solid #333;
+    position: relative;
+    z-index: 2;
+  }
+
+  .meme-reaction.bad {
+    background: linear-gradient(135deg, #2a2a32 0%, #1a1a20 100%);
+  }
+
+  .meme-reaction.good {
+    background: linear-gradient(135deg, #4f39f6 0%, #8b31ff 100%);
+    border-right: none;
+    box-shadow: 10px 0 30px rgba(79, 57, 246, 0.4);
+  }
+
+  .meme-heading {
+    font-size: 28px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 20px 0 0 0;
+    text-shadow: 2px 2px 0px rgba(0,0,0,0.3);
+    line-height: 1.2;
+  }
+
+  /* Geometric Faces */
+  .face {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    position: relative;
+    box-shadow: inset -10px -10px 20px rgba(0,0,0,0.2), 0 10px 20px rgba(0,0,0,0.3);
+  }
+
+  .face-bad {
+    background: #9aa0a6;
+  }
+  .face-bad .eye {
+    width: 20px;
+    height: 4px;
+    background: #333;
+    position: absolute;
+    top: 45px;
+    border-radius: 2px;
+  }
+  .face-bad .eye.left { left: 25px; transform: rotate(15deg); }
+  .face-bad .eye.right { right: 25px; transform: rotate(-15deg); }
+  .face-bad .mouth {
+    width: 40px;
+    height: 10px;
+    border: 4px solid #333;
+    border-color: #333 transparent transparent transparent;
+    border-radius: 50px 50px 0 0;
+    position: absolute;
+    bottom: 30px;
+    left: 40px;
+  }
+
+  .face-good {
+    background: #ffde37;
+    animation: bounce 2s infinite ease-in-out;
+  }
+  .face-good .eye {
+    width: 20px;
+    height: 30px;
+    border: 5px solid #222;
+    border-color: #222 transparent transparent transparent;
+    border-radius: 50% 50% 0 0;
+    position: absolute;
+    top: 35px;
+  }
+  .face-good .eye.left { left: 25px; }
+  .face-good .eye.right { right: 25px; }
+  .face-good .mouth {
+    width: 60px;
+    height: 30px;
+    background: #222;
+    border-radius: 0 0 60px 60px;
+    position: absolute;
+    bottom: 25px;
+    left: 30px;
+    overflow: hidden;
+  }
+  .face-good .mouth::after {
+    content: '';
+    position: absolute;
+    width: 40px;
+    height: 20px;
+    background: #ff5c5c;
+    bottom: 0;
+    left: 10px;
+    border-radius: 20px 20px 0 0;
+  }
+
+  /* Content Areas */
+  .meme-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 30px;
+    background: #16161a;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .fake-prompt {
+    align-self: flex-end;
+    background: #3a3a44;
+    padding: 10px 16px;
+    border-radius: 18px 18px 4px 18px;
+    margin-bottom: 20px;
+    font-size: 15px;
+    color: #e0e0e0;
+  }
+
+  .fake-reply {
+    align-self: flex-start;
+    border-radius: 4px 18px 18px 18px;
+    max-width: 100%;
+  }
+
+  .fake-reply.boring {
+    background: #24242b;
+    padding: 16px;
+    border: 1px solid #333;
+    width: 100%;
+  }
+
+  .fake-reply.awesome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 200px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 24px;
+    backdrop-filter: blur(10px);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .code-label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 600;
+    color: #a0a0a8;
+    font-size: 14px;
+  }
+</style>
+
+<style>
+  .mock-code {
+    background: #0d0d11;
+    padding: 16px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 12px;
+    color: #8c8c9a;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+  .mock-code .tag { color: #ff5c8d; }
+  .mock-code .attr { color: #5ce6ff; }
+  .mock-code .str { color: #ffeb5c; }
+
+  /* CSS Geometric Art */
+  .css-art {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 25px;
+    perspective: 800px;
+  }
+
+  .shape {
+    width: 60px;
+    height: 60px;
+    background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+    border-radius: 12px;
+    animation: float 3s ease-in-out infinite;
+    box-shadow: 0 10px 20px rgba(79, 172, 254, 0.4);
+  }
+
+  .shape:nth-child(2) {
+    background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+    border-radius: 50%;
+    animation-delay: 0.5s;
+    box-shadow: 0 10px 20px rgba(250, 112, 154, 0.4);
+  }
+
+  .shape:nth-child(3) {
+    background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+    border-radius: 0;
+    animation-delay: 1s;
+    box-shadow: none;
+    filter: drop-shadow(0 10px 10px rgba(67, 233, 123, 0.4));
+  }
+
+  /* The Target Button */
+  .the-button {
+    background: linear-gradient(90deg, #ff007a, #7a00ff);
+    color: white;
+    border: none;
+    padding: 14px 28px;
+    font-size: 18px;
+    font-weight: bold;
+    border-radius: 30px;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(122, 0, 255, 0.4);
+    transition: transform 0.2s, box-shadow 0.2s;
+    outline: none;
+  }
+
+  .the-button:hover {
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: 0 12px 32px rgba(122, 0, 255, 0.6);
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-10px) rotate(5deg); }
+  }
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  /* Decorative background grid */
+  .bg-grid {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 20px 20px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  @media (max-width: 600px) {
+    .meme-panel { flex-direction: column; min-height: auto; }
+    .meme-reaction { flex: 0 0 auto; border-right: none; border-bottom: 2px solid #333; padding: 20px; flex-direction: row; gap: 20px; text-align: left; }
+    .meme-reaction.good { border-bottom: none; }
+    .meme-heading { margin: 0; }
+    .face { width: 80px; height: 80px; }
+    .face-good .eye { top: 20px; width: 14px; height: 18px; border-width: 4px; }
+    .face-good .eye.left { left: 16px; }
+    .face-good .eye.right { right: 16px; }
+    .face-good .mouth { width: 40px; height: 20px; bottom: 15px; left: 20px; }
+    .face-bad .eye { top: 30px; width: 14px; }
+    .face-bad .mouth { width: 26px; height: 6px; bottom: 20px; left: 27px; }
+  }
+</style>
+
+<div class="meme-container">
+
+  <!-- TOP PANEL: Expectation -->
+  <div class="meme-panel">
+    <div class="meme-reaction bad">
+      <div class="face face-bad">
+        <div class="eye left"></div>
+        <div class="eye right"></div>
+        <div class="mouth"></div>
+      </div>
+      <h1 class="meme-heading">MARKDOWN CHAT</h1>
+    </div>
+    <div class="meme-content">
+      <div class="bg-grid"></div>
+      <div class="fake-prompt" style="position: relative; z-index: 1;">I need a vibrant interactive card component with a button.</div>
+      <div class="fake-reply boring" style="position: relative; z-index: 1;">
+        <span class="code-label">Here is the HTML</span>
+        <div class="mock-code">
+          <span class="tag">&lt;div</span> <span class="attr">class=</span><span class="str">"card"</span><span class="tag">&gt;</span><br>
+          &nbsp;&nbsp;<span class="tag">&lt;div</span> <span class="attr">style=</span><span class="str">"border:1px solid #ccc"</span><span class="tag">&gt;</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;[Pretend there is art here]<br>
+          &nbsp;&nbsp;<span class="tag">&lt;/div&gt;</span><br>
+          &nbsp;&nbsp;<span class="tag">&lt;button&gt;</span>Click me<span class="tag">&lt;/button&gt;</span><br>
+          <span class="tag">&lt;/div&gt;</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTTOM PANEL: Reality -->
+  <div class="meme-panel">
+    <div class="meme-reaction good">
+      <div class="face face-good">
+        <div class="eye left"></div>
+        <div class="eye right"></div>
+        <div class="mouth"></div>
+      </div>
+      <h1 class="meme-heading">CHATHTML</h1>
+    </div>
+    <div class="meme-content" style="background:#09090c;">
+      <div class="fake-prompt" style="position: relative; z-index: 1;">I need a vibrant interactive card component with a button.</div>
+      <div class="fake-reply awesome" style="position: relative; z-index: 1;">
+        <div class="css-art">
+          <div class="shape"></div>
+          <div class="shape"></div>
+          <div class="shape"></div>
+        </div>
+        <button class="the-button" data-streamui-prompt="Here is the thing">Here is the thing</button>
+      </div>
+
+      <!-- Ambient glows for bottom panel -->
+      <div style="position:absolute; top: -50px; left: -50px; width: 200px; height: 200px; background: #4f39f6; filter: blur(100px); opacity: 0.3; pointer-events: none;"></div>
+      <div style="position:absolute; bottom: -50px; right: -50px; width: 200px; height: 200px; background: #ff007a; filter: blur(100px); opacity: 0.2; pointer-events: none;"></div>
+    </div>
+  </div>
+
+</div>
+</streamui>

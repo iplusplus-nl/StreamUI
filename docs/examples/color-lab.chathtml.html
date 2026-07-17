@@ -1,0 +1,422 @@
+<sessiontitle>Accessible Color Palette Lab</sessiontitle>
+<chat></chat>
+<streamui>
+<style>
+  .color-lab {
+    background: #111111;
+    color: #e5e5e5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  @media (min-width: 768px) {
+    .color-lab { grid-template-columns: 320px 1fr; }
+  }
+  .lab-header {
+    margin-bottom: 24px;
+  }
+  .lab-header h2 {
+    margin: 0 0 8px;
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: #ffffff;
+  }
+  .lab-header p {
+    margin: 0;
+    font-size: 13px;
+    color: #888;
+  }
+
+  .control-group {
+    background: #1a1a1a;
+    padding: 20px;
+    border-radius: 16px;
+    border: 1px solid #2a2a2a;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .slider-row label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 500;
+    color: #aaa;
+    margin-bottom: 8px;
+  }
+  .slider-row input[type="range"] {
+    width: 100%;
+    appearance: none;
+    height: 8px;
+    border-radius: 4px;
+    background: #333;
+    outline: none;
+  }
+  .slider-row input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    border: 2px solid #555;
+  }
+  #hue-slider { background: linear-gradient(to right, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%) !important; }
+  #sat-slider { background: linear-gradient(to right, #888, #00f); }
+  #lit-slider { background: linear-gradient(to right, #000, #888, #fff); }
+
+  .palette-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .swatches {
+    display: flex;
+    border-radius: 16px;
+    overflow: hidden;
+    height: 120px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .swatch {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 12px;
+    cursor: pointer;
+    transition: transform 0.2s, flex 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+  }
+  .swatch:hover {
+    flex: 1.2;
+  }
+  .swatch-hex {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 8px;
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    border-radius: 6px;
+    backdrop-filter: blur(4px);
+    pointer-events: none;
+  }
+
+  .contrast-tester {
+    background: #1a1a1a;
+    border-radius: 16px;
+    border: 1px solid #2a2a2a;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .contrast-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 2;
+  }
+  .contrast-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .contrast-ratio {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+
+  .contrast-preview {
+    padding: 32px 24px;
+    border-radius: 12px;
+    text-align: center;
+    transition: background 0.3s, color 0.3s;
+    z-index: 2;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .contrast-preview h3 {
+    margin: 0 0 8px;
+    font-size: 24px;
+    font-weight: 700;
+  }
+  .contrast-preview p {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 400;
+  }
+
+  .badges {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    z-index: 2;
+  }
+  .badge {
+    background: rgba(255,255,255,0.05);
+    padding: 12px;
+    border-radius: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+  .status-tag {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .pass { background: #2ea043; color: #fff; }
+  .fail { background: #f85149; color: #fff; }
+
+  .assignment-hints {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    color: #888;
+    justify-content: center;
+    margin-top: -8px;
+    margin-bottom: 8px;
+  }
+  .hint-kbd {
+    background: #333;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #ccc;
+    font-family: monospace;
+  }
+</style>
+
+<div class="color-lab">
+  <div class="left-panel">
+    <div class="lab-header">
+      <h2>Accessibility Color Lab</h2>
+      <p>Tune colors and test contrast.</p>
+    </div>
+
+    <div class="control-group">
+      <div class="slider-row">
+        <label><span>Hue</span> <span id="val-h">210°</span></label>
+        <input type="range" id="hue-slider" min="0" max="360" value="210">
+      </div>
+      <div class="slider-row">
+        <label><span>Saturation</span> <span id="val-s">80%</span></label>
+        <input type="range" id="sat-slider" min="0" max="100" value="80">
+      </div>
+      <div class="slider-row">
+        <label><span>Lightness</span> <span id="val-l">50%</span></label>
+        <input type="range" id="lit-slider" min="0" max="100" value="50">
+      </div>
+    </div>
+  </div>
+
+  <div class="palette-section">
+    <div class="assignment-hints">
+      <span>Click a swatch to set Background. <span class="hint-kbd">Shift</span> + Click to set Foreground.</span>
+    </div>
+
+    <div class="swatches" id="palette-swatches">
+      <!-- Injected by JS -->
+    </div>
+
+    <div class="contrast-tester">
+      <div class="contrast-header">
+        <div class="contrast-title">Contrast Ratio</div>
+        <div class="contrast-ratio" id="ratio-display">--</div>
+      </div>
+
+      <div class="contrast-preview" id="preview-box">
+        <h3>Vivid Readability</h3>
+        <p>This is standard text to evaluate the contrast performance of the selected foreground and background colors.</p>
+      </div>
+
+      <div class="badges">
+        <div class="badge">
+          <span>AA Normal (4.5:1)</span>
+          <span class="status-tag" id="badge-aa-normal">--</span>
+        </div>
+        <div class="badge">
+          <span>AAA Normal (7.0:1)</span>
+          <span class="status-tag" id="badge-aaa-normal">--</span>
+        </div>
+        <div class="badge">
+          <span>AA Large (3.0:1)</span>
+          <span class="status-tag" id="badge-aa-large">--</span>
+        </div>
+        <div class="badge">
+          <span>AAA Large (4.5:1)</span>
+          <span class="status-tag" id="badge-aaa-large">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const hSlider = document.getElementById('hue-slider');
+  const sSlider = document.getElementById('sat-slider');
+  const lSlider = document.getElementById('lit-slider');
+
+  const valH = document.getElementById('val-h');
+  const valS = document.getElementById('val-s');
+  const valL = document.getElementById('val-l');
+
+  const swatchesContainer = document.getElementById('palette-swatches');
+  const previewBox = document.getElementById('preview-box');
+  const ratioDisplay = document.getElementById('ratio-display');
+
+  const badges = {
+    aaN: document.getElementById('badge-aa-normal'),
+    aaaN: document.getElementById('badge-aaa-normal'),
+    aaL: document.getElementById('badge-aa-large'),
+    aaaL: document.getElementById('badge-aaa-large')
+  };
+
+  let activeBgIdx = 0;
+  let activeFgIdx = 1;
+  let currentPalette = [];
+
+  // HSL to Hex adapted math
+  function hslToRgb(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [Math.round(255 * f(0)), Math.round(255 * f(8)), Math.round(255 * f(4))];
+  }
+
+  function rgbToHex(r, g, b) {
+    return "#" + [r,g,b].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  function getLuminance(r, g, b) {
+    const a = [r, g, b].map(v => {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+  }
+
+  function getContrastRatio(rgb1, rgb2) {
+    const l1 = getLuminance(...rgb1);
+    const l2 = getLuminance(...rgb2);
+    const lightest = Math.max(l1, l2);
+    const darkest = Math.min(l1, l2);
+    return (lightest + 0.05) / (darkest + 0.05);
+  }
+
+  function generatePalette(h, s, l) {
+    // Generate 5 harmonious colors based on a primary hue
+    return [
+      { h: h, s: s, l: Math.max(5, l - 40) },        // Deep Shade
+      { h: h, s: s, l: l },                          // Base
+      { h: h, s: s, l: Math.min(95, l + 35) },       // Tint
+      { h: (h + 180) % 360, s: s, l: l },            // Complement
+      { h: (h + 30) % 360, s: Math.min(100, s+20), l: Math.max(10, l - 10) } // Analogous Accent
+    ];
+  }
+
+  function updateBadge(el, ratio, threshold) {
+    if (ratio >= threshold) {
+      el.textContent = 'PASS';
+      el.className = 'status-tag pass';
+    } else {
+      el.textContent = 'FAIL';
+      el.className = 'status-tag fail';
+    }
+  }
+
+  function renderPalette() {
+    swatchesContainer.innerHTML = '';
+    currentPalette.forEach((color, index) => {
+      const rgb = hslToRgb(color.h, color.s, color.l);
+      const hex = rgbToHex(...rgb);
+
+      const swatch = document.createElement('div');
+      swatch.className = 'swatch';
+      swatch.style.backgroundColor = hex;
+      swatch.innerHTML = `<span class="swatch-hex">${hex}</span>`;
+
+      swatch.addEventListener('click', (e) => {
+        if (e.shiftKey) {
+            activeFgIdx = index;
+        } else {
+            activeBgIdx = index;
+            // Auto swap if they pick the exact same color to prevent invisible text
+            if (activeBgIdx === activeFgIdx) {
+                activeFgIdx = (activeBgIdx + 2) % 5;
+            }
+        }
+        updateContrast();
+      });
+
+      swatchesContainer.appendChild(swatch);
+    });
+  }
+
+  function updateContrast() {
+    if (!currentPalette.length) return;
+
+    const bgHsl = currentPalette[activeBgIdx];
+    const fgHsl = currentPalette[activeFgIdx];
+
+    const bgRgb = hslToRgb(bgHsl.h, bgHsl.s, bgHsl.l);
+    const fgRgb = hslToRgb(fgHsl.h, fgHsl.s, fgHsl.l);
+
+    const bgHex = rgbToHex(...bgRgb);
+    const fgHex = rgbToHex(...fgRgb);
+
+    previewBox.style.backgroundColor = bgHex;
+    previewBox.style.color = fgHex;
+    previewBox.style.borderColor = fgHex + '40';
+
+    const ratio = getContrastRatio(bgRgb, fgRgb);
+    ratioDisplay.textContent = ratio.toFixed(2) + ' : 1';
+    ratioDisplay.style.color = ratio >= 4.5 ? '#2ea043' : (ratio >= 3.0 ? '#d29922' : '#f85149');
+
+    updateBadge(badges.aaN, ratio, 4.5);
+    updateBadge(badges.aaaN, ratio, 7.0);
+    updateBadge(badges.aaL, ratio, 3.0);
+    updateBadge(badges.aaaL, ratio, 4.5);
+  }
+
+  function onSliderChange() {
+    const h = parseInt(hSlider.value);
+    const s = parseInt(sSlider.value);
+    const l = parseInt(lSlider.value);
+
+    valH.textContent = `${h}°`;
+    valS.textContent = `${s}%`;
+    valL.textContent = `${l}%`;
+
+    // Update sat slider background gradient based on hue
+    const midColor = rgbToHex(...hslToRgb(h, 100, 50));
+    sSlider.style.background = `linear-gradient(to right, #888, ${midColor})`;
+
+    currentPalette = generatePalette(h, s, l);
+    renderPalette();
+    updateContrast();
+  }
+
+  [hSlider, sSlider, lSlider].forEach(slider => {
+    slider.addEventListener('input', onSliderChange);
+  });
+
+  // Init
+  onSliderChange();
+</script>
+</streamui>
