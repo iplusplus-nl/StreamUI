@@ -73,8 +73,7 @@ export type StreamThreadProps = {
   onUiComplexityChange(uiComplexity: number): void;
 };
 
-const SESSION_OUTPUT_SCROLL_SETTLE_MS = 900;
-const SESSION_OUTPUT_SCROLL_RETRY_MS = [0, 80, 240, 520];
+const SESSION_OUTPUT_SCROLL_RETRY_MS = [80, 240, 520];
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 160;
 const THINKING_ACTIVITY_ANIMATION_MS = 220;
 
@@ -302,39 +301,23 @@ export function StreamThread({
       return undefined;
     }
 
+    let didPositionOutput = false;
+    const positionOutputOnce = () => {
+      if (didPositionOutput) {
+        return;
+      }
+      didPositionOutput = scrollToLastOutputStart(viewport);
+    };
     const timeoutIds: number[] = [];
-    const animationFrameId = window.requestAnimationFrame(() => {
-      scrollToLastOutputStart(viewport);
-    });
+    const animationFrameId = window.requestAnimationFrame(positionOutputOnce);
 
     SESSION_OUTPUT_SCROLL_RETRY_MS.forEach((delay) => {
-      timeoutIds.push(
-        window.setTimeout(() => scrollToLastOutputStart(viewport), delay)
-      );
+      timeoutIds.push(window.setTimeout(positionOutputOnce, delay));
     });
-
-    const resizeObserver =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(() => scrollToLastOutputStart(viewport));
-
-    if (resizeObserver) {
-      viewport
-        .querySelectorAll<HTMLElement>(
-          ".chat-row, .assistant-canvas, .preview-frame"
-        )
-        .forEach((element) => resizeObserver.observe(element));
-    }
-
-    const settleTimeoutId = window.setTimeout(() => {
-      resizeObserver?.disconnect();
-    }, SESSION_OUTPUT_SCROLL_SETTLE_MS);
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
       timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
-      window.clearTimeout(settleTimeoutId);
-      resizeObserver?.disconnect();
     };
   }, [activeSessionId, hasStreamingMessage]);
 

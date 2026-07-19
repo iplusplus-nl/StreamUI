@@ -466,3 +466,132 @@ test("#24 long artifacts keep the normal edit action without a floating circle",
     await page.locator('[aria-label="Edit preview region"]').count()
   ).toBeGreaterThan(0);
 });
+
+test("streaming growth keeps the composer pinned without repeated viewport corrections", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1100, height: 720 });
+  const chunks = [
+    '<chat></chat><streamui><main id="streaming-content" style="font-size:16px;line-height:24px">',
+    '<div style="height:420px">Streaming canvas</div>',
+    ...Array.from(
+      { length: 12 },
+      (_, index) => `<p style="margin:0">Stream row ${index}</p>`
+    )
+  ];
+  await page.addInitScript((streamChunks) => {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      if (url.includes("/api/chat/runs/streaming-layout-run/events")) {
+        const encoder = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamChunks.forEach((chunk, index) => {
+              window.setTimeout(() => {
+                controller.enqueue(
+                  encoder.encode(
+                    `${JSON.stringify({
+                      type: "content",
+                      text: chunk,
+                      runId: "streaming-layout-run",
+                      seq: index + 1
+                    })}\n`
+                  )
+                );
+              }, 50 + index * 100);
+            });
+          }
+        });
+        return Promise.resolve(
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" }
+          })
+        );
+      }
+      return nativeFetch(input, init);
+    };
+
+    const geometry: Array<Record<string, number>> = [];
+    (window as typeof window & { __streamingGeometry?: typeof geometry })
+      .__streamingGeometry = geometry;
+    const sample = () => {
+      const composer = document.querySelector<HTMLElement>(
+        ".composer-footer.has-messages"
+      );
+      const viewport = document.querySelector<HTMLElement>(".message-list");
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="ChatHTML artifact preview"]'
+      );
+      if (composer && viewport) {
+        const rect = composer.getBoundingClientRect();
+        geometry.push({
+          time: performance.now(),
+          composerTop: rect.top,
+          composerBottom: rect.bottom,
+          viewportScrollTop: viewport.scrollTop,
+          viewportScrollHeight: viewport.scrollHeight,
+          frameHeight: frame?.getBoundingClientRect().height ?? 0
+        });
+      }
+      window.requestAnimationFrame(sample);
+    };
+    window.requestAnimationFrame(sample);
+  }, chunks);
+
+  await openIssueFixture(
+    page,
+    [
+      {
+        id: "streaming-layout-assistant",
+        role: "assistant",
+        content: "",
+        rawStream: "",
+        hasStreamUi: false,
+        streamUiComplete: false,
+        status: "streaming",
+        generationRunId: "streaming-layout-run",
+        streamSequence: 0
+      }
+    ],
+    { deferRunEvents: false }
+  );
+
+  const iframe = page.locator('iframe[title="ChatHTML artifact preview"]');
+  await expect(iframe).toBeVisible();
+  await expect
+    .poll(() => iframe.evaluate((element) => element.getBoundingClientRect().height), {
+      timeout: 10_000
+    })
+    .toBeGreaterThan(700);
+  const samples = await page.evaluate(() =>
+    (
+      window as typeof window & {
+        __streamingGeometry?: Array<Record<string, number>>;
+      }
+    ).__streamingGeometry?.slice() ?? []
+  );
+  const composerTops = samples.map((sample) => sample.composerTop);
+  const composerBottoms = samples.map((sample) => sample.composerBottom);
+  const scrollTransitions = samples.reduce((count, sample, index) => {
+    const previous = samples[index - 1];
+    return count +
+      (previous && sample.viewportScrollTop !== previous.viewportScrollTop
+        ? 1
+        : 0);
+  }, 0);
+
+  expect(Math.max(...composerTops) - Math.min(...composerTops)).toBeLessThanOrEqual(
+    0.5
+  );
+  expect(
+    Math.max(...composerBottoms) - Math.min(...composerBottoms)
+  ).toBeLessThanOrEqual(0.5);
+  expect(scrollTransitions).toBeLessThanOrEqual(1);
+});
