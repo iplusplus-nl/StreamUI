@@ -1587,7 +1587,7 @@ export default function App() {
           onCapture={() => void handleBugReportScreenshotCapture()}
           onClose={handleBugReportClose}
           onDiscard={handleBugReportDiscard}
-          onSubmit={() => void handleBugReportSubmit()}
+          onSubmit={(draft) => void handleBugReportSubmit(draft)}
         />
       ) : null}
     </>

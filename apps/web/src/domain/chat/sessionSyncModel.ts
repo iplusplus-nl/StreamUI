@@ -177,6 +177,58 @@ function preserveLocalArtifactEditSessions(
     : serverState;
 }
 
+function preserveLocalBugReportDrafts(
+  current: SessionState,
+  serverState: SessionState
+): SessionState {
+  const serverSessions = new Map(
+    serverState.sessions.map((session) => [session.id, session])
+  );
+  let didPreserve = false;
+
+  for (const currentSession of current.sessions) {
+    const localDraft = currentSession.bugReportDraft;
+    if (!localDraft) {
+      continue;
+    }
+
+    const serverSession = serverSessions.get(currentSession.id);
+    if (!serverSession) {
+      serverSessions.set(currentSession.id, currentSession);
+      didPreserve = true;
+      continue;
+    }
+
+    const serverDraftBaseline =
+      serverSession.bugReportDraft?.updatedAt ?? serverSession.updatedAt;
+    if (localDraft.updatedAt < serverDraftBaseline) {
+      continue;
+    }
+
+    if (serverSession.bugReportDraft === localDraft) {
+      continue;
+    }
+
+    serverSessions.set(currentSession.id, {
+      ...serverSession,
+      updatedAt: Math.max(
+        serverSession.updatedAt,
+        currentSession.updatedAt,
+        localDraft.updatedAt
+      ),
+      bugReportDraft: localDraft
+    });
+    didPreserve = true;
+  }
+
+  return didPreserve
+    ? {
+        ...serverState,
+        sessions: sortSessions(Array.from(serverSessions.values()))
+      }
+    : serverState;
+}
+
 export function mergeSyncedSessionState(
   current: SessionState,
   serverState: SessionState,
@@ -228,6 +280,7 @@ export function mergeSyncedSessionState(
     deletedSessionIds,
     current
   );
+  serverState = preserveLocalBugReportDrafts(current, serverState);
 
   const currentActive = current.sessions.find(
     (session) => session.id === current.activeSessionId

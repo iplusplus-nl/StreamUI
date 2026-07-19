@@ -50,7 +50,7 @@ type BugReportDialogProps = {
   onCapture(): void;
   onClose(): void;
   onDiscard(): void;
-  onSubmit(): void;
+  onSubmit(draft: BugReportDraft): void;
 };
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -445,7 +445,12 @@ export function BugReportDialog({
             and personal information before sending.
           </p>
 
-          {captureError || localError || submitError ? (
+          {isSubmitted ? (
+            <div className="bug-report-success" role="status">
+              <CheckCircle2 size={15} strokeWidth={2.1} aria-hidden="true" />
+              <span>Report sent successfully.</span>
+            </div>
+          ) : captureError || localError || submitError ? (
             <div className="bug-report-error" role="status">
               {submitError ?? localError ?? captureError}
             </div>
@@ -479,7 +484,7 @@ export function BugReportDialog({
               disabled={
                 isCapturing || !hasContent || isSubmitting || isSubmitted
               }
-              onClick={onSubmit}
+              onClick={() => onSubmit(draftRef.current)}
             >
               {isSubmitted ? (
                 <>

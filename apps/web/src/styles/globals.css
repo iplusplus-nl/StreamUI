@@ -1931,6 +1931,19 @@ button {
   line-height: 1.35;
 }
 
+.bug-report-success {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 10px;
+  color: #166534;
+  background: #ecfdf3;
+  padding: 9px 11px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .bug-report-footer {
   box-shadow: inset 0 1px 0 #ececec;
 }
@@ -3034,6 +3047,11 @@ button {
 .bug-report-overlay[data-theme="night"] .bug-report-error {
   color: #f0a594;
   background: rgba(117, 50, 36, 0.48);
+}
+
+.bug-report-overlay[data-theme="night"] .bug-report-success {
+  color: #86efac;
+  background: rgba(20, 83, 45, 0.52);
 }
 
 .app-shell[data-theme="night"] .model-import-overlay,

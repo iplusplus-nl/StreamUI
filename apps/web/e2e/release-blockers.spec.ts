@@ -59,6 +59,7 @@ type FixtureOptions = {
 };
 
 type ApiTraffic = {
+  bugReportRequests: number;
   mediaProxyRequests: number;
   sessionFileRequests: number;
 };
@@ -174,6 +175,7 @@ async function installDeterministicApi(
 ): Promise<ApiTraffic> {
   let sessionState = initialSessionState(options);
   const traffic: ApiTraffic = {
+    bugReportRequests: 0,
     mediaProxyRequests: 0,
     sessionFileRequests: 0
   };
@@ -272,6 +274,7 @@ async function installDeterministicApi(
     }
 
     if (path === "/api/bug-reports") {
+      traffic.bugReportRequests += 1;
       await fulfillJson(route, { id: "e2e-bug-report" }, 201);
       return;
     }
@@ -737,6 +740,41 @@ test("positioned-body absolute content reports its full artifact height", async 
     Number.parseFloat((element as HTMLIFrameElement).style.height)
   );
   expect(measuredHeight).toBeLessThanOrEqual(510);
+});
+
+test("Bug Report keeps typed details through a stale poll and sends once", async ({
+  page
+}) => {
+  const traffic = await openApp(page, { width: 1024, height: 768 });
+  const staleState = initialSessionState();
+  let stalePolls = 0;
+  await page.context().route("**/api/sessions", async (route) => {
+    if (route.request().method() === "PUT") {
+      const payload = route.request().postDataJSON() as { saveRevision?: number };
+      await fulfillJson(route, {
+        applied: true,
+        currentSaveRevision: payload.saveRevision
+      });
+      return;
+    }
+
+    stalePolls += 1;
+    await fulfillJson(route, staleState);
+  });
+
+  await page.getByRole("button", { name: "Bug Report" }).click();
+  const dialog = page.getByRole("dialog", { name: "Bug Report" });
+  const details = dialog.getByPlaceholder("What happened?");
+  await details.fill("Details must survive an older session response.");
+
+  await expect.poll(() => stalePolls, { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect(details).toHaveValue(
+    "Details must survive an older session response."
+  );
+
+  await dialog.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(dialog.getByText("Report sent successfully.")).toBeVisible();
+  expect(traffic.bugReportRequests).toBe(1);
 });
 
 test("Bug Report capture opens, reports progress, and attaches a screenshot", async ({

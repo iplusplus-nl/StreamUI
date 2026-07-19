@@ -48,7 +48,7 @@ export type BugReportViewController = {
   changeDraft(draft: BugReportDraft): boolean;
   close(): void;
   discard(): boolean;
-  submit(): Promise<BugReportSubmitOutcome>;
+  submit(draftSnapshot?: BugReportDraft): Promise<BugReportSubmitOutcome>;
 };
 
 function browserDependencies(): BugReportControllerDependencies {

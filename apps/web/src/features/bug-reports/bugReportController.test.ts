@@ -506,7 +506,7 @@ describe("bug report controller submit lifecycle", () => {
       clientId: "latest-client"
     });
     assert.equal(test.scheduled.length, 1);
-    assert.equal(test.scheduled[0].delayMs, 1_400);
+    assert.equal(test.scheduled[0].delayMs, 2_400);
 
     test.activeSessionId = second.id;
     const eventStart = test.events.length;
@@ -540,6 +540,25 @@ describe("bug report controller submit lifecycle", () => {
     assert.equal(calls, 1);
     submission.resolve("report-1");
     assert.equal(await first, "submitted");
+  });
+
+  it("submits the visible draft snapshot after stale session sync replaces it", async () => {
+    const visibleDraft = draft("The text visible at click time", [], 5);
+    const target = session("session-a", { draft: visibleDraft });
+    const test = harness({ sessions: [target] });
+    await test.controller.open();
+    test.sessions.set(target.id, {
+      ...target,
+      updatedAt: 2,
+      bugReportDraft: undefined
+    });
+
+    assert.equal(await test.controller.submit(visibleDraft), "submitted");
+    assert.equal(test.submissions.length, 1);
+    assert.equal(
+      test.submissions[0].input.draft.text,
+      "The text visible at click time"
+    );
   });
 
   it("returns to editing with a useful Error or fallback failure message", async () => {

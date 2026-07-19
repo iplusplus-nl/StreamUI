@@ -87,14 +87,14 @@ export type BugReportController = {
   changeDraft(draft: BugReportDraft): boolean;
   close(): void;
   discard(): boolean;
-  submit(): Promise<BugReportSubmitOutcome>;
+  submit(draftSnapshot?: BugReportDraft): Promise<BugReportSubmitOutcome>;
   dispose(): void;
 };
 
 const CAPTURE_ERROR =
   "Could not capture the page screenshot. You can still add images manually.";
 const SUBMIT_FALLBACK_ERROR = "Could not submit bug report.";
-const SUCCESS_CLOSE_DELAY_MS = 1_400;
+const SUCCESS_CLOSE_DELAY_MS = 2_400;
 
 function closedState(): BugReportViewState {
   return { ...initialBugReportViewState };
@@ -408,7 +408,9 @@ export function createBugReportController(
     return updated;
   };
 
-  const submit = async (): Promise<BugReportSubmitOutcome> => {
+  const submit = async (
+    draftSnapshot?: BugReportDraft
+  ): Promise<BugReportSubmitOutcome> => {
     if (activeCaptureToken !== null || activeSubmitToken !== null) {
       return "busy";
     }
@@ -424,7 +426,10 @@ export function createBugReportController(
       resetClosed();
       return "missing";
     }
-    const draft = targetSession.bugReportDraft;
+    const draft = normalizeBugReportDraft(
+      draftSnapshot ?? targetSession.bugReportDraft,
+      dependencies.now()
+    );
     if (!draft || (!draft.text.trim() && draft.images.length === 0)) {
       return "empty";
     }

@@ -527,6 +527,132 @@ describe("sessionModel", () => {
     assert.equal(local.sessions[0].messages[1].generationRunId, "run-1");
   });
 
+  it("preserves a newer local bug report draft over a stale server poll", () => {
+    const merged = mergeSyncedSessionState(
+      {
+        activeSessionId: "s1",
+        sessions: [
+          {
+            id: "s1",
+            title: "Local title",
+            createdAt: 1,
+            updatedAt: 21,
+            files: [],
+            messages: [{ id: "local", role: "user", content: "local" }],
+            bugReportDraft: {
+              text: "Do not erase this text",
+              images: [],
+              updatedAt: 21
+            }
+          }
+        ]
+      },
+      {
+        activeSessionId: "s1",
+        sessions: [
+          {
+            id: "s1",
+            title: "Server title",
+            createdAt: 1,
+            updatedAt: 10,
+            files: [],
+            messages: [{ id: "server", role: "user", content: "server" }]
+          }
+        ]
+      }
+    );
+
+    assert.equal(merged.sessions[0].title, "Server title");
+    assert.equal(merged.sessions[0].messages[0].id, "server");
+    assert.equal(
+      merged.sessions[0].bugReportDraft?.text,
+      "Do not erase this text"
+    );
+    assert.equal(merged.sessions[0].updatedAt, 21);
+  });
+
+  it("keeps a locally drafted session missing from a stale server poll", () => {
+    const merged = mergeSyncedSessionState(
+      {
+        activeSessionId: "local-draft",
+        sessions: [
+          {
+            id: "local-draft",
+            title: "Local draft",
+            createdAt: 1,
+            updatedAt: 30,
+            files: [],
+            messages: [],
+            bugReportDraft: {
+              text: "Still typing",
+              images: [],
+              updatedAt: 30
+            }
+          }
+        ]
+      },
+      {
+        activeSessionId: "server-session",
+        sessions: [
+          {
+            id: "server-session",
+            title: "Server session",
+            createdAt: 1,
+            updatedAt: 20,
+            files: [],
+            messages: [{ id: "server", role: "user", content: "saved" }]
+          }
+        ]
+      }
+    );
+
+    assert.equal(merged.activeSessionId, "local-draft");
+    assert.equal(
+      merged.sessions.find((session) => session.id === "local-draft")
+        ?.bugReportDraft?.text,
+      "Still typing"
+    );
+  });
+
+  it("accepts a newer server-side removal of an older local bug report draft", () => {
+    const merged = mergeSyncedSessionState(
+      {
+        activeSessionId: "s1",
+        sessions: [
+          {
+            id: "s1",
+            title: "Local",
+            createdAt: 1,
+            updatedAt: 10,
+            files: [],
+            messages: [{ id: "local", role: "user", content: "local" }],
+            bugReportDraft: {
+              text: "Already handled elsewhere",
+              images: [],
+              updatedAt: 10
+            }
+          }
+        ]
+      },
+      {
+        activeSessionId: "s1",
+        sessions: [
+          {
+            id: "s1",
+            title: "Server",
+            createdAt: 1,
+            updatedAt: 20,
+            files: [],
+            messages: [{ id: "server", role: "user", content: "server" }]
+          }
+        ]
+      }
+    );
+
+    assert.equal(merged.sessions[0].bugReportDraft, undefined);
+    assert.equal(merged.sessions[0].title, "Server");
+  });
+
   it("preserves local artifact edit state over stale server sync", () => {
     const merged = mergeSyncedSessionState(
       {
