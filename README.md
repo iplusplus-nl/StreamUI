@@ -1,6 +1,6 @@
 <table>
   <tr>
-    <td width="150" align="center"><h1>💬</h1></td>
+    <td width="150" align="center"><img src="docs/images/chathtml-logo.png" alt="ChatHTML logo" width="112"></td>
     <td>
       <h1>ChatHTML</h1>
       <p><strong>Beautiful AI responses, beyond plain Markdown.</strong></p>
@@ -12,8 +12,10 @@
   <a href="https://github.com/aietheia/ChatHTML/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/aietheia/ChatHTML/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/aietheia/ChatHTML/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/aietheia/ChatHTML?style=flat"></a>
   <img alt="Node.js 22.13 or newer" src="https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=nodedotjs&logoColor=white">
-  <a href="https://chat.aietheia.com"><img alt="Live demo" src="https://img.shields.io/badge/live-demo-7c3aed"></a>
+  <a href="https://chat.aietheia.com"><img alt="ChatHTML Cloud" src="https://img.shields.io/badge/ChatHTML-Cloud-7c3aed"></a>
 </p>
+
+<p><strong>Try ChatHTML Cloud: <a href="https://chat.aietheia.com">chat.aietheia.com</a></strong></p>
 
 ChatHTML turns a prompt into a live, streaming HTML response. It progressively
 renders model-generated interfaces as they are written, so an answer can be
@@ -31,42 +33,6 @@ become a sandboxed UI artifact.
     <td width="25%" valign="top"><strong>🚀 Built for iteration</strong><br><br>Select, edit, regenerate, repair, copy, or export the result.</td>
   </tr>
 </table>
-
-## Quick start
-
-Requires Node.js 22.13 or newer, npm, and an
-[OpenRouter](https://openrouter.ai/) API key.
-
-### 1. Install
-
-```bash
-git clone https://github.com/aietheia/ChatHTML.git
-cd ChatHTML
-npm install
-```
-
-### 2. Configure
-
-Copy `.env.example` to `.env` (`cp .env.example .env` on macOS/Linux or
-`Copy-Item .env.example .env` in Windows PowerShell), then set at least:
-
-```dotenv
-OPENROUTER_API_KEY=your_openrouter_key_here
-OPENROUTER_MODEL=google/gemini-3.1-pro-preview
-OPENROUTER_REASONING_EFFORT=low
-```
-
-The backend loads the root `.env` and an optional overriding `apps/web/.env`.
-Environment keys stay on the server and are never sent to the browser.
-
-### 3. Run
-
-```bash
-npm run dev
-```
-
-Open <http://127.0.0.1:5173>. The Vite client runs on port `5173`; its Express
-API proxy runs on `http://127.0.0.1:8787`.
 
 ## Examples: Plain Markdown vs. ChatHTML
 
@@ -190,6 +156,42 @@ The publisher wraps each saved ChatHTML response in the same sandbox document
 used by the app, then creates or updates its stable link on
 `https://chat.aietheia.com`. Omit the slugs to publish every README example; set
 `CHATHTML_README_SHARE_ORIGIN` to use another compatible host.
+
+## Get started
+
+Requires Node.js 22.13 or newer, npm, and an
+[OpenRouter](https://openrouter.ai/) API key.
+
+### 1. Install
+
+```bash
+git clone https://github.com/aietheia/ChatHTML.git
+cd ChatHTML
+npm install
+```
+
+### 2. Configure
+
+Copy `.env.example` to `.env` (`cp .env.example .env` on macOS/Linux or
+`Copy-Item .env.example .env` in Windows PowerShell), then set at least:
+
+```dotenv
+OPENROUTER_API_KEY=your_openrouter_key_here
+OPENROUTER_MODEL=google/gemini-3.1-pro-preview
+OPENROUTER_REASONING_EFFORT=low
+```
+
+The backend loads the root `.env` and an optional overriding `apps/web/.env`.
+Environment keys stay on the server and are never sent to the browser.
+
+### 3. Run
+
+```bash
+npm run dev
+```
+
+Open <http://127.0.0.1:5173>. The Vite client runs on port `5173`; its Express
+API proxy runs on `http://127.0.0.1:8787`.
 
 💜 If ChatHTML is useful to you, consider giving it a star. Bugs can be reported
 in the app or opened directly in [GitHub Issues](https://github.com/aietheia/ChatHTML/issues).
