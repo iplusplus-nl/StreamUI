@@ -42,6 +42,7 @@ export function changeSettingsProvider(
     providerId: preset.id,
     providerName: preset.label,
     baseUrl: preset.baseUrl,
+    apiStyle: preset.apiStyle ?? "responses",
     model: preset.model,
     modelOptions: getProviderModelCatalog(preset.id),
     modelsEndpoint: getDefaultModelsEndpoint(preset.baseUrl),

@@ -2,8 +2,10 @@ import { CHAT_RUN_CANCELLED_MESSAGE, type ChatRunTerminalOutcome } from "./chatR
 import { normalizeMemorySettings, type MemoryItem } from "./memoryTools.js";
 import {
   getRuntimeApiDefaults,
+  normalizeApiStyle,
   readRuntimeApiCredentials,
-  type ApiKeySource
+  type ApiKeySource,
+  type ApiStyle
 } from "./runtimeApiSettings.js";
 import { normalizeSessionFiles, type SessionFile } from "./sessionFileTools.js";
 import { normalizeEphemeralFileIds } from "./sessionFileUploadSafety.js";
@@ -32,6 +34,7 @@ export type OpenRouterReasoningEffort =
 export type RuntimeApiSettings = {
   providerName: string;
   baseUrl: string;
+  apiStyle: ApiStyle;
   apiKeySource: ApiKeySource;
   apiKeyEnvironmentName: string;
   apiKey: string;
@@ -651,6 +654,7 @@ export function readRuntimeApiSettings(input: unknown): RuntimeApiSettings {
 
   return {
     ...credentials,
+    apiStyle: normalizeApiStyle(object.apiStyle),
     model,
     reasoningEffort: isOpenRouterRuntime(credentials)
       ? normalizeReasoningEffort(

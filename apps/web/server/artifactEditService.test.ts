@@ -5,23 +5,24 @@ import type { Request, Response } from "express";
 import {
   buildArtifactEditInstructions,
   createArtifactEditHandler,
+  type ArtifactEditStreamOptions,
   type ArtifactEditLogger,
   type ArtifactEditServicePorts
 } from "./artifactEditService.js";
 import { ResponsesTerminalFailureError } from "./responsesEventReducer.js";
 import type {
-  ResponsesStreamApiSettings,
-  StreamResponsesOnceOptions
+  ResponsesStreamApiSettings
 } from "./responsesStreamClient.js";
 
-const apiSettings: ResponsesStreamApiSettings = {
+const apiSettings: ResponsesStreamApiSettings & { apiStyle: "responses" } = {
   providerName: "Test Provider",
   baseUrl: "https://api.example.test/v1",
   apiKeySource: "manual",
   apiKeyEnvironmentName: "",
   apiKey: "secret",
   model: "test/model",
-  reasoningEffort: "none"
+  reasoningEffort: "none",
+  apiStyle: "responses"
 };
 
 function requestBody(): Record<string, unknown> {
@@ -70,7 +71,7 @@ function serviceHarness({
   stream
 }: {
   draining?: boolean;
-  stream(options: StreamResponsesOnceOptions): Promise<unknown>;
+  stream(options: ArtifactEditStreamOptions): Promise<unknown>;
 }) {
   let active = 0;
   let begins = 0;
@@ -90,7 +91,10 @@ function serviceHarness({
       }
     },
     responses: {
-      getEndpoint: (baseUrl) => `${baseUrl}/responses`,
+      getEndpoint: (baseUrl, apiStyle) =>
+        apiStyle === "chat-completions"
+          ? `${baseUrl}/chat/completions`
+          : `${baseUrl}/responses`,
       stream
     },
     activity: {
@@ -160,7 +164,7 @@ describe("artifact edit service", () => {
   });
 
   it("runs the Responses client, applies edits, and releases activity", async () => {
-    let received: StreamResponsesOnceOptions | undefined;
+    let received: ArtifactEditStreamOptions | undefined;
     const service = serviceHarness({
       stream: async (options) => {
         received = options;

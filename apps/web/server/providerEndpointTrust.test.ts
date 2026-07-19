@@ -24,6 +24,14 @@ describe("provider endpoint credential trust", () => {
     assert.equal(
       isTrustedEnvironmentCredentialEndpoint(
         openRouterEnvironment,
+        "https://openrouter.ai/api/v1/chat/completions",
+        "chat-completions"
+      ),
+      true
+    );
+    assert.equal(
+      isTrustedEnvironmentCredentialEndpoint(
+        openRouterEnvironment,
         "https://openrouter.ai/api/v1/models?limit=100",
         "models"
       ),

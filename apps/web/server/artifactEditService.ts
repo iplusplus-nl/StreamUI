@@ -15,17 +15,25 @@ import type {
   ResponsesStreamState,
   StreamResponsesOnceOptions
 } from "./responsesStreamClient.js";
+import type { ApiStyle } from "./runtimeApiSettings.js";
 import { COMFORTABLE_LEGIBILITY_PROMPT } from "../src/server/visualLegibilityPolicy.js";
 
 const ARTIFACT_EDIT_MAX_OUTPUT_TOKENS = 32_000;
 
 export type ArtifactEditRuntimeSettingsPort = {
-  read(input: unknown): ResponsesStreamApiSettings;
+  read(input: unknown): ResponsesStreamApiSettings & { apiStyle: ApiStyle };
+};
+
+export type ArtifactEditStreamOptions = Omit<
+  StreamResponsesOnceOptions,
+  "apiSettings"
+> & {
+  apiSettings: ResponsesStreamApiSettings & { apiStyle: ApiStyle };
 };
 
 export type ArtifactEditResponsesPort = {
-  getEndpoint(baseUrl: string): string;
-  stream(options: StreamResponsesOnceOptions): Promise<unknown>;
+  getEndpoint(baseUrl: string, apiStyle: ApiStyle): string;
+  stream(options: ArtifactEditStreamOptions): Promise<unknown>;
 };
 
 export type ArtifactEditActivityPort = {
@@ -92,7 +100,7 @@ export async function runArtifactEditModel(
     references,
     signal
   }: {
-    apiSettings: ResponsesStreamApiSettings;
+    apiSettings: ResponsesStreamApiSettings & { apiStyle: ApiStyle };
     source: string;
     prompt: string;
     references: ArtifactEditReference[];
@@ -108,7 +116,7 @@ export async function runArtifactEditModel(
   };
   let rawModelText = "";
   await responses.stream({
-    endpoint: responses.getEndpoint(apiSettings.baseUrl),
+    endpoint: responses.getEndpoint(apiSettings.baseUrl, apiSettings.apiStyle),
     apiSettings,
     input: [
       {

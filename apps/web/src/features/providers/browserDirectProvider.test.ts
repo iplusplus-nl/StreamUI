@@ -3,11 +3,12 @@ import { describe, it } from "node:test";
 import { normalizeApiSettings } from "../../core/apiSettings";
 import {
   fetchBrowserDirectModelCatalog,
+  requestBrowserDirectText,
   startBrowserDirectChatRun,
   usesBrowserDirectProvider
 } from "./browserDirectProvider";
 
-function manualSettings() {
+function manualSettings(overrides: Record<string, unknown> = {}) {
   return normalizeApiSettings({
     providerId: "openrouter",
     providerName: "OpenRouter",
@@ -16,7 +17,8 @@ function manualSettings() {
     apiKeySource: "manual",
     apiKey: "sk-private-browser-key",
     model: "vendor/model",
-    reasoningEffort: "none"
+    reasoningEffort: "none",
+    ...overrides
   });
 }
 
@@ -88,6 +90,77 @@ describe("browser-direct provider transport", () => {
       ]
     );
     assert.equal(events.every((event) => event.runId === "run-direct"), true);
+  });
+
+  it("streams chat through the Chat Completions API when selected", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const response = await startBrowserDirectChatRun(
+      {
+        runId: "run-completions",
+        messages: [{ role: "user", content: "Hello" }],
+        apiSettings: manualSettings({ apiStyle: "chat-completions" })
+      },
+      "client",
+      new AbortController().signal,
+      async (input, init) => {
+        calls.push({ input, init });
+        return new Response(
+          [
+            'data: {"choices":[{"delta":{"content":"<chat>Hello"},"finish_reason":null}]}',
+            "",
+            'data: {"choices":[{"delta":{"content":"</chat>"},"finish_reason":"stop"}]}',
+            "",
+            "data: [DONE]",
+            ""
+          ].join("\n")
+        );
+      }
+    );
+
+    assert.equal(
+      String(calls[0].input),
+      "https://provider.example/v1/chat/completions"
+    );
+    const body = JSON.parse(String(calls[0].init?.body)) as Record<string, unknown>;
+    assert.equal("messages" in body, true);
+    assert.equal("input" in body, false);
+    assert.equal(body.max_tokens, 16_000);
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; text?: string; status?: string });
+    assert.deepEqual(
+      events.map((event) => [event.type, event.text, event.status]),
+      [
+        ["content", "<chat>Hello", undefined],
+        ["content", "</chat>", undefined],
+        ["done", undefined, "complete"]
+      ]
+    );
+  });
+
+  it("reads non-streaming Chat Completions text responses", async () => {
+    const text = await requestBrowserDirectText(
+      manualSettings({ apiStyle: "chat-completions" }),
+      {
+        instructions: "Return JSON.",
+        input: [{ role: "user", content: "Edit this" }]
+      },
+      new AbortController().signal,
+      async (input, init) => {
+        assert.equal(
+          String(input),
+          "https://provider.example/v1/chat/completions"
+        );
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.equal("messages" in body, true);
+        return Response.json({
+          choices: [{ message: { content: '{"edits":[]}' } }]
+        });
+      }
+    );
+
+    assert.equal(text, '{"edits":[]}');
   });
 
   it("fetches models directly with the key only in provider authorization", async () => {

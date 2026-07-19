@@ -27,6 +27,10 @@ import {
   streamResponsesOnce,
   type ResponsesStreamState
 } from "./responsesStreamClient.js";
+import {
+  getChatCompletionsEndpoint,
+  streamChatCompletionsOnce
+} from "./chatCompletionsStreamClient.js";
 import { runResponsesToolLoop } from "./responsesToolLoop.js";
 import { CHAT_RUN_CANCELLED_MESSAGE } from "./chatRunFinalization.js";
 import {
@@ -237,7 +241,7 @@ export async function runOpenRouterChatExecution({
     searchSettings
   } = input;
   console.info(
-    `[chat:${requestId}] start provider=${apiSettings.providerName} base_url=${apiSettings.baseUrl} model=${model} messages=${messages.length} theme=${themeMode} reasoning=${apiSettings.reasoningEffort} ui_complexity=${apiSettings.uiComplexity} key_source=${apiSettings.apiKeySource} key_env=${apiSettings.apiKeyEnvironmentName}`
+    `[chat:${requestId}] start provider=${apiSettings.providerName} base_url=${apiSettings.baseUrl} api_style=${apiSettings.apiStyle} model=${model} messages=${messages.length} theme=${themeMode} reasoning=${apiSettings.reasoningEffort} ui_complexity=${apiSettings.uiComplexity} key_source=${apiSettings.apiKeySource} key_env=${apiSettings.apiKeyEnvironmentName}`
   );
 
   const toolStreamState: ResponsesStreamState = {
@@ -395,14 +399,21 @@ export async function runOpenRouterChatExecution({
   const responseInput: ResponsesInputItem[] = messages.map(
     toResponsesInputMessage
   );
-  const endpoint = getResponsesEndpoint(apiSettings.baseUrl);
+  const streamProviderOnce =
+    apiSettings.apiStyle === "chat-completions"
+      ? streamChatCompletionsOnce
+      : streamResponsesOnce;
+  const endpoint =
+    apiSettings.apiStyle === "chat-completions"
+      ? getChatCompletionsEndpoint(apiSettings.baseUrl)
+      : getResponsesEndpoint(apiSettings.baseUrl);
 
   await runResponsesToolLoop({
     maxSteps: toolMaxSteps,
     signal,
     streamStep: async () => {
       nativeSteps += 1;
-      return streamResponsesOnce({
+      return streamProviderOnce({
         endpoint,
         apiSettings,
         input: responseInput,

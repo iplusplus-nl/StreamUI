@@ -20,6 +20,7 @@ function manualApiSettings(overrides: Record<string, unknown> = {}) {
     apiKeySource: "manual",
     apiKey: "opaque-test-key",
     model: "test/model",
+    apiStyle: "responses",
     reasoningEffort: "high",
     uiComplexity: "72",
     userPreferencePrompt: "Prefer concise answers.",
@@ -78,6 +79,7 @@ describe("chat run request normalization", () => {
     assert.equal(input.runId, "run-request");
     assert.equal(input.sessionId, "session-1");
     assert.equal(input.model, "test/model");
+    assert.equal(input.apiSettings.apiStyle, "responses");
     assert.equal(input.useOpenRouterReasoning, true);
     assert.deepEqual(input.messages, [
       { role: "assistant", content: "Earlier answer" },
@@ -145,6 +147,15 @@ describe("chat run request normalization", () => {
     assert.throws(
       () => readRuntimeApiSettings(manualApiSettings({ model: "" })),
       /API settings missing: Model/
+    );
+  });
+
+  it("accepts Chat Completions as the provider API style", () => {
+    assert.equal(
+      readRuntimeApiSettings(
+        manualApiSettings({ apiStyle: "chat-completions" })
+      ).apiStyle,
+      "chat-completions"
     );
   });
 

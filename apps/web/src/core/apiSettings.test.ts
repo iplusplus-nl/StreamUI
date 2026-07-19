@@ -179,7 +179,23 @@ describe("apiSettings", () => {
 
   it("keeps OpenRouter as the open-source default provider", () => {
     assert.equal(DEFAULT_API_SETTINGS.providerId, "openrouter");
+    assert.equal(DEFAULT_API_SETTINGS.apiStyle, "responses");
     assert.equal(DEFAULT_API_SETTINGS.apiKeySource, "environment");
+  });
+
+  it("supports Responses and Chat Completions API styles", () => {
+    assert.equal(
+      normalizeApiSettings({ apiStyle: "responses" }).apiStyle,
+      "responses"
+    );
+    assert.equal(
+      normalizeApiSettings({ apiStyle: "chat-completions" }).apiStyle,
+      "chat-completions"
+    );
+    assert.equal(
+      normalizeApiSettings({ apiStyle: "legacy" }).apiStyle,
+      "responses"
+    );
   });
 
   it("uses an OpenRouter shortlist by default without forcing it after edits", () => {

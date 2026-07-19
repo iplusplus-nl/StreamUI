@@ -83,12 +83,17 @@ function requireManualSettings(input: unknown): ApiSettings {
   return settings;
 }
 
-function responsesEndpoint(settings: ApiSettings): string {
+function providerEndpoint(settings: ApiSettings): string {
   const baseUrl = requireDirectProviderUrl(
     settings.baseUrl.trim().replace(/\/+$/, ""),
     "Provider Base URL"
   );
-  baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, "")}/responses`;
+  baseUrl.pathname = [
+    baseUrl.pathname.replace(/\/+$/, ""),
+    settings.apiStyle === "chat-completions"
+      ? "chat/completions"
+      : "responses"
+  ].join("/");
   baseUrl.search = "";
   baseUrl.hash = "";
   return baseUrl.toString();
@@ -181,6 +186,81 @@ function createResponsesInput(payload: DirectChatPayload) {
   });
 }
 
+function toChatCompletionContent(content: unknown): unknown {
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  const parts: Array<Record<string, unknown>> = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const value = part as {
+      type?: unknown;
+      text?: unknown;
+      image_url?: unknown;
+    };
+    if (
+      (value.type === "input_text" || value.type === "text") &&
+      typeof value.text === "string"
+    ) {
+      parts.push({ type: "text", text: value.text });
+      continue;
+    }
+    if (value.type === "input_image" && typeof value.image_url === "string") {
+      parts.push({
+        type: "image_url",
+        image_url: { url: value.image_url, detail: "auto" }
+      });
+    }
+  }
+  return parts;
+}
+
+function createChatCompletionMessages(
+  input: unknown,
+  instructions: string
+): Array<Record<string, unknown>> {
+  const candidates = Array.isArray(input) ? input : [];
+  const messages: Array<Record<string, unknown>> = instructions
+    ? [{ role: "system", content: instructions }]
+    : [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const message = candidate as {
+      role?: unknown;
+      content?: unknown;
+      type?: unknown;
+    };
+    if (message.role !== "user" && message.role !== "assistant") {
+      continue;
+    }
+    const content = toChatCompletionContent(message.content);
+    messages.push({
+      role: message.role,
+      content:
+        message.role === "assistant" && Array.isArray(content)
+          ? content
+              .flatMap((part) => {
+                const text = (part as { text?: unknown }).text;
+                return typeof text === "string" ? [text] : [];
+              })
+              .join("")
+          : content
+    });
+  }
+  if (messages.length === (instructions ? 1 : 0)) {
+    messages.push({
+      role: "user",
+      content:
+        typeof input === "string" ? input : JSON.stringify(input ?? "")
+    });
+  }
+  return messages;
+}
+
 function createDirectInstructions(
   payload: DirectChatPayload,
   settings: ApiSettings
@@ -253,6 +333,50 @@ function eventText(event: ProviderStreamEvent): {
   return null;
 }
 
+function chatCompletionEvents(event: ProviderStreamEvent): Array<{
+  type: "content" | "reasoning";
+  text: string;
+}> {
+  const choices = Array.isArray(event.choices) ? event.choices : [];
+  const events: Array<{ type: "content" | "reasoning"; text: string }> = [];
+  for (const candidate of choices) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const delta = (candidate as { delta?: unknown }).delta;
+    if (!delta || typeof delta !== "object") {
+      continue;
+    }
+    const object = delta as {
+      content?: unknown;
+      reasoning?: unknown;
+      reasoning_content?: unknown;
+    };
+    if (typeof object.content === "string" && object.content) {
+      events.push({ type: "content", text: object.content });
+    }
+    const reasoning = object.reasoning ?? object.reasoning_content;
+    if (typeof reasoning === "string" && reasoning) {
+      events.push({ type: "reasoning", text: reasoning });
+    }
+  }
+  return events;
+}
+
+function chatCompletionFinishReason(event: ProviderStreamEvent): string {
+  const choices = Array.isArray(event.choices) ? event.choices : [];
+  for (const candidate of choices) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const reason = (candidate as { finish_reason?: unknown }).finish_reason;
+    if (typeof reason === "string" && reason) {
+      return reason;
+    }
+  }
+  return "";
+}
+
 function finalResponseText(event: ProviderStreamEvent): string {
   const response =
     event.response && typeof event.response === "object"
@@ -323,6 +447,7 @@ function createNdjsonProviderStream(
       let terminal = false;
       let contentDeltaSeen = false;
       let reasoningDeltaSeen = false;
+      let chatCompletionFinished = false;
       const emit = (event: Record<string, unknown>) => {
         sequence += 1;
         controller.enqueue(
@@ -351,6 +476,10 @@ function createNdjsonProviderStream(
           return;
         }
         const type = typeof event.type === "string" ? event.type : "";
+        if (!type && event.error) {
+          finish("error", terminalError(event));
+          return;
+        }
         const textEvent = eventText(event);
         if (textEvent) {
           const isDoneText = type.endsWith(".done");
@@ -366,6 +495,26 @@ function createNdjsonProviderStream(
               reasoningDeltaSeen = true;
             }
           }
+        }
+        for (const completionEvent of chatCompletionEvents(event)) {
+          emit(completionEvent);
+          if (completionEvent.type === "content") {
+            contentDeltaSeen = true;
+          } else {
+            reasoningDeltaSeen = true;
+          }
+        }
+        const finishReason = chatCompletionFinishReason(event);
+        if (finishReason) {
+          if (
+            finishReason !== "stop" &&
+            finishReason !== "tool_calls" &&
+            finishReason !== "function_call"
+          ) {
+            finish("error", `The provider stopped with ${finishReason}.`);
+            return;
+          }
+          chatCompletionFinished = true;
         }
         if (type === "response.completed" || type === "response.done") {
           const finalText = finalResponseText(event);
@@ -423,8 +572,10 @@ function createNdjsonProviderStream(
           }
           if (!terminal) {
             finish(
-              "error",
-              "The provider stream ended before confirming completion."
+              chatCompletionFinished ? "complete" : "error",
+              chatCompletionFinished
+                ? ""
+                : "The provider stream ended before confirming completion."
             );
           }
         } catch (error) {
@@ -452,7 +603,7 @@ export async function startBrowserDirectChatRun(
   const payload =
     input && typeof input === "object" ? (input as DirectChatPayload) : {};
   const settings = requireManualSettings(payload.apiSettings);
-  const endpoint = responsesEndpoint(settings);
+  const endpoint = providerEndpoint(settings);
   const runId = typeof payload.runId === "string" ? payload.runId : "direct-run";
   let response: Response;
   try {
@@ -469,16 +620,31 @@ export async function startBrowserDirectChatRun(
         "Content-Type": "application/json"
       },
       signal,
-      body: JSON.stringify({
-        model: settings.model,
-        input: createResponsesInput(payload),
-        instructions: createDirectInstructions(payload, settings),
-        stream: true,
-        max_output_tokens: 16_000,
-        ...(settings.reasoningEffort !== "none"
-          ? { reasoning: { effort: settings.reasoningEffort } }
-          : {})
-      })
+      body: JSON.stringify(
+        settings.apiStyle === "chat-completions"
+          ? {
+              model: settings.model,
+              messages: createChatCompletionMessages(
+                createResponsesInput(payload),
+                createDirectInstructions(payload, settings)
+              ),
+              stream: true,
+              max_tokens: 16_000,
+              ...(settings.reasoningEffort !== "none"
+                ? { reasoning: { effort: settings.reasoningEffort } }
+                : {})
+            }
+          : {
+              model: settings.model,
+              input: createResponsesInput(payload),
+              instructions: createDirectInstructions(payload, settings),
+              stream: true,
+              max_output_tokens: 16_000,
+              ...(settings.reasoningEffort !== "none"
+                ? { reasoning: { effort: settings.reasoningEffort } }
+                : {})
+            }
+      )
     });
   } catch (error) {
     throw directFetchError(error);
@@ -509,7 +675,7 @@ export async function requestBrowserDirectText(
   fetchImpl: FetchLike = fetch
 ): Promise<string> {
   const settings = requireManualSettings(apiSettings);
-  const endpoint = responsesEndpoint(settings);
+  const endpoint = providerEndpoint(settings);
   let response: Response;
   try {
     response = await fetchImpl(endpoint, {
@@ -525,13 +691,25 @@ export async function requestBrowserDirectText(
         "Content-Type": "application/json"
       },
       signal,
-      body: JSON.stringify({
-        model: settings.model,
-        input: request.input,
-        instructions: request.instructions,
-        stream: false,
-        max_output_tokens: request.maxOutputTokens ?? 16_000
-      })
+      body: JSON.stringify(
+        settings.apiStyle === "chat-completions"
+          ? {
+              model: settings.model,
+              messages: createChatCompletionMessages(
+                request.input,
+                request.instructions
+              ),
+              stream: false,
+              max_tokens: request.maxOutputTokens ?? 16_000
+            }
+          : {
+              model: settings.model,
+              input: request.input,
+              instructions: request.instructions,
+              stream: false,
+              max_output_tokens: request.maxOutputTokens ?? 16_000
+            }
+      )
     });
   } catch (error) {
     throw directFetchError(error);
@@ -553,9 +731,17 @@ export async function requestBrowserDirectText(
     throw new Error("The provider returned invalid JSON.");
   }
   const outputText =
-    typeof payload.output_text === "string"
-      ? payload.output_text
-      : finalResponseText({ response: payload });
+    settings.apiStyle === "chat-completions"
+      ? (() => {
+          const choices = Array.isArray(payload.choices) ? payload.choices : [];
+          const message = (
+            choices[0] as { message?: { content?: unknown } } | undefined
+          )?.message;
+          return typeof message?.content === "string" ? message.content : "";
+        })()
+      : typeof payload.output_text === "string"
+        ? payload.output_text
+        : finalResponseText({ response: payload });
   if (!outputText.trim()) {
     throw new Error("The provider returned an empty response.");
   }

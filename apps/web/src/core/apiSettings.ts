@@ -15,10 +15,13 @@ export type ReasoningEffort =
 
 export type ApiKeySource = "environment" | "manual" | "managed";
 
+export type ApiStyle = "responses" | "chat-completions";
+
 export type ApiSettings = {
   providerId: ApiProviderId;
   providerName: string;
   baseUrl: string;
+  apiStyle: ApiStyle;
   apiKeySource: ApiKeySource;
   apiKey: string;
   model: string;
@@ -58,6 +61,7 @@ export type ApiProviderPreset = {
   baseUrl: string;
   model: string;
   reasoningEffort: ReasoningEffort;
+  apiStyle?: ApiStyle;
   apiKeySource?: ApiKeySource;
 };
 
@@ -162,12 +166,30 @@ export const API_KEY_SOURCE_OPTIONS: Array<{
   { value: "manual", label: "Manual" }
 ];
 
+export const API_STYLE_OPTIONS: Array<{
+  value: ApiStyle;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "responses",
+    label: "Responses",
+    description: "Use the /responses API"
+  },
+  {
+    value: "chat-completions",
+    label: "Chat Completions",
+    description: "Use the widely supported /chat/completions API"
+  }
+];
+
 const DEFAULT_PRESET = API_PROVIDER_PRESETS[0];
 
 export const DEFAULT_API_SETTINGS: ApiSettings = {
   providerId: DEFAULT_PRESET.id,
   providerName: DEFAULT_PRESET.label,
   baseUrl: DEFAULT_PRESET.baseUrl,
+  apiStyle: DEFAULT_PRESET.apiStyle ?? "responses",
   apiKeySource: "environment",
   apiKey: "",
   model: DEFAULT_PRESET.model,
@@ -243,6 +265,10 @@ function isApiKeySource(value: unknown): value is ApiKeySource {
     value === "managed" ||
     API_KEY_SOURCE_OPTIONS.some((option) => option.value === value)
   );
+}
+
+export function normalizeApiStyle(value: unknown): ApiStyle {
+  return value === "chat-completions" ? "chat-completions" : "responses";
 }
 
 function normalizeApiKeySourceForPreset(
@@ -547,6 +573,7 @@ export function normalizeApiSettings(input: unknown): ApiSettings {
     providerId,
     providerName,
     baseUrl,
+    apiStyle: normalizeApiStyle(object.apiStyle),
     apiKeySource: normalizeApiKeySourceForPreset(
       object.apiKeySource,
       preset

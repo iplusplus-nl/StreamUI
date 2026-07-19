@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import {
   API_KEY_SOURCE_OPTIONS,
   API_PROVIDER_PRESETS,
+  API_STYLE_OPTIONS,
   UI_COMPLEXITY_LEVEL_OPTIONS,
   REASONING_EFFORT_OPTIONS,
   getApiKeyEnvironmentName,
@@ -13,6 +14,7 @@ import {
   type ApiKeySource,
   type ApiProviderId,
   type ApiSettings,
+  type ApiStyle,
   type ReasoningEffort
 } from "../../core/apiSettings";
 import {
@@ -158,6 +160,18 @@ export function ApiSettingsSection({
               onChange={(event) => onBaseUrlChange(event.target.value)}
             />
           </label>
+
+          <div className="settings-row">
+            <span>API Style</span>
+            <SettingsSelect
+              ariaLabel="API Style"
+              value={settings.apiStyle}
+              options={API_STYLE_OPTIONS}
+              onChange={(value) =>
+                onSettingsChange({ apiStyle: value as ApiStyle })
+              }
+            />
+          </div>
 
           <div className="settings-row">
             <span>API Key Source</span>

@@ -8,6 +8,8 @@ import {
 
 export type ApiKeySource = "environment" | "manual" | "managed";
 
+export type ApiStyle = "responses" | "chat-completions";
+
 export type RuntimeReasoningEffort =
   | "none"
   | "minimal"
@@ -45,6 +47,7 @@ export type RuntimeApiDefaults = {
   providerId: "openrouter" | "chathtml-cloud";
   providerName: "OpenRouter" | "ChatHTML Cloud";
   baseUrl: string;
+  apiStyle: ApiStyle;
   apiKeySource: "environment" | "managed";
   apiKey: "";
   model: string;
@@ -313,6 +316,7 @@ export function getRuntimeApiDefaults(): RuntimeApiDefaults {
     providerId: "openrouter",
     providerName: "OpenRouter",
     baseUrl,
+    apiStyle: normalizeApiStyle(envString("OPENROUTER_API_STYLE")),
     apiKeySource: "environment",
     apiKey: "",
     model,
@@ -334,6 +338,7 @@ function getPublishedRuntimeApiDefaults(): RuntimeApiDefaults {
     providerId: "chathtml-cloud",
     providerName: "ChatHTML Cloud",
     baseUrl: "",
+    apiStyle: "responses",
     apiKeySource: "managed",
     apiKey: "",
     model,
@@ -408,6 +413,23 @@ export function normalizeApiKeySource(value: unknown): ApiKeySource {
   }
 
   return "environment";
+}
+
+export function normalizeApiStyle(value: unknown): ApiStyle {
+  return value === "chat-completions" ? "chat-completions" : "responses";
+}
+
+export function getProviderApiEndpoint(
+  baseUrl: string,
+  apiStyle: ApiStyle
+): RuntimeApiCredentialTarget {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  return apiStyle === "chat-completions"
+    ? {
+        endpoint: `${normalizedBaseUrl}/chat/completions`,
+        kind: "chat-completions"
+      }
+    : { endpoint: `${normalizedBaseUrl}/responses`, kind: "responses" };
 }
 
 export function getApiKeyEnvironmentName(
@@ -519,8 +541,15 @@ export function resolveRuntimeApiCredentials(
 
 export function readRuntimeApiCredentials(input: unknown): RuntimeApiCredentials {
   const descriptor = readRuntimeApiCredentialDescriptor(input);
-  return resolveRuntimeApiCredentials(descriptor, {
-    endpoint: `${descriptor.baseUrl.replace(/\/+$/, "")}/responses`,
-    kind: "responses"
-  });
+  const object =
+    typeof input === "object" && input !== null
+      ? (input as Record<string, unknown>)
+      : {};
+  return resolveRuntimeApiCredentials(
+    descriptor,
+    getProviderApiEndpoint(
+      descriptor.baseUrl,
+      normalizeApiStyle(object.apiStyle)
+    )
+  );
 }

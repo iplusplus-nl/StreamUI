@@ -16,6 +16,7 @@ test("runtime defaults include the required model shortlist", () => {
     "z-ai/glm-5.2"
   ]);
   assert.equal(defaults.uiComplexity, 50);
+  assert.equal(defaults.apiStyle, "responses");
 });
 
 test("managed credentials can only be supplied by the authenticated gateway", () => {
@@ -94,6 +95,19 @@ test("manual credentials retain custom and local endpoint support", () => {
 
   assert.equal(credentials.baseUrl, "http://127.0.0.1:11434/v1");
   assert.equal(credentials.apiKeySource, "manual");
+  assert.equal(credentials.apiKey, "local-key");
+});
+
+test("Chat Completions style resolves credentials for its own endpoint", () => {
+  const credentials = readRuntimeApiCredentials({
+    providerId: "local",
+    providerName: "Local",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    apiStyle: "chat-completions",
+    apiKeySource: "manual",
+    apiKey: "local-key"
+  });
+
   assert.equal(credentials.apiKey, "local-key");
 });
 

@@ -47,6 +47,10 @@ import {
   streamResponsesOnce
 } from "./responsesStreamClient.js";
 import {
+  getChatCompletionsEndpoint,
+  streamChatCompletionsOnce
+} from "./chatCompletionsStreamClient.js";
+import {
   buildChatRunMessagePatch,
   canPersistChatRunMessage,
   createChatRunInput,
@@ -679,8 +683,14 @@ const artifactEditHandler = createArtifactEditHandler({
     read: readRuntimeApiSettings
   },
   responses: {
-    getEndpoint: getResponsesEndpoint,
-    stream: streamResponsesOnce
+    getEndpoint: (baseUrl, apiStyle) =>
+      apiStyle === "chat-completions"
+        ? getChatCompletionsEndpoint(baseUrl)
+        : getResponsesEndpoint(baseUrl),
+    stream: (options) =>
+      options.apiSettings.apiStyle === "chat-completions"
+        ? streamChatCompletionsOnce(options)
+        : streamResponsesOnce(options)
   },
   activity: {
     isDraining: () => openRouterDraining,

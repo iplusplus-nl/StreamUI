@@ -3,15 +3,20 @@ import { describe, it } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { normalizeApiSettings } from "../../core/apiSettings";
+import type { ApiStyle } from "../../core/apiSettings";
 import { ApiSettingsSection } from "./ApiSettingsSection";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-function render(providerId: "openrouter" | "openai" | "local" | "custom") {
+function render(
+  providerId: "openrouter" | "openai" | "local" | "custom",
+  apiStyle: ApiStyle = "responses"
+) {
   return renderToStaticMarkup(
     <ApiSettingsSection
       settings={normalizeApiSettings({
         providerId,
+        apiStyle,
         model:
           providerId === "custom"
             ? "deployment-42"
@@ -33,6 +38,15 @@ function render(providerId: "openrouter" | "openai" | "local" | "custom") {
 }
 
 describe("API settings provider controls", () => {
+  it("offers Responses and Chat Completions API styles", () => {
+    const responsesMarkup = render("openrouter");
+    const completionsMarkup = render("openrouter", "chat-completions");
+
+    assert.match(responsesMarkup, /aria-label="API Style"/);
+    assert.match(responsesMarkup, />Responses</);
+    assert.match(completionsMarkup, />Chat Completions</);
+  });
+
   it("uses free-form model IDs for Local and Custom", () => {
     for (const providerId of ["local", "custom"] as const) {
       const markup = render(providerId);

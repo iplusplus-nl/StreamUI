@@ -1,6 +1,9 @@
 import type { ApiKeySource } from "./runtimeApiSettings.js";
 
-export type ProviderEndpointKind = "models" | "responses";
+export type ProviderEndpointKind =
+  | "models"
+  | "responses"
+  | "chat-completions";
 
 export type ProviderCredentialIdentity = {
   apiKeySource: ApiKeySource;
@@ -16,6 +19,7 @@ type TrustedProviderEndpointPolicy = {
 type ConfiguredProviderEndpointPolicy = {
   baseEnvironmentNames: readonly string[];
   modelsEnvironmentNames: readonly string[];
+  chatCompletionsEnvironmentNames: readonly string[];
 };
 
 const TRUSTED_ENVIRONMENT_ENDPOINTS: Readonly<
@@ -26,7 +30,8 @@ const TRUSTED_ENVIRONMENT_ENDPOINTS: Readonly<
     origin: "https://openrouter.ai",
     paths: {
       models: "/api/v1/models",
-      responses: "/api/v1/responses"
+      responses: "/api/v1/responses",
+      "chat-completions": "/api/v1/chat/completions"
     }
   },
   OPENAI_API_KEY: {
@@ -34,7 +39,8 @@ const TRUSTED_ENVIRONMENT_ENDPOINTS: Readonly<
     origin: "https://api.openai.com",
     paths: {
       models: "/v1/models",
-      responses: "/v1/responses"
+      responses: "/v1/responses",
+      "chat-completions": "/v1/chat/completions"
     }
   }
 });
@@ -44,15 +50,22 @@ const CONFIGURED_ENVIRONMENT_ENDPOINTS: Readonly<
 > = Object.freeze({
   OPENROUTER_API_KEY: {
     baseEnvironmentNames: ["OPENROUTER_BASE_URL", "OPENROUTER_API_BASE_URL"],
-    modelsEnvironmentNames: ["OPENROUTER_MODELS_ENDPOINT"]
+    modelsEnvironmentNames: ["OPENROUTER_MODELS_ENDPOINT"],
+    chatCompletionsEnvironmentNames: [
+      "OPENROUTER_CHAT_COMPLETIONS_ENDPOINT"
+    ]
   },
   OPENAI_API_KEY: {
     baseEnvironmentNames: ["OPENAI_BASE_URL", "OPENAI_API_BASE_URL"],
-    modelsEnvironmentNames: ["OPENAI_MODELS_ENDPOINT"]
+    modelsEnvironmentNames: ["OPENAI_MODELS_ENDPOINT"],
+    chatCompletionsEnvironmentNames: ["OPENAI_CHAT_COMPLETIONS_ENDPOINT"]
   },
   STREAMUI_API_KEY: {
     baseEnvironmentNames: ["STREAMUI_API_BASE_URL", "STREAMUI_BASE_URL"],
-    modelsEnvironmentNames: ["STREAMUI_MODELS_ENDPOINT"]
+    modelsEnvironmentNames: ["STREAMUI_MODELS_ENDPOINT"],
+    chatCompletionsEnvironmentNames: [
+      "STREAMUI_CHAT_COMPLETIONS_ENDPOINT"
+    ]
   }
 });
 
@@ -89,6 +102,10 @@ function appendProviderResource(baseUrl: string, resource: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${resource}`;
 }
 
+function endpointResource(kind: ProviderEndpointKind): string {
+  return kind === "chat-completions" ? "chat/completions" : kind;
+}
+
 function configuredTrustedEndpoint(
   apiKeyEnvironmentName: string,
   kind: ProviderEndpointKind
@@ -106,9 +123,19 @@ function configuredTrustedEndpoint(
       return modelsEndpoint;
     }
   }
+  if (kind === "chat-completions") {
+    const chatCompletionsEndpoint = firstConfiguredEnvironmentValue(
+      policy.chatCompletionsEnvironmentNames
+    );
+    if (chatCompletionsEndpoint) {
+      return chatCompletionsEndpoint;
+    }
+  }
 
   const baseUrl = firstConfiguredEnvironmentValue(policy.baseEnvironmentNames);
-  return baseUrl ? appendProviderResource(baseUrl, kind) : undefined;
+  return baseUrl
+    ? appendProviderResource(baseUrl, endpointResource(kind))
+    : undefined;
 }
 
 function endpointsMatch(
