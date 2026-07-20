@@ -485,3 +485,7 @@ audit is not clean. Use `CHATHTML_AUDIT_APP_BASE` and
 For hosted authentication, account, and native-wrapper integration, see the
 [Cloud API contract](docs/cloud-api.md). For operational assets and backup
 expectations, see [Production operations](ops/production/README.md).
+
+## License
+
+ChatHTML is available under the [MIT License](LICENSE).
