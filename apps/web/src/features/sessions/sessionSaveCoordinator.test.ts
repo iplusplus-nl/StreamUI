@@ -41,6 +41,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function drainAsyncWork(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 type ScheduledTask = {
   delayMs: number;
   task: () => Promise<void>;
@@ -79,6 +83,7 @@ function createHarness(options: {
   nextRevision?: SessionSaveDependencies["nextRevision"];
   observeRevision?: SessionSaveDependencies["observeRevision"];
   persistTimeoutMs?: number;
+  now?: () => number;
 }) {
   let loaded = true;
   let current = state("session-a");
@@ -144,7 +149,8 @@ function createHarness(options: {
         const controller = new AbortController();
         controllers.push(controller);
         return controller;
-      }
+      },
+      now: options.now ?? Date.now
     }
   );
 
@@ -601,6 +607,81 @@ describe("session save coordinator", () => {
       harness.persistCalls.map((call) => JSON.parse(call.payload).saveRevision),
       [1, 2]
     );
+  });
+
+  it("honors Retry-After and retries a rate-limited save", async () => {
+    let requestIndex = 0;
+    const harness = createHarness({
+      now: () => 10_000,
+      persist: async () =>
+        requestIndex++ === 0
+          ? new Response(null, {
+              status: 429,
+              headers: { "Retry-After": "2" }
+            })
+          : new Response(null, { status: 204 })
+    });
+    harness.setState(state("rate-limited"));
+
+    const saving = harness.coordinator.saveNow();
+    await drainAsyncWork();
+
+    assert.equal(harness.persistCalls.length, 1);
+    assert.equal(harness.tasks.length, 1);
+    assert.equal(harness.tasks[0].delayMs, 2_000);
+    assert.deepEqual(harness.statuses, ["saving"]);
+    assert.equal(harness.warnings.length, 0);
+
+    await harness.tasks[0].task();
+    assert.equal(await saving, "saved");
+    assert.equal(harness.persistCalls.length, 2);
+    assert.deepEqual(harness.statuses, ["saving", "saved"]);
+    assert.equal(harness.warnings.length, 0);
+  });
+
+  it("uses exponential cooldown when a 429 response has no retry headers", async () => {
+    let requestIndex = 0;
+    const harness = createHarness({
+      now: () => 20_000,
+      persist: async () =>
+        requestIndex++ < 2
+          ? new Response(null, { status: 429 })
+          : new Response(null, { status: 204 })
+    });
+    harness.setState(state("nginx-rate-limited"));
+
+    const saving = harness.coordinator.saveNow();
+    await drainAsyncWork();
+    assert.equal(harness.tasks[0].delayMs, 1_000);
+
+    await harness.tasks[0].task();
+    await drainAsyncWork();
+    assert.equal(harness.tasks[1].delayMs, 2_000);
+
+    await harness.tasks[1].task();
+    assert.equal(await saving, "saved");
+    assert.equal(harness.persistCalls.length, 3);
+    assert.equal(harness.warnings.length, 0);
+  });
+
+  it("aborts an autosave while it is waiting for a rate-limit cooldown", async () => {
+    const harness = createHarness({
+      now: () => 30_000,
+      persist: async () => new Response(null, { status: 429 })
+    });
+    harness.coordinator.scheduleAutosave(state("rate-limited-autosave"), true);
+
+    const autosaving = harness.tasks[0].task();
+    await drainAsyncWork();
+    assert.equal(harness.persistCalls.length, 1);
+    assert.equal(harness.tasks[1].delayMs, 1_000);
+
+    harness.coordinator.cancelAutosave();
+    await autosaving;
+
+    assert.equal(harness.tasks[1].cancelled, true);
+    assert.equal(harness.persistCalls.length, 1);
+    assert.equal(harness.warnings.length, 0);
   });
 
   it("skips an aborted queued autosave before it reaches persistence", async () => {

@@ -105,11 +105,13 @@ export type RuntimeSettingsSummary = {
 const require = createRequire(import.meta.url);
 
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_OPENROUTER_MODEL = "google/gemini-3.1-pro-preview";
+const DEFAULT_OPENROUTER_MODEL = "google/gemini-3.5-flash";
 const DEFAULT_OPENROUTER_REASONING: RuntimeReasoningEffort = "low";
 const DEFAULT_UI_COMPLEXITY = 50;
 const REQUIRED_OPENROUTER_MODEL_OPTIONS = [
   "openai/gpt-5.5",
+  "google/gemini-3.5-flash",
+  "google/gemini-3.6-flash",
   "google/gemini-3.1-pro-preview",
   "anthropic/claude-sonnet-5",
   "z-ai/glm-5.2"

@@ -9,8 +9,11 @@ import {
 test("runtime defaults include the required model shortlist", () => {
   const defaults = getRuntimeApiDefaults();
 
-  assert.deepEqual(defaults.modelOptions.slice(0, 4), [
+  assert.equal(defaults.model, "google/gemini-3.5-flash");
+  assert.deepEqual(defaults.modelOptions.slice(0, 6), [
     "openai/gpt-5.5",
+    "google/gemini-3.5-flash",
+    "google/gemini-3.6-flash",
     "google/gemini-3.1-pro-preview",
     "anthropic/claude-sonnet-5",
     "z-ai/glm-5.2"

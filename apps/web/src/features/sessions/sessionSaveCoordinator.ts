@@ -49,6 +49,7 @@ export type SessionSaveDependencies = {
   scheduler: SessionSaveScheduler;
   persistTimeoutMs: number;
   createAbortController(): AbortController;
+  now(): number;
 };
 
 export type SessionSaveOutcome = "saved" | "failed" | "skipped";
@@ -114,8 +115,50 @@ const defaultDependencies: SessionSaveDependencies = {
     }
   },
   persistTimeoutMs: 15_000,
-  createAbortController: () => new AbortController()
+  createAbortController: () => new AbortController(),
+  now: Date.now
 };
+
+const MAX_RATE_LIMIT_RETRIES = 3;
+const MIN_RATE_LIMIT_DELAY_MS = 250;
+const MAX_RATE_LIMIT_DELAY_MS = 5 * 60_000;
+
+function clampRateLimitDelay(delayMs: number): number {
+  return Math.min(
+    MAX_RATE_LIMIT_DELAY_MS,
+    Math.max(MIN_RATE_LIMIT_DELAY_MS, Math.ceil(delayMs))
+  );
+}
+
+function retryAfterDelayMs(
+  response: Response,
+  now: number,
+  consecutiveRateLimits: number
+): number {
+  const retryAfter = response.headers.get("Retry-After")?.trim();
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return clampRateLimitDelay(seconds * 1_000);
+    }
+
+    const retryAt = Date.parse(retryAfter);
+    if (Number.isFinite(retryAt)) {
+      return clampRateLimitDelay(retryAt - now);
+    }
+  }
+
+  const rateLimitReset = Number(
+    response.headers.get("RateLimit-Reset")?.trim()
+  );
+  if (Number.isFinite(rateLimitReset) && rateLimitReset > 0) {
+    return clampRateLimitDelay(rateLimitReset * 1_000 - now);
+  }
+
+  return clampRateLimitDelay(
+    1_000 * 2 ** Math.min(Math.max(0, consecutiveRateLimits - 1), 5)
+  );
+}
 
 function isAbortError(error: unknown): boolean {
   return (error as { name?: unknown })?.name === "AbortError";
@@ -144,6 +187,8 @@ export function createSessionSaveCoordinator(
   let lastSavedPayload: string | null = null;
   let autosave: AutosaveHandle | null = null;
   let persistenceTail: Promise<void> = Promise.resolve();
+  let rateLimitedUntil = 0;
+  let consecutiveRateLimits = 0;
 
   const prepareSave = (state: SessionState): PreparedSessionSave => {
     const clientId = source.getClientId();
@@ -312,6 +357,40 @@ export function createSessionSaveCoordinator(
     }
   };
 
+  const waitForRateLimitCooldown = (
+    signal: AbortSignal | undefined
+  ): Promise<void> | null => {
+    const delayMs = Math.max(0, rateLimitedUntil - dependencies.now());
+    if (delayMs <= 0) {
+      return null;
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (callback: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal?.removeEventListener("abort", abortWait);
+        callback();
+      };
+      const abortWait = () => {
+        cancelTimer();
+        const error = new Error("Session save was aborted.");
+        error.name = "AbortError";
+        finish(() => reject(error));
+      };
+      const cancelTimer = dependencies.scheduler.schedule(delayMs, async () => {
+        finish(resolve);
+      });
+      signal?.addEventListener("abort", abortWait, { once: true });
+      if (signal?.aborted) {
+        abortWait();
+      }
+    });
+  };
+
   const persist = async (
     snapshot: SessionSaveSnapshot,
     signal: AbortSignal | undefined,
@@ -322,7 +401,38 @@ export function createSessionSaveCoordinator(
     }
     dependencies.onStatusChange("saving");
     try {
-      const response = await requestPersistResponse(snapshot, signal);
+      let response: Response;
+      let rateLimitRetries = 0;
+      while (true) {
+        const cooldown = waitForRateLimitCooldown(signal);
+        if (cooldown) {
+          await cooldown;
+        }
+        response = await requestPersistResponse(snapshot, signal);
+        if (response.status !== 429) {
+          rateLimitedUntil = 0;
+          consecutiveRateLimits = 0;
+          break;
+        }
+
+        consecutiveRateLimits += 1;
+        const delayMs = retryAfterDelayMs(
+          response,
+          dependencies.now(),
+          consecutiveRateLimits
+        );
+        rateLimitedUntil = Math.max(
+          rateLimitedUntil,
+          dependencies.now() + delayMs
+        );
+        if (rateLimitRetries >= MAX_RATE_LIMIT_RETRIES) {
+          throw new Error(
+            `Session save failed with HTTP 429 after ${rateLimitRetries + 1} attempts.`
+          );
+        }
+        rateLimitRetries += 1;
+      }
+
       if (!response.ok) {
         throw new Error(`Session save failed with HTTP ${response.status}.`);
       }

@@ -89,6 +89,8 @@ export const UI_COMPLEXITY_LEVEL_OPTIONS = [
 
 export const OPENROUTER_MODEL_OPTIONS = [
   "openai/gpt-5.5",
+  "google/gemini-3.5-flash",
+  "google/gemini-3.6-flash",
   "google/gemini-3.1-pro-preview",
   "anthropic/claude-sonnet-5",
   "z-ai/glm-5.2"
@@ -113,14 +115,14 @@ export const API_PROVIDER_PRESETS: ApiProviderPreset[] = [
     id: "openrouter",
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    model: "google/gemini-3.1-pro-preview",
+    model: "google/gemini-3.5-flash",
     reasoningEffort: "low"
   },
   {
     id: "chathtml-cloud",
     label: "ChatHTML Cloud",
     baseUrl: "",
-    model: "google/gemini-3.1-pro-preview",
+    model: "google/gemini-3.5-flash",
     reasoningEffort: "low",
     apiKeySource: "managed"
   },

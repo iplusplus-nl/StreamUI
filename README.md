@@ -202,7 +202,7 @@ Copy `.env.example` to `.env` (`cp .env.example .env` on macOS/Linux or
 
 ```dotenv
 OPENROUTER_API_KEY=your_openrouter_key_here
-OPENROUTER_MODEL=google/gemini-3.1-pro-preview
+OPENROUTER_MODEL=google/gemini-3.5-flash
 OPENROUTER_REASONING_EFFORT=low
 ```
 
@@ -289,7 +289,7 @@ useful settings are:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OPENROUTER_API_KEY` | none | Server-side OpenRouter credential |
-| `OPENROUTER_MODEL` | `google/gemini-3.1-pro-preview` | Default generation model |
+| `OPENROUTER_MODEL` | `google/gemini-3.5-flash` | Default generation model |
 | `OPENROUTER_REASONING_EFFORT` | `low` | `none`, `minimal`, `low`, `medium`, or `high` |
 | `STREAMUI_RETRIEVAL` | `true` | Enable the model's native retrieval tool |
 | `STREAMUI_SEARCH_PROVIDER` | `auto` | Search provider selection |

@@ -181,6 +181,7 @@ describe("apiSettings", () => {
     assert.equal(DEFAULT_API_SETTINGS.providerId, "openrouter");
     assert.equal(DEFAULT_API_SETTINGS.apiStyle, "responses");
     assert.equal(DEFAULT_API_SETTINGS.apiKeySource, "environment");
+    assert.equal(DEFAULT_API_SETTINGS.model, "google/gemini-3.5-flash");
   });
 
   it("supports Responses and Chat Completions API styles", () => {
